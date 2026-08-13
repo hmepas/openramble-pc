@@ -9,4 +9,35 @@
     <ProjectReference Include="../DictationCore/DictationCore.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The recognition engine. Allowed in LocalASR and nowhere else: DictationCore knows
+      only `IASREngineAdapting`, and the single file that may name this package is
+      SherpaOnnxAdapter.cs - the same rule the Swift package states for FluidAudio.
+
+      Pinned exactly, like the Swift package pins FluidAudio to a commit: a moved version
+      must not change what a release build recognizes. The id is a metapackage; it brings
+      the per-RID natives with it, including linux-x64 (our tests run there) and win-x64
+      (what ships). `dotnet publish -r win-x64` keeps only the Windows ones.
+    -->
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="[1.13.5]" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The Swift tests use `@testable import`; PunctuationReattachment is internal there too. -->
+    <InternalsVisibleTo Include="LocalASR.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The Swift package ships these through `Bundle.module`. Here they are compiled
+      into the assembly itself, which keeps the same promise: the manifest cannot be
+      swapped without touching the signed binary.
+    -->
+    <EmbeddedResource Include="Resources/model-manifest.json"
+                      LogicalName="LocalASR.Resources.model-manifest.json" />
+    <EmbeddedResource Include="Resources/vocabulary-manifest.json"
+                      LogicalName="LocalASR.Resources.vocabulary-manifest.json" />
+  </ItemGroup>
+
 </Project>

@@ -1,0 +1,128 @@
+using OpenRamble.AppCore;
+
+namespace OpenRamble.AppCore.Tests;
+
+/// <summary>
+/// The permission line is the only thing a person does in onboarding with their hands.
+/// </summary>
+public sealed class PermissionStatusTests
+{
+    private static PermissionStatus Microphone(bool granted) =>
+        new("Microphone", "To hear your speech.", granted);
+
+    [Fact]
+    public void Scenario001()
+    {
+        PermissionStatus status = Microphone(granted: false);
+
+        Assert.Equal("Grant", status.ActionTitle);
+        Assert.Equal("Permission not granted", status.AccessibilityValue);
+    }
+
+    /// <summary>A granted permission shows no button: there is nothing left to press.</summary>
+    [Fact]
+    public void Scenario002()
+    {
+        PermissionStatus status = Microphone(granted: true);
+
+        Assert.Null(status.ActionTitle);
+        Assert.Null(status.ActionAccessibilityLabel);
+        Assert.Equal("Permission granted", status.AccessibilityValue);
+    }
+
+    /// <summary>The tick itself says nothing to a screen reader.</summary>
+    [Fact]
+    public void Scenario003()
+    {
+        Assert.NotEqual(Microphone(granted: true).AccessibilityValue, Microphone(granted: false).AccessibilityValue);
+    }
+
+    /// <summary>
+    /// Both buttons on the screen say "Grant".
+    ///
+    /// Without the permission's name, a blind person hears two identical buttons and does not
+    /// know which is which. Windows only asks for one permission today, but the line is shared
+    /// with whatever comes next, and the label has to keep naming its own row.
+    /// </summary>
+    [Fact]
+    public void Scenario004()
+    {
+        PermissionStatus microphone = Microphone(granted: false);
+        var notifications = new PermissionStatus("Notifications", "To tell you when it fails.", granted: false);
+
+        Assert.Equal(microphone.ActionTitle, notifications.ActionTitle);
+        Assert.Equal("Grant access: Microphone", microphone.ActionAccessibilityLabel);
+        Assert.Equal("Grant access: Notifications", notifications.ActionAccessibilityLabel);
+        Assert.NotEqual(microphone.ActionAccessibilityLabel, notifications.ActionAccessibilityLabel);
+    }
+
+    [Fact]
+    public void Scenario005()
+    {
+        Assert.Equal("Microphone. To hear your speech.", Microphone(granted: false).AccessibilityLabel);
+    }
+
+    /// <summary>
+    /// Waiting on the Settings window is not the same as being refused: the button must offer to
+    /// reopen it, not to ask again.
+    /// </summary>
+    [Fact]
+    public void Scenario006()
+    {
+        PermissionStatus status = PermissionStatus.Microphone(
+            MicrophoneConsentState.WaitingForSettings,
+            "To hear your speech.");
+
+        Assert.Equal("Open Settings", status.ActionTitle);
+        Assert.Equal("Waiting for permission in Settings", status.AccessibilityValue);
+    }
+
+    /// <summary>
+    /// The device-wide switch is off, so the per-app row is greyed out. Sending the person to
+    /// the app row would send them where nothing can be changed.
+    /// </summary>
+    [Fact]
+    public void Scenario007()
+    {
+        PermissionStatus status = PermissionStatus.Microphone(
+            MicrophoneConsentState.BlockedForDevice,
+            "To hear your speech.");
+
+        Assert.Equal("Open Settings", status.ActionTitle);
+        Assert.Equal("Microphone access is off for the whole device", status.AccessibilityValue);
+        Assert.Contains("Microphone access", status.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Scenario008()
+    {
+        PermissionStatus granted = PermissionStatus.Microphone(
+            MicrophoneConsentState.Granted,
+            "To hear your speech.");
+
+        Assert.True(granted.Granted);
+        Assert.Null(granted.ActionTitle);
+        Assert.Equal("Permission granted", granted.AccessibilityValue);
+    }
+
+    /// <summary>Every state that is not granted must leave something to read and something to say.</summary>
+    [Fact]
+    public void Scenario009()
+    {
+        MicrophoneConsentState[] states =
+        [
+            MicrophoneConsentState.Denied,
+            MicrophoneConsentState.WaitingForSettings,
+            MicrophoneConsentState.BlockedForDevice,
+            MicrophoneConsentState.Granted,
+        ];
+
+        foreach (MicrophoneConsentState state in states)
+        {
+            PermissionStatus status = PermissionStatus.Microphone(state, "To hear your speech.");
+            Assert.False(string.IsNullOrWhiteSpace(status.AccessibilityValue));
+            Assert.False(string.IsNullOrWhiteSpace(status.AccessibilityLabel));
+            Assert.Equal(state == MicrophoneConsentState.Granted, status.ActionTitle is null);
+        }
+    }
+}

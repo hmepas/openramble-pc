@@ -8,6 +8,13 @@
   <ItemGroup>
     <!-- The Swift tests use `@testable import`; ProtectedSpanDetector is internal there too. -->
     <InternalsVisibleTo Include="DictationCore.Tests" />
+    <!--
+      The Windows capture is the driver half of DictationAudio/MicrophoneCapture.swift, which
+      lives in the app because it needs WASAPI. It has to reuse the two pieces of that file that
+      were ported here - the frame queue that guarantees ordering, and the recognition sample
+      cap - instead of growing a second copy of them that can drift.
+    -->
+    <InternalsVisibleTo Include="OpenRamble.App" />
   </ItemGroup>
 
 </Project>

@@ -31,7 +31,7 @@ internal static class Program
               eval <manifest.json>  run a corpus and compute WER/CER
 
             Environment variables:
-              OPENRAMBLE_MODELS_ROOT     installation root (%APPDATA%\OpenRamble\Models default)
+              OPENRAMBLE_MODELS_ROOT     installation root (%LOCALAPPDATA%\OpenRamble\Models default)
               OPENRAMBLE_MODEL_DIR       engine folder past the storage (for measurements)
               OPENRAMBLE_ASR_PRECISION   int8 (default) | float32
               OPENRAMBLE_ASR_PROVIDER    cpu (default) | cuda | directml

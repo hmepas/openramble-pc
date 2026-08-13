@@ -23,7 +23,7 @@ public sealed class ModelInstallLayout
     {
         string basePath = root
             ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "OpenRamble",
                 "Models");
 
@@ -39,7 +39,7 @@ public sealed class ModelInstallLayout
         EngineFolderName = folder;
     }
 
-    /// <summary>Root: %APPDATA%\OpenRamble\Models (Swift: ~/Library/Application Support/OpenRamble/Models).</summary>
+    /// <summary>Root: %LOCALAPPDATA%\OpenRamble\Models (Swift: ~/Library/Application Support/OpenRamble/Models). Matches AppPaths.Models() — the app and asr-bench must agree on this directory.</summary>
     public string Root { get; }
 
     public string ModelID { get; }

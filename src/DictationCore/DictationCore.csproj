@@ -5,4 +5,9 @@
     <RootNamespace>DictationCore</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- The Swift tests use `@testable import`; ProtectedSpanDetector is internal there too. -->
+    <InternalsVisibleTo Include="DictationCore.Tests" />
+  </ItemGroup>
+
 </Project>

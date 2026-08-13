@@ -19,8 +19,13 @@ public readonly record struct MonotonicInstant(long Timestamp)
         Stopwatch.GetElapsedTime(Timestamp, other.Timestamp);
 
     /// <summary>The instant <paramref name="duration"/> later than this one.</summary>
+    /// <remarks>
+    /// Rounded, not truncated: 120 ms is 119999999.99… stopwatch ticks in binary
+    /// floating point, and truncating would make the instant land a tick early -
+    /// a scripted "+120 ms" would come back as 119.9999 ms.
+    /// </remarks>
     public MonotonicInstant Advanced(TimeSpan duration) =>
-        new(Timestamp + (long)(duration.TotalSeconds * Stopwatch.Frequency));
+        new(Timestamp + (long)Math.Round(duration.TotalSeconds * Stopwatch.Frequency));
 }
 
 /// <summary>

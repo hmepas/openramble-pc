@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Markup;
 using DictationCore;
 using LocalASR;
 using OpenRamble.AppCore;
@@ -36,6 +37,7 @@ public partial class App : Application
     private WasapiCapture? capture;
     private AppState? state;
     private SettingsWindow? settings;
+    private bool reportedTrayFailure;
 
     protected override void OnStartup(StartupEventArgs args)
     {
@@ -106,7 +108,7 @@ public partial class App : Application
 
         if (!state.OnboardingCompleted)
         {
-            new OnboardingWindow(state).Show();
+            ShowOnboarding();
         }
     }
 
@@ -132,12 +134,39 @@ public partial class App : Application
 
         // The tooltip is the icon's accessibility label: a picture without words does not exist
         // for a blind person, and the tray is the app's only permanent presence.
-        tray.Show(
+        bool showing = tray.Show(
             badge,
             TrayStatus.AccessibilityLabel(
                 state.DictationStateValue,
                 state.IsDictationReady,
                 state.RecoveredText is not null));
+
+        if (!showing) { ReportTrayFailure(); }
+    }
+
+    /// <summary>
+    /// The shell refused the icon.
+    ///
+    /// This is the app's whole visible presence, so the alternative to saying it is a process that
+    /// is running, holding the keyboard hook, and showing nothing at all - indistinguishable from
+    /// a launch that failed. Said once per run: the registration is retried on every status
+    /// change, and a message per attempt would be its own fault.
+    /// </summary>
+    /// <remarks>
+    /// A message box, not a log file: the project writes no diagnostics to disk, and a failure the
+    /// person cannot see is the same as no failure at all.
+    /// </remarks>
+    private void ReportTrayFailure()
+    {
+        if (reportedTrayFailure) { return; }
+        reportedTrayFailure = true;
+
+        MessageBox.Show(
+            "OpenRamble couldn't put its icon in the notification area, so its menu can't be "
+            + "reached. The dictation key still works. Restarting OpenRamble usually fixes this.",
+            "OpenRamble",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
     }
 
     /// <summary>
@@ -215,10 +244,30 @@ public partial class App : Application
         settings.Activate();
     }
 
+    /// <summary>
+    /// The setup window - the only path a new person has to a working product.
+    /// </summary>
+    /// <remarks>
+    /// A failure to open it is caught and said out loud rather than taken down the unhandled path.
+    /// On a first launch it is the only thing on screen, so a window that silently never appears
+    /// leaves a person with a running process, no instructions and nothing to read.
+    /// </remarks>
     private void ShowOnboarding()
     {
         if (state is null) { return; }
-        new OnboardingWindow(state).Show();
+
+        try
+        {
+            new OnboardingWindow(state).Show();
+        }
+        catch (Exception error) when (error is InvalidOperationException or XamlParseException)
+        {
+            MessageBox.Show(
+                $"OpenRamble couldn't open its setup window: {error.Message}",
+                "OpenRamble",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     /// <summary>

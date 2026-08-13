@@ -62,7 +62,12 @@ public sealed partial class TrayIcon : IDisposable
     public Func<IReadOnlyList<TrayMenuItem>>? MenuProvider { get; set; }
 
     /// <summary>A left click opens the same menu: there is no primary action worth guessing.</summary>
-    public void Show(TrayBadge badge, string tooltip)
+    /// <returns>
+    /// Whether the shell is showing the icon. A refused registration is not a cosmetic loss - for
+    /// a tray-only application it is the entire interface gone, and the process would otherwise
+    /// keep running with nothing on screen and no way to reach it. The caller has to say so.
+    /// </returns>
+    public bool Show(TrayBadge badge, string tooltip)
     {
         NotifyIconData data = Data();
         data.Flags = NifMessage | NifIcon | NifTip;
@@ -73,13 +78,18 @@ public sealed partial class TrayIcon : IDisposable
         if (!added)
         {
             added = Shell_NotifyIconW(NimAdd, ref data);
+            // Only after the icon exists: the version applies to a registration, and asking for
+            // it on one the shell just refused sets nothing while looking like it did.
+            if (!added) { return false; }
+
             NotifyIconData version = Data();
             version.VersionOrTimeout = NotifyIconVersion4;
             _ = Shell_NotifyIconW(NimSetVersion, ref version);
-            return;
+            return true;
         }
 
         _ = Shell_NotifyIconW(NimModify, ref data);
+        return true;
     }
 
     public void Dispose()

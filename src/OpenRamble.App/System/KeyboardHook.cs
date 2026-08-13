@@ -169,6 +169,7 @@ public sealed partial class KeyboardHook : IDisposable
     /// </summary>
     public void Start()
     {
+        ManualResetEventSlim ready;
         lock (gate)
         {
             if (pump is not null)
@@ -176,15 +177,20 @@ public sealed partial class KeyboardHook : IDisposable
                 return;
             }
 
-            var ready = new ManualResetEventSlim();
+            ready = new ManualResetEventSlim();
             pump = new Thread(() => Pump(ready))
             {
                 Name = "OpenRamble hotkey",
                 IsBackground = true,
             };
             pump.Start();
-            ready.Wait();
         }
+
+        // Waited on with the monitor released. The pump takes the same lock to publish the hook
+        // handle before it signals, so waiting for that signal while still holding the lock is a
+        // deadlock between the two threads - and the thread that waits is the one starting the
+        // application, which then never reaches the tray or the setup window.
+        ready.Wait();
     }
 
     public void Stop()

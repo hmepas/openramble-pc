@@ -7,10 +7,18 @@
     <UseWPF>true</UseWPF>
     <!-- Allows the WPF app to be built (not run) on a non-Windows host. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- The Win32 adapters marshal by hand; every P/Invoke here is source-generated. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="../LocalASR/LocalASR.csproj" />
+    <ProjectReference Include="../OpenRamble.AppCore/OpenRamble.AppCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pinned exactly: the audio path is the one place a silent behaviour change costs words. -->
+    <PackageReference Include="NAudio" Version="[2.2.1]" />
   </ItemGroup>
 
 </Project>

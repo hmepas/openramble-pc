@@ -15,10 +15,26 @@
 
   <ItemGroup>
     <ProjectReference Include="../LocalASR/LocalASR.csproj" />
+    <!--
+      The Swift package scores the bench tool from its own `ASRBenchTests` target. There is
+      no second test project here; this one already owns the LocalASR half of the same
+      measurement chain, so the scorer's tests join it.
+    -->
+    <ProjectReference Include="../AsrBench/AsrBench.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Speech for the one test that needs a real model. It is the model repository's own
+      published sample (`test_wavs/en.wav`, 24 kHz mono), not anybody's dictation: a fixture
+      that ships in Git may not be a person's voice, and this one already travels with the
+      weights the test needs anyway.
+    -->
+    <None Include="Fixtures/en.wav" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

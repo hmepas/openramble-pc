@@ -121,6 +121,20 @@ public sealed class CorrectionLearningTests
     }
 
     [Fact]
+    public void TestScenario009()
+    {
+        // The cost of the error the filter exists for: one edit of "the" →
+        // "a" rewrote every subsequent dictation.
+        IReadOnlyList<DictionaryReplacement> learned = CorrectionLearning.Propose(
+            original: "please send me the file",
+            edited: "please send me a file");
+        string text = new TextPipeline(replacements: learned)
+            .Process("The report is on the desk").Text;
+
+        Assert.Equal("The report is on the desk", text);
+    }
+
+    [Fact]
     public void TestScenario010()
     {
         // Rearranging capitalization when moving words inside a paragraph gave the pair

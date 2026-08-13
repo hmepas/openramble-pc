@@ -98,6 +98,22 @@ public sealed class DictionaryReplacementsEdgeCaseTests
     // MARK: - Degenerate records
 
     [Fact]
+    public void TestEmptyWrittenFormRemovesTheWordWithoutLeavingHoles()
+    {
+        // The empty right side is a way to remove a filler word. After the removal
+        // two spaces remain in a row, and the pipeline must remove them, otherwise
+        // the "cleaning" will be more noticeable than the parasite itself.
+        var pipeline = new TextPipeline(replacements:
+        [
+            new DictionaryReplacement(spoken: "короче", written: ""),
+        ]);
+
+        Assert.Equal(
+            "Нужно сделать быстро",
+            pipeline.Process("короче нужно сделать короче быстро").Text);
+    }
+
+    [Fact]
     public void TestWhitespaceOnlySpokenFormIsIgnored()
     {
         // The empty left part is a dictionary line left due to inattention.

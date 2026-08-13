@@ -14,6 +14,52 @@ namespace DictationCore.Tests;
 public sealed class StarterDictionaryTests
 {
     [Fact]
+    public void TestFixesRealTranscriptionOfDeveloperSpeech()
+    {
+        var pipeline = new TextPipeline(replacements: StarterDictionary.Developer);
+
+        // Exactly what the model returned during a live run.
+        const string recognized =
+            "Проверяю диктовку. Нужно сделать пул реквест и запустить деплой через центри.";
+
+        TextPipeline.Output output = pipeline.Process(recognized);
+
+        Assert.Equal(
+            "Проверяю диктовку. Нужно сделать pull request и запустить deploy через Sentry.",
+            output.Text);
+    }
+
+    [Fact]
+    public void TestHandlesBothSpellingsOfPullRequest()
+    {
+        var pipeline = new TextPipeline(replacements: StarterDictionary.Developer);
+
+        // The model writes it either glued together or apart - both options must work.
+        Assert.Equal("Закинул pull request", pipeline.Process("закинул пулреквест").Text);
+        Assert.Equal("Закинул pull request", pipeline.Process("закинул пул реквест").Text);
+    }
+
+    [Fact]
+    public void TestCommitDecoderErrorRequiresCommitContext()
+    {
+        var pipeline = new TextPipeline(replacements: StarterDictionary.Developer);
+
+        Assert.Equal("Сделай commit в branch", pipeline.Process("сделай эмит в branch").Text);
+        Assert.Equal("Эмит событие", pipeline.Process("эмит событие").Text);
+    }
+
+    [Fact]
+    public void TestDoesNotTouchWordsInsideOtherWords()
+    {
+        var pipeline = new TextPipeline(replacements: StarterDictionary.Developer);
+
+        // "апи" is in the dictionary, but "апреле" and "лапидарно" must not be touched.
+        TextPipeline.Output output = pipeline.Process("в апреле лапидарно");
+
+        Assert.Equal("В апреле лапидарно", output.Text);
+    }
+
+    [Fact]
     public void TestContainsNoPointlessSelfReplacements()
     {
         // Replacing a word with itself does nothing, it just clutters the list,

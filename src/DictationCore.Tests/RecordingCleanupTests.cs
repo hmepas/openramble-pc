@@ -395,7 +395,7 @@ public sealed class RecordingCleanupTests : IDisposable
         // Nothing to say about rescuing a recording that does not exist.
         Assert.DoesNotContain(
             notices,
-            notice => notice.Message.Contains("is kept on this Mac", StringComparison.Ordinal)
+            notice => notice.Message.Contains("is kept on this PC", StringComparison.Ordinal)
                 || notice.Message.Contains("couldn't be kept", StringComparison.Ordinal));
     }
 

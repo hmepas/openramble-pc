@@ -1,7 +1,11 @@
 <Application x:Class="OpenRamble.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:OpenRamble.App"
-             StartupUri="MainWindow.xaml">
+             ShutdownMode="OnExplicitShutdown">
+    <!--
+        No StartupUri: the application lives in the tray and has no main window. A window here
+        would open one at launch, which is exactly the thing a dictation tool must not do.
+        ShutdownMode is explicit for the same reason - closing the settings window is not quitting.
+    -->
     <Application.Resources />
 </Application>

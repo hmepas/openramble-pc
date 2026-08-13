@@ -1,0 +1,47 @@
+<Window x:Class="OpenRamble.App.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="OpenRamble dictation"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        SizeToContent="WidthAndHeight"
+        Focusable="False"
+        AutomationProperties.Name="OpenRamble dictation panel">
+    <Border x:Name="Panel"
+            CornerRadius="12"
+            Padding="16,12"
+            MinWidth="260"
+            Background="#F21C1C1E"
+            BorderBrush="#33FFFFFF"
+            BorderThickness="1">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <Ellipse x:Name="ToneDot" Width="10" Height="10" Margin="0,0,12,0" VerticalAlignment="Center" />
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock x:Name="TitleText"
+                           FontSize="14"
+                           Foreground="#FFF5F5F7"
+                           TextWrapping="Wrap"
+                           MaxWidth="420" />
+                <TextBlock x:Name="SubtitleText"
+                           FontSize="12"
+                           Foreground="#B3F5F5F7"
+                           Margin="0,2,0,0"
+                           TextWrapping="Wrap"
+                           MaxWidth="420"
+                           Visibility="Collapsed" />
+            </StackPanel>
+            <!-- The waveform is the only proof the microphone is receiving anything. -->
+            <Canvas x:Name="Waveform"
+                    Width="96"
+                    Height="24"
+                    Margin="16,0,0,0"
+                    VerticalAlignment="Center"
+                    Visibility="Collapsed" />
+        </StackPanel>
+    </Border>
+</Window>

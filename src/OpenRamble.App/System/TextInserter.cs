@@ -523,6 +523,15 @@ public sealed partial class TextInserter : ITextInserting
         return new ClipboardSnapshot(formats);
     }
 
+    /// <summary>
+    /// Put text on the clipboard for the person, with the same restrictions the insertion uses.
+    ///
+    /// Exposed for "Copy Last as Spoken" and the recent-dictation menu. It is the same code path
+    /// on purpose: a second clipboard writer would be a second chance to forget
+    /// <see cref="ClipboardRestrictions"/> and leak a dictation into Clipboard History.
+    /// </summary>
+    public static void CopyHostOnly(string text) => WriteDictationToClipboard(text);
+
     private static void WriteDictationToClipboard(string text)
     {
         if (!OpenClipboard(0))

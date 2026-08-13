@@ -469,8 +469,8 @@ public sealed class DictationController
                 saved,
                 saved is null
                     ? " The recording couldn't be kept."
-                    : " The recording is kept on this Mac for a few days"
-                        + " (Settings → About → Reveal Support Folder).");
+                    : " The recording is kept on this PC for a few days"
+                        + " (Settings → Privacy → Open recordings folder).");
         }
         catch (Exception error)
         {
@@ -950,8 +950,8 @@ public sealed class DictationController
                 kind: DictationNoticeKind.Failure,
                 message: saved is null
                     ? reason + " The recording couldn't be kept."
-                    : reason + " The recording is kept on this Mac for a few days"
-                        + " (Settings → About → Reveal Support Folder).",
+                    : reason + " The recording is kept on this PC for a few days"
+                        + " (Settings → Privacy → Open recordings folder).",
                 recoveryAudio: saved);
         }
 

@@ -1,0 +1,665 @@
+using System.Text;
+using System.Text.Json;
+using DictationCore;
+using LocalASR;
+
+namespace OpenRamble.AppCore.Tests;
+
+// False edges of the system.
+//
+// Ported from the macOS `Fakes.swift`. The Accessibility manager and the pasteboard/input-system
+// doubles have no counterpart: Windows needs no Accessibility grant, and the insertion edge is
+// exercised in OpenRamble.App, not here.
+
+/// <summary>
+/// Our own crash-WAV: the payload is already on disk, but the sizes in the header are still zero
+/// because the process never reached the writer's close.
+/// </summary>
+public static class AbandonedWav
+{
+    public static void Write(string path, int sampleBytes = 3200)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new BinaryWriter(buffer, Encoding.ASCII, leaveOpen: true))
+        {
+            writer.Write("RIFF"u8);
+            writer.Write(36u);
+            writer.Write("WAVEfmt "u8);
+            writer.Write(16u);
+            writer.Write((ushort)1);
+            writer.Write((ushort)1);
+            writer.Write(16_000u);
+            writer.Write(32_000u);
+            writer.Write((ushort)2);
+            writer.Write((ushort)16);
+            writer.Write("data"u8);
+            writer.Write(0u);
+            writer.Write(new byte[sampleBytes]);
+        }
+
+        File.WriteAllBytes(path, buffer.ToArray());
+        // A crash leftover is old by the time the app relaunches. A fresh file would be skipped
+        // by the import's live-recording guard - another running instance may still be writing it.
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(-2));
+    }
+}
+
+public sealed class FakeCapture : IAudioCapturing
+{
+    private readonly object gate = new();
+    private readonly string file = Path.Combine(
+        Path.GetTempPath(),
+        $"openramble-test-take-{Guid.NewGuid()}.wav");
+
+    private TimeSpan duration = TimeSpan.FromSeconds(2);
+
+    public int StartCount { get { lock (gate) { return startCount; } } }
+
+    public int StopCount { get { lock (gate) { return stopCount; } } }
+
+    public int AbortCount { get { lock (gate) { return abortCount; } } }
+
+    /// <summary>
+    /// Is the microphone listening right now.
+    ///
+    /// This is what the "the recording light goes off when we are not listening" promise rests
+    /// on: it has to be checked by whether the capture is closed, not by the state on screen.
+    /// </summary>
+    public bool IsRecording { get { lock (gate) { return isRecording; } } }
+
+    private int startCount;
+    private int stopCount;
+    private int abortCount;
+    private bool isRecording;
+
+    public void SetDuration(TimeSpan value) { lock (gate) { duration = value; } }
+
+    public Task<string> StartRecording()
+    {
+        lock (gate)
+        {
+            startCount += 1;
+            isRecording = true;
+        }
+
+        return Task.FromResult(file);
+    }
+
+    public Task<(string Url, TimeSpan Duration)> StopRecording()
+    {
+        TimeSpan value;
+        lock (gate)
+        {
+            stopCount += 1;
+            isRecording = false;
+            value = duration;
+        }
+
+        File.WriteAllText(file, "RIFF-test-audio");
+        return Task.FromResult((file, value));
+    }
+
+    public Task AbortRecording()
+    {
+        lock (gate)
+        {
+            abortCount += 1;
+            isRecording = false;
+        }
+
+        return Task.CompletedTask;
+    }
+}
+
+public sealed class FakeInserter : ITextInserting
+{
+    private readonly object gate = new();
+    private readonly List<string> inserted = [];
+    private TextInsertionError? error;
+    private TaskCompletionSource? hold;
+
+    public IReadOnlyList<string> InsertedTexts { get { lock (gate) { return [.. inserted]; } } }
+
+    public TargetApplication? Frontmost { get; set; }
+
+    public void SetError(TextInsertionError? value) { lock (gate) { error = value; } }
+
+    /// <summary>
+    /// Keep the insertion open until the test lets it finish.
+    ///
+    /// In life, <c>Inserting</c> lasts as long as the paste takes in someone else's application -
+    /// long enough for a person to press Escape. Without a hold the state passes between two
+    /// lines of the test and what the application says at that moment cannot be checked at all.
+    /// </summary>
+    public void HoldInsertions()
+    {
+        lock (gate) { hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); }
+    }
+
+    public void ReleaseInsertions()
+    {
+        TaskCompletionSource? pending;
+        lock (gate)
+        {
+            pending = hold;
+            hold = null;
+        }
+
+        pending?.TrySetResult();
+    }
+
+    public async Task Insert(string text, TargetApplication? target)
+    {
+        Task? pending;
+        lock (gate) { pending = hold?.Task; }
+        if (pending is not null) { await pending.ConfigureAwait(false); }
+
+        lock (gate)
+        {
+            if (error is TextInsertionError failure) { throw failure; }
+            inserted.Add(text);
+        }
+    }
+
+    public Task PressReturn() => Task.CompletedTask;
+
+    public TargetApplication? FrontmostApplication() => Frontmost;
+}
+
+public sealed class FakeOverlay : IOverlayPresenting
+{
+    private readonly object gate = new();
+    private readonly List<DictationState> presented = [];
+    private readonly List<DictationNotice> notices = [];
+    private int dismissCount;
+
+    public IReadOnlyList<DictationState> PresentedStates { get { lock (gate) { return [.. presented]; } } }
+
+    public IReadOnlyList<DictationNotice> Notices { get { lock (gate) { return [.. notices]; } } }
+
+    public int DismissCount { get { lock (gate) { return dismissCount; } } }
+
+    public Task Present(DictationState state, TimeSpan elapsed)
+    {
+        lock (gate) { presented.Add(state); }
+        return Task.CompletedTask;
+    }
+
+    public Task Dismiss()
+    {
+        lock (gate) { dismissCount += 1; }
+        return Task.CompletedTask;
+    }
+
+    public Task PresentNotice(DictationNotice notice)
+    {
+        lock (gate) { notices.Add(notice); }
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Deliberately free of any thread affinity: the permission poll reads this off the pool,
+/// exactly like the real implementation.
+/// </summary>
+public sealed class FakePermissions : IPermissionReading
+{
+    private volatile bool microphone = true;
+
+    public bool MicrophoneGranted
+    {
+        get => microphone;
+        set => microphone = value;
+    }
+}
+
+public sealed class FakeMicrophoneConsentFlow : IMicrophoneConsentFlow
+{
+    private readonly FakePermissions permissions;
+
+    public FakeMicrophoneConsentFlow(FakePermissions permissions)
+    {
+        this.permissions = permissions;
+    }
+
+    public bool RequestResult { get; set; } = true;
+
+    public int RequestCount { get; private set; }
+
+    public int OpenSettingsCount { get; private set; }
+
+    public int ActivationCount { get; private set; }
+
+    public Task<bool> Request()
+    {
+        RequestCount += 1;
+        if (RequestResult) { permissions.MicrophoneGranted = true; }
+        return Task.FromResult(RequestResult);
+    }
+
+    public void OpenSettings() => OpenSettingsCount += 1;
+
+    public void ActivateApplication() => ActivationCount += 1;
+}
+
+public sealed class FakeHotkeyMonitor : IHotkeyMonitoring
+{
+    public Action? OnPress { get; set; }
+
+    public Action? OnRelease { get; set; }
+
+    public Action? OnDoubleTap { get; set; }
+
+    public Action? OnSingleTapWhileHandsFree { get; set; }
+
+    public Action? OnAbortShortcut { get; set; }
+
+    public Action? OnEscape { get; set; }
+
+    public bool IsHandsFreeActive { get; set; }
+
+    public bool IsRunning { get; private set; }
+
+    public DictationHotkey? Hotkey { get; private set; }
+
+    public int StartCount { get; private set; }
+
+    public int StopCount { get; private set; }
+
+    public void SetHotkey(DictationHotkey hotkey) => Hotkey = hotkey;
+
+    public void Start()
+    {
+        StartCount += 1;
+        IsRunning = true;
+    }
+
+    public void Stop()
+    {
+        StopCount += 1;
+        IsRunning = false;
+    }
+}
+
+/// <summary>
+/// Notification centres of our own, not the system's: a test must neither hear the real machine
+/// go to sleep nor wake somebody else's subscribers.
+/// </summary>
+public sealed class FakeSystemEvents : ISystemEventSource
+{
+    public event Action? WillSleep;
+
+    public event Action? DidWake;
+
+    public event Action? AudioDeviceChanged;
+
+    public event Action? ApplicationBecameActive;
+
+    public event Action<MemoryPressureTier>? MemoryPressureChanged;
+
+    public void PostWillSleep() => WillSleep?.Invoke();
+
+    public void PostDidWake() => DidWake?.Invoke();
+
+    public void PostAudioDeviceChanged() => AudioDeviceChanged?.Invoke();
+
+    public void PostApplicationBecameActive() => ApplicationBecameActive?.Invoke();
+
+    public void PostMemoryPressure(MemoryPressureTier tier) => MemoryPressureChanged?.Invoke(tier);
+}
+
+public sealed class FakeLaunchAtLogin : ILaunchAtLoginService
+{
+    public bool IsEnabled { get; private set; }
+
+    public Exception? Failure { get; set; }
+
+    public void SetEnabled(bool enabled)
+    {
+        if (Failure is Exception failure) { throw failure; }
+        IsEnabled = enabled;
+    }
+}
+
+public sealed class FakeClipboard : IHostOnlyClipboard
+{
+    private readonly List<string> copied = [];
+
+    public IReadOnlyList<string> Copied => copied;
+
+    public Exception? Failure { get; set; }
+
+    public void Copy(string text)
+    {
+        if (Failure is Exception failure) { throw failure; }
+        copied.Add(text);
+    }
+}
+
+public sealed class FakeFolders : IFolderOpening
+{
+    private readonly List<string> opened = [];
+
+    public IReadOnlyList<string> Opened => opened;
+
+    public void Open(string path) => opened.Add(path);
+}
+
+public sealed class FakeSounds : ISounding
+{
+    private int played;
+
+    public int Played => Volatile.Read(ref played);
+
+    public Task PlayAttention()
+    {
+        Interlocked.Increment(ref played);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// A dummy field of somebody else's application: counts how many times it was looked into.
+///
+/// The captures are counted, not the result: the promise "switched off means not read" is broken
+/// the moment the field is reached for, even if what was read is thrown away.
+/// </summary>
+public sealed class FakeFocusedField : IFocusedFieldReading
+{
+    private int captured;
+
+    public string? Value { get; set; }
+
+    public int Captured => Volatile.Read(ref captured);
+
+    public FocusedFieldHandle? CaptureFocusedField()
+    {
+        Interlocked.Increment(ref captured);
+        return new FocusedFieldHandle(() => Value);
+    }
+}
+
+/// <summary>The known recognition answer.</summary>
+public sealed class FakeTranscription
+{
+    public string Text { get; set; } = "Ping test";
+
+    public Exception? Error { get; set; }
+
+    public TimeSpan? Delay { get; set; }
+}
+
+/// <summary>
+/// A downloader that goes nowhere and does not let go until it is allowed to.
+///
+/// Needed to catch the application in the "downloading" state and see what the other screens do
+/// with it at that moment.
+/// </summary>
+public sealed class BlockingModelDownloader : IModelDownloading
+{
+    private readonly object gate = new();
+    private bool started;
+    private bool released;
+    /// <summary>
+    /// A released download ends in cancellation by default: it is not retried, so the store
+    /// reaches a terminal state at once instead of walking the retry and mirror ladder.
+    /// </summary>
+    private ModelDownloadError terminal = new ModelDownloadError.Cancelled();
+
+    public bool HasStarted { get { lock (gate) { return started; } } }
+
+    public void Release(ModelDownloadError? throwing = null)
+    {
+        lock (gate)
+        {
+            terminal = throwing ?? new ModelDownloadError.Cancelled();
+            released = true;
+        }
+    }
+
+    public async Task<string> Download(
+        Uri url,
+        long expectedBytes,
+        Action<long> onProgress,
+        CancellationToken cancellationToken = default)
+    {
+        lock (gate) { started = true; }
+
+        onProgress(expectedBytes / 2);
+
+        while (true)
+        {
+            lock (gate)
+            {
+                if (released) { throw terminal; }
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Delay(5, cancellationToken).ConfigureAwait(false);
+        }
+    }
+}
+
+/// <summary>
+/// An engine the model files of which are intact but which refuses to load.
+///
+/// Exactly this kind of failure happens in life: the SHA-256 check passed, but the session would
+/// not come up. A disk inspection cannot detect the state.
+/// </summary>
+public sealed class FailingASREngine : IASREngineAdapting
+{
+    public Task LoadModels(string directory) =>
+        Task.FromException(new ASREngineError.ModelsUnavailable("the engine failed loading"));
+
+    public Task<ASRResult> Transcribe(float[] samples) =>
+        Task.FromException<ASRResult>(new ASREngineError.ModelsNotLoaded());
+
+    public Task Unload() => Task.CompletedTask;
+}
+
+/// <summary>An engine that counts loads, unloads and inferences.</summary>
+public sealed class CountingASREngine : IASREngineAdapting
+{
+    private int modelLoads;
+    private int unloads;
+    private int inferences;
+
+    public int ModelLoads => Volatile.Read(ref modelLoads);
+
+    public int Unloads => Volatile.Read(ref unloads);
+
+    public int Inferences => Volatile.Read(ref inferences);
+
+    public Task LoadModels(string directory)
+    {
+        Interlocked.Increment(ref modelLoads);
+        return Task.CompletedTask;
+    }
+
+    public Task<ASRResult> Transcribe(float[] samples)
+    {
+        Interlocked.Increment(ref inferences);
+        return Task.FromResult(new ASRResult(string.Empty, TimeSpan.Zero, TimeSpan.Zero));
+    }
+
+    public Task Unload()
+    {
+        Interlocked.Increment(ref unloads);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// The dummy application environment.
+///
+/// Assembled in one place so that different sets of checks do not drift apart in how the
+/// application sees the computer.
+/// </summary>
+public sealed class AppHarness : IDisposable
+{
+    /// <summary>
+    /// Weak on purpose: the "everything is released after Dispose" test measures exactly this
+    /// object, and a tidy-up list that held it strongly would make the test pass on the harness
+    /// rather than on the code.
+    /// </summary>
+    private readonly List<WeakReference<AppState>> built = [];
+
+    public AppHarness()
+    {
+        Root = Path.Combine(Path.GetTempPath(), $"openramble-harness-{Guid.NewGuid()}");
+        Directory.CreateDirectory(Root);
+        Paths = new AppPaths(Root);
+        Settings = SettingsStore.Under(Paths);
+        MicrophoneConsent = new FakeMicrophoneConsentFlow(Permissions);
+    }
+
+    public string Root { get; }
+
+    public AppPaths Paths { get; }
+
+    public SettingsStore Settings { get; }
+
+    public FakePermissions Permissions { get; } = new();
+
+    public FakeMicrophoneConsentFlow MicrophoneConsent { get; }
+
+    public FakeHotkeyMonitor Monitor { get; } = new();
+
+    public FakeOverlay Overlay { get; } = new();
+
+    public FakeCapture Capture { get; } = new();
+
+    public FakeInserter Inserter { get; } = new();
+
+    public FakeSystemEvents SystemEvents { get; } = new();
+
+    public FakeFocusedField FocusedField { get; } = new();
+
+    public FakeLaunchAtLogin LaunchAtLogin { get; } = new();
+
+    public FakeClipboard Clipboard { get; } = new();
+
+    public FakeFolders Folders { get; } = new();
+
+    public FakeSounds Sounds { get; } = new();
+
+    public BlockingModelDownloader Downloader { get; } = new();
+
+    public FakeTranscription Transcription { get; } = new();
+
+    /// <summary>
+    /// The engine used for warm-up. Routine checks do not need it: without it the warm-up counts
+    /// as passed. It is set where the warm-up itself is under test.
+    /// </summary>
+    public IASREngineAdapting? WarmUpEngine { get; set; }
+
+    /// <summary>Zero - permission polling is off: in a test we change them, not the system.</summary>
+    public TimeSpan PermissionPollInterval { get; set; } = TimeSpan.Zero;
+
+    public bool LayoutHasAltGraph { get; set; }
+
+    public AppState MakeState()
+    {
+        var state = new AppState(new AppEnvironment
+        {
+            Paths = Paths,
+            Settings = Settings,
+            Permissions = Permissions,
+            HotkeyMonitor = Monitor,
+            Inserter = Inserter,
+            Overlay = Overlay,
+            Sounds = Sounds,
+            MakeCapture = (_, _, _) => Capture,
+            Transcribe = (_, _) => async (_, token) =>
+            {
+                if (Transcription.Delay is TimeSpan delay)
+                {
+                    await Task.Delay(delay, token).ConfigureAwait(false);
+                }
+
+                if (Transcription.Error is Exception error) { throw error; }
+                return new ASRResult(Transcription.Text, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(0.05));
+            },
+            PermissionPollInterval = PermissionPollInterval,
+            ModelDownloader = Downloader,
+            MicrophoneConsent = MicrophoneConsent,
+            SystemEvents = SystemEvents,
+            LocalTranscriber = WarmUpEngine is null ? null : new LocalTranscriber(WarmUpEngine),
+            FocusedFieldReader = FocusedField,
+            LaunchAtLogin = LaunchAtLogin,
+            Clipboard = Clipboard,
+            Folders = Folders,
+            LayoutHasAltGraph = () => LayoutHasAltGraph,
+        });
+
+        built.Add(new WeakReference<AppState>(state));
+        return state;
+    }
+
+    /// <summary>
+    /// Lay out the test inventory and the finished model's marker.
+    ///
+    /// Sparse files: the logical size matches the manifest, but 670 MB of blocks never touch the
+    /// disk. The marker records the same sizes and modification times a production installation
+    /// writes after its SHA check, so the store's fast path accepts it without hashing anything.
+    /// </summary>
+    public void InstallModelMarker()
+    {
+        ModelManifest manifest = ModelManifest.Bundled();
+        var layout = new ModelInstallLayout(manifest, Paths.Models());
+        Directory.CreateDirectory(layout.EngineDirectory);
+
+        var installed = new List<ModelReadyMarker.InstalledFile>();
+        foreach (ModelManifest.File file in manifest.Files)
+        {
+            string path = layout.Destination(file, layout.EngineDirectory);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            using (var stream = new FileStream(path, FileMode.Create, FileAccess.Write))
+            {
+                stream.SetLength(file.ByteCount);
+            }
+
+            installed.Add(new ModelReadyMarker.InstalledFile(
+                file.Path,
+                file.ByteCount,
+                new DateTimeOffset(new FileInfo(path).LastWriteTimeUtc, TimeSpan.Zero)));
+        }
+
+        var marker = new ModelReadyMarker(
+            manifest,
+            DateTimeOffset.UtcNow,
+            [.. installed.OrderBy(file => file.Path, StringComparer.Ordinal)]);
+        File.WriteAllBytes(layout.ReadyMarker, JsonSerializer.SerializeToUtf8Bytes(marker));
+    }
+
+    /// <summary>WAVs quietly kept for safety after failures and interruptions.</summary>
+    public IReadOnlyList<string> RecoveryFiles()
+    {
+        try
+        {
+            return Directory.GetFiles(Paths.AudioRecovery());
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return [];
+        }
+    }
+
+    public void Dispose()
+    {
+        foreach (WeakReference<AppState> reference in built)
+        {
+            if (reference.TryGetTarget(out AppState? state)) { state.Dispose(); }
+        }
+        try
+        {
+            Directory.Delete(Root, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+}

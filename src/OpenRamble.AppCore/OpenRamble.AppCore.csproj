@@ -7,6 +7,12 @@
 
   <ItemGroup>
     <ProjectReference Include="../DictationCore/DictationCore.csproj" />
+    <!--
+      The model-state surface (ModelPairState, ModelStatus, DictationReadiness, OnboardingGate)
+      switches on `LocalASR.ModelState`, and AppState owns the ModelStore itself. The dependency
+      direction stays lawful: App -> AppCore -> LocalASR -> DictationCore.
+    -->
+    <ProjectReference Include="../LocalASR/LocalASR.csproj" />
   </ItemGroup>
 
 </Project>

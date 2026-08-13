@@ -1,4 +1,5 @@
 using DictationCore;
+using LocalASR;
 
 namespace OpenRamble.AppCore;
 
@@ -30,11 +31,7 @@ public enum TrayBadge
 /// a description does not exist at all for a blind person, so the brand mark is paired with a
 /// state-specific accessibility label below.
 /// </summary>
-/// <remarks>
-/// Ported from <c>MenuBarStatus</c>. <c>setupNeedsUserAction</c> is deferred with the rest of
-/// the model-state surface: it switches on <c>LocalASR.ModelState</c>, which does not exist in
-/// this wave.
-/// </remarks>
+/// <remarks>Ported from <c>MenuBarStatus</c>.</remarks>
 public static class TrayStatus
 {
     public static TrayActivity Activity(DictationState state) => state switch
@@ -60,6 +57,44 @@ public static class TrayStatus
         TrayActivity.Hidden => needsAttention ? TrayBadge.Attention : TrayBadge.Hidden,
         _ => throw new ArgumentOutOfRangeException(nameof(activity)),
     };
+
+    /// <summary>
+    /// Does setup wait on the person right now?
+    ///
+    /// True only for states a click can advance: a permission to grant, a download to start, a
+    /// repair to confirm. Work in progress - downloading, verifying, deleting, engine warm-up -
+    /// is the app's job, and showing "attention" for it would train people to ignore the dot.
+    /// </summary>
+    /// <remarks>
+    /// The macOS original also takes an <c>AccessibilityPermissionState</c>, whose whole
+    /// vocabulary (restart required, entry needs repair, repairing) is about TCC keeping a stale
+    /// record. Windows has no Accessibility permission and no such record, so the microphone is
+    /// the only consent that can be pending - and the "repair is running, nothing to click" case
+    /// disappears with it.
+    /// </remarks>
+    public static bool SetupNeedsUserAction(
+        MicrophoneConsentState microphoneState,
+        ModelState modelState)
+    {
+        switch (microphoneState)
+        {
+            case MicrophoneConsentState.Denied:
+            case MicrophoneConsentState.WaitingForSettings:
+            case MicrophoneConsentState.BlockedForDevice:
+                return true;
+            case MicrophoneConsentState.Granted:
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(microphoneState));
+        }
+
+        return modelState switch
+        {
+            ModelState.NotInstalled or ModelState.RepairRequired or ModelState.Failed => true,
+            ModelState.Downloading or ModelState.Verifying or ModelState.Deleting or ModelState.Ready => false,
+            _ => throw new ArgumentOutOfRangeException(nameof(modelState)),
+        };
+    }
 
     /// <summary>
     /// Icon description. Starts with the application name: there are many icons in the tray,

@@ -1,0 +1,52 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Publish output
+publish/
+[Pp]ublish[Pp]rofiles/*.user
+*.publishsettings
+*.pubxml
+*.pubxml.user
+*.azurePubxml
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.DotSettings.user
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coverxml
+coverage*.json
+coverage*.xml
+coverage*.info
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+!packages/build/
+
+# MSBuild
+*.binlog
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# OS noise
+.DS_Store
+Thumbs.db

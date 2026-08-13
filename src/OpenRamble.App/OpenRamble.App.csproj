@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>OpenRamble.App</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <!-- Allows the WPF app to be built (not run) on a non-Windows host. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../LocalASR/LocalASR.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -50,3 +50,4 @@ artifacts/
 # OS noise
 .DS_Store
 Thumbs.db
+dist/

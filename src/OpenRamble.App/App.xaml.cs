@@ -37,6 +37,7 @@ public partial class App : Application
     private WasapiCapture? capture;
     private AppState? state;
     private SettingsWindow? settings;
+    private OnboardingWindow? onboarding;
     private bool reportedTrayFailure;
 
     protected override void OnStartup(StartupEventArgs args)
@@ -101,7 +102,13 @@ public partial class App : Application
             LayoutHasAltGraph = KeyboardLayoutFacts.HasAltGraph,
         });
 
-        state.OnInputLevel = level => overlay.UpdateInputLevel(level);
+        state.OnInputLevel = level =>
+        {
+            overlay.UpdateInputLevel(level);
+            // The setup window shows the same signal while it is open: on a first launch it is
+            // the only place a person can see that the microphone is actually delivering sound.
+            onboarding?.UpdateInputLevel(level);
+        };
         state.PropertyChanged += (_, _) => Dispatcher.BeginInvoke(RefreshTray);
         tray.MenuProvider = BuildMenu;
         RefreshTray();
@@ -258,7 +265,15 @@ public partial class App : Application
 
         try
         {
-            new OnboardingWindow(state).Show();
+            if (onboarding is null)
+            {
+                var window = new OnboardingWindow(state);
+                onboarding = window;
+                window.Closed += (_, _) => onboarding = null;
+            }
+
+            onboarding.Show();
+            onboarding.Activate();
         }
         catch (Exception error) when (error is InvalidOperationException or XamlParseException)
         {

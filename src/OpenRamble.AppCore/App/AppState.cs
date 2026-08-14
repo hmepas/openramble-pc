@@ -329,6 +329,17 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                     break;
             }
         };
+        // The raw edges, alongside the gestures and never instead of them. They carry no policy:
+        // whether a press starts anything is decided above, and this pair only records that the
+        // key arrived - which is the one thing the first-launch try-out has to be able to show.
+        hotkeyMonitor.OnHotkeyDown = () =>
+        {
+            HotkeyPressCount += 1;
+            IsHotkeyHeld = true;
+        };
+        hotkeyMonitor.OnHotkeyUp = () => IsHotkeyHeld = false;
+        hotkeyMonitor.OnTrackingFailure = reason =>
+            Notify(new DictationNotice(DictationNoticeKind.Failure, reason));
         hotkeyMonitor.OnSingleTapWhileHandsFree = () => controller?.StopHandsFree();
         // The hold turned out to be a shortcut over the chosen key: the recording ends quietly -
         // no insertion, no message, no error sound. The person pressed a shortcut, they did not
@@ -465,6 +476,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private void HandleWake()
     {
         hotkeyMonitor.Stop();
+        // The release never arrived, so nothing will ever say the key came up. Restarting
+        // tracking erases the gesture; this erases the same memory on our side.
+        IsHotkeyHeld = false;
         hotkeyMonitor.Start();
         RefreshPermissions();
         RevalidateEngineAfterWake();
@@ -709,6 +723,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         hotkeyMonitor.OnSingleTapWhileHandsFree = null;
         hotkeyMonitor.OnAbortShortcut = null;
         hotkeyMonitor.OnEscape = null;
+        hotkeyMonitor.OnHotkeyDown = null;
+        hotkeyMonitor.OnHotkeyUp = null;
+        hotkeyMonitor.OnTrackingFailure = null;
         OnInputLevel = null;
     }
 

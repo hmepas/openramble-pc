@@ -102,6 +102,17 @@ public sealed partial class KeyboardHook : IDisposable
     /// </remarks>
     public event Action? Escape;
 
+    /// <summary>
+    /// The hook could not be installed, with the Windows error code that says why (0 - none was
+    /// reported).
+    /// </summary>
+    /// <remarks>
+    /// Raised on the hook thread, once per failed <see cref="Start"/>. Without it this failure is
+    /// perfectly invisible: the process keeps running, the tray icon is there, and the dictation
+    /// key is dead for the rest of the session with nothing anywhere saying so.
+    /// </remarks>
+    public Action<int>? Failed { get; set; }
+
     public bool IsRunning
     {
         get
@@ -219,6 +230,7 @@ public sealed partial class KeyboardHook : IDisposable
     private void Pump(ManualResetEventSlim ready)
     {
         nint installed = SetWindowsHookExW(WhKeyboardLl, callback, GetModuleHandleW(null), 0);
+        int error = installed == 0 ? Marshal.GetLastPInvokeError() : 0;
         lock (gate)
         {
             hook = installed;
@@ -236,6 +248,7 @@ public sealed partial class KeyboardHook : IDisposable
                 pump = null;
             }
 
+            Failed?.Invoke(error);
             return;
         }
 

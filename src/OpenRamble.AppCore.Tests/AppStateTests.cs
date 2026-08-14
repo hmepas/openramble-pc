@@ -401,6 +401,84 @@ public sealed class AppStateTests : IDisposable
         Assert.Equal(before, Overlay.Notices.Count);
     }
 
+    // MARK: - The raw key
+
+    /// <summary>
+    /// The key is published as a physical fact, separately from any dictation it may start.
+    ///
+    /// This is what the first-launch try-out shows. Without it, a press that starts nothing - the
+    /// engine still loading, the microphone not granted, a virtual-machine client keeping the key
+    /// for itself - is indistinguishable from a press that never arrived, and the person's only
+    /// remaining move is to reinstall.
+    /// </summary>
+    [Fact]
+    public void TheRawKeyIsVisibleEvenWhenNothingStarts()
+    {
+        harness.Permissions.MicrophoneGranted = false;
+        AppState state = harness.MakeState();
+        Assert.False(state.IsHotkeyHeld);
+        Assert.Equal(0, state.HotkeyPressCount);
+
+        Monitor.OnHotkeyDown!();
+
+        Assert.True(state.IsHotkeyHeld);
+        Assert.Equal(1, state.HotkeyPressCount);
+        Assert.Equal(DictationState.Idle, state.DictationStateValue);
+
+        Monitor.OnHotkeyUp!();
+
+        Assert.False(state.IsHotkeyHeld);
+        Assert.Equal(1, state.HotkeyPressCount);
+    }
+
+    /// <summary>The interface subscribes to these two; a silent change would never reach a screen.</summary>
+    [Fact]
+    public void TheRawKeyIsAnnouncedToTheInterface()
+    {
+        AppState state = harness.MakeState();
+        var changed = new List<string?>();
+        state.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Monitor.Tap();
+
+        Assert.Contains(nameof(AppState.IsHotkeyHeld), changed);
+        Assert.Contains(nameof(AppState.HotkeyPressCount), changed);
+    }
+
+    /// <summary>
+    /// Sleep eats the release. Without erasing the memory of the hold on wake, the try-out - and
+    /// the menu behind it - would show a key held down for the rest of the session.
+    /// </summary>
+    [Fact]
+    public void WakingUpForgetsAHoldThatWasNeverReleased()
+    {
+        AppState state = harness.MakeState();
+        Monitor.OnHotkeyDown!();
+        Assert.True(state.IsHotkeyHeld);
+
+        harness.SystemEvents.PostDidWake();
+
+        Assert.False(state.IsHotkeyHeld);
+    }
+
+    /// <summary>
+    /// Tracking that could not be installed is said out loud.
+    ///
+    /// The alternative is the worst failure this application has: a process that runs, shows its
+    /// icon, holds nothing, and answers no keypress for the rest of the session, with nothing
+    /// anywhere explaining why.
+    /// </summary>
+    [Fact]
+    public async Task ARefusedKeyboardHookIsSaidOutLoud()
+    {
+        _ = harness.MakeState();
+
+        Monitor.OnTrackingFailure!("OpenRamble couldn't start watching the dictation key.");
+
+        await WaitForNotice("couldn't start watching the dictation key");
+        Assert.Equal(DictationNoticeKind.Failure, Overlay.Notices[^1].Kind);
+    }
+
     // MARK: - Gestures
 
     [Fact]

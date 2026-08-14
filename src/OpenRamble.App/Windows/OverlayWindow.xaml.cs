@@ -135,6 +135,11 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
 
         PlaceAboveTaskbar();
         Show();
+        // And again, because the first placement of the session was a guess. Until the window has
+        // a source it measures as nothing at all, so ActualWidth and ActualHeight are zero and the
+        // very first press - the one on the try-out page, and the one that decides whether a
+        // person believes the product works - put the panel off-centre and half under the taskbar.
+        PlaceAboveTaskbar();
     }
 
     private void UpdateTicking()

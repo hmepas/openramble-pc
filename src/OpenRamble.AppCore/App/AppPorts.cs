@@ -41,6 +41,31 @@ public interface IHotkeyMonitoring
     Action? OnEscape { get; set; }
 
     /// <summary>
+    /// The configured key physically went down, before any gesture has been read out of it.
+    /// </summary>
+    /// <remarks>
+    /// The callbacks above are the product; this pair is the proof that the key reaches the
+    /// process at all. A press that starts no dictation - the engine is still loading, the
+    /// microphone is off, a chord was in progress - is otherwise indistinguishable from a key
+    /// that never arrived, and the first-launch try-out exists to tell those two apart. Raised
+    /// once per physical press: auto-repeat is not a second press.
+    /// </remarks>
+    Action? OnHotkeyDown { get; set; }
+
+    /// <summary>The configured key came back up. Pairs with <see cref="OnHotkeyDown"/>.</summary>
+    Action? OnHotkeyUp { get; set; }
+
+    /// <summary>
+    /// Tracking could not be installed, with a sentence that says so.
+    /// </summary>
+    /// <remarks>
+    /// Nothing else in the application can notice: every callback above simply stays quiet for
+    /// the life of the process, which looks exactly like a person who is not pressing the key.
+    /// This is the same shape of silent failure the tray registration already reports out loud.
+    /// </remarks>
+    Action<string>? OnTrackingFailure { get; set; }
+
+    /// <summary>
     /// In hands-free mode a single press means "stop", not "start a new dictation". The monitor
     /// has to know, or the next press starts a second session over a live one.
     /// </summary>

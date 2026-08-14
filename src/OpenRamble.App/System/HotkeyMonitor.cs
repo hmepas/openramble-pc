@@ -18,10 +18,23 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
     private HotkeyGestureMachine machine = new(DictationHotkey.RightCtrl);
     private CancellationTokenSource? pendingRelease;
 
+    /// <summary>
+    /// Whether the hotkey is physically down, as the raw edges see it.
+    ///
+    /// Separate from the gesture machine's own <c>IsHeld</c> on purpose: the machine refuses a
+    /// press that arrives inside a chord, and the raw edges must report that press anyway - it is
+    /// the very case where a person needs to be told the key did arrive.
+    /// </summary>
+    private bool rawKeyDown;
+
     public HotkeyMonitor()
     {
         hook.KeyEvent += OnKeyEvent;
         hook.Escape += () => OnEscape?.Invoke();
+        hook.Failed = error => OnTrackingFailure?.Invoke(
+            "OpenRamble couldn't start watching the dictation key"
+            + (error == 0 ? "" : $" (Windows error {error})")
+            + ", so the key does nothing. Restarting OpenRamble usually fixes this.");
         hook.SuppressesHotkey = hook.Hotkey.NeedsSuppression;
     }
 
@@ -37,6 +50,12 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
 
     public Action? OnEscape { get; set; }
 
+    public Action? OnHotkeyDown { get; set; }
+
+    public Action? OnHotkeyUp { get; set; }
+
+    public Action<string>? OnTrackingFailure { get; set; }
+
     public bool IsHandsFreeActive
     {
         get { lock (gate) { return machine.IsHandsFreeActive; } }
@@ -46,10 +65,17 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
     public void SetHotkey(DictationHotkey hotkey)
     {
         HotkeyAction action;
+        bool wasDown;
         lock (gate)
         {
             action = machine.SetHotkey(hotkey);
+            wasDown = rawKeyDown;
+            rawKeyDown = false;
         }
+
+        // Events of the old key stop arriving here as well: without this its "up" would never
+        // come and the try-out would show a key held down forever.
+        if (wasDown) { OnHotkeyUp?.Invoke(); }
 
         hook.Hotkey = hotkey;
         hook.SuppressesHotkey = hotkey.NeedsSuppression;
@@ -64,7 +90,15 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
     {
         hook.Stop();
         CancelPendingRelease();
-        lock (gate) { machine.Reset(); }
+        bool wasDown;
+        lock (gate)
+        {
+            machine.Reset();
+            wasDown = rawKeyDown;
+            rawKeyDown = false;
+        }
+
+        if (wasDown) { OnHotkeyUp?.Invoke(); }
     }
 
     public void Dispose()
@@ -81,10 +115,24 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
     private void OnKeyEvent(HotkeyEvent keyboardEvent)
     {
         HotkeyAction action;
+        bool? edge = null;
         lock (gate)
         {
+            // Auto-repeat resends the key-down for as long as it is held; only a change of side
+            // is an edge.
+            if (keyboardEvent.VirtualKey == machine.Hotkey.VirtualKey
+                && keyboardEvent.IsDown != rawKeyDown)
+            {
+                rawKeyDown = keyboardEvent.IsDown;
+                edge = keyboardEvent.IsDown;
+            }
+
             action = machine.Handle(keyboardEvent);
         }
+
+        // Before the gesture, deliberately. The raw edge is what says "the key arrived", and it
+        // must reach the screen even when the gesture that follows decides to do nothing.
+        if (edge is bool down) { (down ? OnHotkeyDown : OnHotkeyUp)?.Invoke(); }
 
         Dispatch(action);
     }

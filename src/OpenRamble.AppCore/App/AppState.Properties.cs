@@ -21,6 +21,8 @@ public sealed partial class AppState
     private string? recoveredText;
     private bool isHandsFreeActive;
     private int successfulDictationCount;
+    private bool isHotkeyHeld;
+    private int hotkeyPressCount;
     private LastDictation? lastDictation;
     private IReadOnlyList<RecentDictation> recentDictations = [];
     private ReplacementsStore.Problem? dictionaryProblem;
@@ -178,6 +180,36 @@ public sealed partial class AppState
     {
         get { lock (gate) { return successfulDictationCount; } }
         private set => Set(ref successfulDictationCount, value);
+    }
+
+    /// <summary>
+    /// Is the dictation key physically down right now?
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not the same question as "is a dictation running". A press that started
+    /// nothing still moves this, and that difference is the only honest answer to "is the key
+    /// even reaching the app" - the question the first-launch try-out is there to settle.
+    /// </remarks>
+    public bool IsHotkeyHeld
+    {
+        get { lock (gate) { return isHotkeyHeld; } }
+        private set => Set(ref isHotkeyHeld, value);
+    }
+
+    /// <summary>
+    /// How many times the dictation key has been pressed since launch.
+    /// </summary>
+    /// <remarks>
+    /// A counter rather than a flag, for the same reason as
+    /// <see cref="SuccessfulDictationCount"/>: a window that opens mid-session compares against
+    /// the value it saw on opening, so a press from an earlier session cannot pass its step for
+    /// it. Nothing about which key, when, or in what order is kept - the privacy invariant leaves
+    /// room for a count and for nothing else.
+    /// </remarks>
+    public int HotkeyPressCount
+    {
+        get { lock (gate) { return hotkeyPressCount; } }
+        private set => Set(ref hotkeyPressCount, value);
     }
 
     public LastDictation? LastDictationValue

@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Threading;
 using OpenRamble.AppCore;
 
 namespace OpenRamble.App;
@@ -18,6 +20,20 @@ public sealed partial class OnboardingWindow : Window
 {
     private readonly AppState state;
     private readonly int successesAtStart;
+    private readonly int pressesAtStart;
+
+    /// <summary>
+    /// Drives the microphone meter on the try-out page.
+    ///
+    /// A clock rather than a callback per frame: the peaks arrive from the audio thread hundreds
+    /// of times a second, and marshalling each one onto the dispatcher would put the interface's
+    /// throughput in the hands of the sample rate.
+    /// </summary>
+    private readonly DispatcherTimer levelClock;
+
+    /// <summary>Latest microphone peak, written from the audio thread and read by the clock.</summary>
+    private volatile float inputLevel;
+
     private OnboardingStep step = OnboardingStep.Welcome;
     private bool skippedTryOut;
 
@@ -25,13 +41,28 @@ public sealed partial class OnboardingWindow : Window
     {
         this.state = state;
         successesAtStart = state.SuccessfulDictationCount;
+        pressesAtStart = state.HotkeyPressCount;
         InitializeComponent();
 
+        levelClock = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(80),
+        };
+        levelClock.Tick += (_, _) =>
+            TryLevel.Value = RecordingWaveformLayout.BarHeight(inputLevel, TryLevel.Maximum);
+
         state.PropertyChanged += OnStateChanged;
-        Closed += (_, _) => state.PropertyChanged -= OnStateChanged;
+        Closed += (_, _) =>
+        {
+            state.PropertyChanged -= OnStateChanged;
+            levelClock.Stop();
+        };
 
         Render();
     }
+
+    /// <summary>Live microphone level for the try-out meter. Called from the audio thread.</summary>
+    public void UpdateInputLevel(float level) => inputLevel = level;
 
     private bool TrialSucceeded => skippedTryOut || state.SuccessfulDictationCount > successesAtStart;
 
@@ -68,6 +99,7 @@ public sealed partial class OnboardingWindow : Window
 
         if (step == OnboardingStep.Setup) { RenderSetup(); }
         if (step == OnboardingStep.TryIt) { RenderTry(); }
+        else { levelClock.Stop(); }
     }
 
     private void RenderSetup()
@@ -121,11 +153,31 @@ public sealed partial class OnboardingWindow : Window
 
     private void RenderTry()
     {
-        TryInstruction.Text = $"Hold {state.Hotkey.Title}, say a sentence, then let go.";
-        bool passed = state.SuccessfulDictationCount > successesAtStart;
-        TryResult.Text = passed ? "That is the whole product. You are set up." : string.Empty;
-        TryResult.Foreground = StatusBrushes.Success;
-        TryResult.Visibility = passed ? Visibility.Visible : Visibility.Collapsed;
+        OnboardingTryOut tryOut = OnboardingTryOut.Make(
+            state.Hotkey,
+            state.IsHotkeyHeld,
+            state.HotkeyPressCount > pressesAtStart,
+            state.DictationStateValue,
+            state.SuccessfulDictationCount > successesAtStart);
+
+        TryInstruction.Text = tryOut.Instruction;
+        TryKeyName.Text = state.Hotkey.Title;
+
+        // Neutral until something is seen: a badge that is already coloured says the key arrived
+        // before it did.
+        Brush tone = tryOut.Tone is null ? StatusBrushes.Neutral : StatusBrushes.For(tryOut.Tone);
+        TryKeyBadge.BorderBrush = tone;
+        TryKeyDot.Fill = tone;
+        TryStatus.Text = tryOut.Status;
+        TryStatus.Foreground = tryOut.Tone is null ? Brushes.Gray : tone;
+
+        TryLevel.Visibility = tryOut.ShowsInputLevel ? Visibility.Visible : Visibility.Collapsed;
+        if (tryOut.ShowsInputLevel) { levelClock.Start(); }
+        else
+        {
+            levelClock.Stop();
+            TryLevel.Value = 0;
+        }
     }
 
     private void OnPermissionAction(object sender, RoutedEventArgs args) => state.RequestMicrophone();

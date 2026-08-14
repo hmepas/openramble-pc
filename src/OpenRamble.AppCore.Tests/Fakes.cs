@@ -256,6 +256,12 @@ public sealed class FakeHotkeyMonitor : IHotkeyMonitoring
 
     public Action? OnEscape { get; set; }
 
+    public Action? OnHotkeyDown { get; set; }
+
+    public Action? OnHotkeyUp { get; set; }
+
+    public Action<string>? OnTrackingFailure { get; set; }
+
     public bool IsHandsFreeActive { get; set; }
 
     public bool IsRunning { get; private set; }
@@ -278,6 +284,13 @@ public sealed class FakeHotkeyMonitor : IHotkeyMonitoring
     {
         StopCount += 1;
         IsRunning = false;
+    }
+
+    /// <summary>One whole press: down, then up. The real monitor raises these around the gesture.</summary>
+    public void Tap()
+    {
+        OnHotkeyDown?.Invoke();
+        OnHotkeyUp?.Invoke();
     }
 }
 

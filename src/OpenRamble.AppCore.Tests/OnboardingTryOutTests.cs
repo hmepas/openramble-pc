@@ -18,8 +18,11 @@ public sealed class OnboardingTryOutTests
         bool everPressed = false,
         DictationState dictation = DictationState.Idle,
         bool succeeded = false,
-        DictationHotkey hotkey = DictationHotkey.RightCtrl) =>
-        OnboardingTryOut.Make(hotkey, held, everPressed, dictation, succeeded);
+        DictationHotkey hotkey = DictationHotkey.RightCtrl,
+        bool buttonHeld = false,
+        string? trackingFailure = null) =>
+        OnboardingTryOut.Make(
+            hotkey, held, everPressed, dictation, succeeded, buttonHeld, trackingFailure);
 
     /// <summary>
     /// Before anything happens the step says what to do and admits it has seen nothing.
@@ -33,7 +36,7 @@ public sealed class OnboardingTryOutTests
         OnboardingTryOut view = Make();
 
         Assert.Equal(OnboardingTryPhase.Waiting, view.Phase);
-        Assert.Equal("Hold Right Ctrl, say a sentence, then let go.", view.Instruction);
+        Assert.StartsWith("Hold Right Ctrl, say a sentence, then let go.", view.Instruction);
         Assert.Equal("Press and hold Right Ctrl. Nothing has reached OpenRamble yet.", view.Status);
         Assert.Null(view.Tone);
         Assert.False(view.ShowsInputLevel);
@@ -168,6 +171,140 @@ public sealed class OnboardingTryOutTests
                         Assert.Equal(
                             view.Phase == OnboardingTryPhase.Recording,
                             view.ShowsInputLevel);
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tracking that never installed is said out loud, before any "nothing has arrived yet".
+    ///
+    /// This is the one fact the step cannot establish by waiting, and the one that makes waiting
+    /// pointless: a hook the system refused looks exactly like a person who has not pressed
+    /// anything, for the rest of the process.
+    /// </summary>
+    [Fact]
+    public void TrackingThatNeverStartedIsNamed()
+    {
+        const string reason = "OpenRamble couldn't start watching the dictation key.";
+        OnboardingTryOut view = Make(trackingFailure: reason);
+
+        Assert.Equal(OnboardingTryPhase.TrackingUnavailable, view.Phase);
+        Assert.Equal(reason, view.Status);
+        Assert.Equal(StatusColorRole.Attention, view.Tone);
+        Assert.False(view.ShowsInputLevel);
+    }
+
+    /// <summary>
+    /// A key that arrives outranks the report that it cannot: the reason was recorded once at
+    /// launch, and the evidence in front of the person now is worth more than it.
+    /// </summary>
+    [Fact]
+    public void AKeyThatArrivesOutranksTheTrackingReport()
+    {
+        const string reason = "OpenRamble couldn't start watching the dictation key.";
+
+        Assert.Equal(
+            OnboardingTryPhase.Recording,
+            Make(held: true, everPressed: true, dictation: DictationState.Listening, trackingFailure: reason)
+                .Phase);
+
+        // A dictation that is finishing outranks it too: a reason recorded at launch must not
+        // paint over what is happening in front of the person right now.
+        Assert.Equal(
+            OnboardingTryPhase.Working,
+            Make(dictation: DictationState.Transcribing, trackingFailure: reason).Phase);
+    }
+
+    /// <summary>
+    /// The button says "button", never "the key is down".
+    ///
+    /// The badge is this step's evidence about the key, and a mouse press is not evidence about
+    /// the key. Wording the hold as a keypress would make the one screen that exists to answer
+    /// "does my keyboard reach OpenRamble" answer it wrongly.
+    /// </summary>
+    [Fact]
+    public void HoldingTheButtonNeverClaimsTheKey()
+    {
+        OnboardingTryOut recording = Make(buttonHeld: true, dictation: DictationState.Listening);
+
+        Assert.Equal(OnboardingTryPhase.ButtonHeld, recording.Phase);
+        Assert.Equal(
+            "Holding the button — recording. Say a sentence, then let go of the mouse.",
+            recording.Status);
+        Assert.Equal(StatusColorRole.Recording, recording.Tone);
+        Assert.True(recording.ShowsInputLevel);
+        Assert.DoesNotContain("Right Ctrl is down", recording.Status, StringComparison.Ordinal);
+
+        OnboardingTryOut opening = Make(buttonHeld: true, dictation: DictationState.Preparing);
+
+        Assert.Equal(OnboardingTryPhase.ButtonHeld, opening.Phase);
+        Assert.Equal("Holding the button — turning on the microphone…", opening.Status);
+        Assert.False(opening.ShowsInputLevel);
+    }
+
+    /// <summary>
+    /// The button works when the key never arrives - that is the whole reason it exists.
+    /// </summary>
+    [Fact]
+    public void TheButtonSpeaksOverADeadHook()
+    {
+        OnboardingTryOut view = Make(
+            buttonHeld: true,
+            dictation: DictationState.Listening,
+            trackingFailure: "OpenRamble couldn't start watching the dictation key.");
+
+        Assert.Equal(OnboardingTryPhase.ButtonHeld, view.Phase);
+        Assert.True(view.ShowsInputLevel);
+    }
+
+    /// <summary>Success still outranks a hold, whichever hand is holding.</summary>
+    [Fact]
+    public void SuccessSurvivesAButtonHold()
+    {
+        OnboardingTryOut view = Make(
+            buttonHeld: true,
+            dictation: DictationState.Listening,
+            succeeded: true);
+
+        Assert.Equal(OnboardingTryPhase.Succeeded, view.Phase);
+    }
+
+    /// <summary>The instruction names both ways in, so neither has to be discovered.</summary>
+    [Fact]
+    public void TheInstructionOffersTheButtonToo()
+    {
+        Assert.Contains("hold the button", Make().Instruction, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The wider table, with the button and a dead hook in it: still nothing silent, and still a
+    /// meter only where a microphone is genuinely running.
+    /// </summary>
+    [Fact]
+    public void NoCombinationIsSilentWithTheButtonAndADeadHook()
+    {
+        foreach (bool held in new[] { true, false })
+        {
+            foreach (bool buttonHeld in new[] { true, false })
+            {
+                foreach (string? failure in new[] { null, "tracking is down" })
+                {
+                    foreach (DictationState dictation in Enum.GetValues<DictationState>())
+                    {
+                        OnboardingTryOut view = Make(
+                            held: held,
+                            everPressed: held,
+                            dictation: dictation,
+                            buttonHeld: buttonHeld,
+                            trackingFailure: failure);
+
+                        Assert.False(string.IsNullOrWhiteSpace(view.Status));
+                        Assert.False(string.IsNullOrWhiteSpace(view.Instruction));
+                        bool live = dictation == DictationState.Listening
+                            && (held || buttonHeld);
+                        Assert.Equal(live, view.ShowsInputLevel);
                     }
                 }
             }

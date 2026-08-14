@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Welcome to OpenRamble"
         Width="560"
-        Height="520"
+        Height="640"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize">
     <DockPanel Margin="24">
@@ -51,6 +51,22 @@
 
             <StackPanel x:Name="TryPage" Visibility="Collapsed">
                 <TextBlock Text="Try it once" FontSize="18" FontWeight="SemiBold" />
+
+                <!--
+                    The key is chosen here and not only in Settings, because this is the page where
+                    a key that does not arrive is discovered - and sending somebody out of the
+                    first-launch flow to fix it is how a first launch ends. Same property, same
+                    file on disk, same live re-arming as the Settings picker: one source of truth.
+                -->
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <TextBlock Text="Dictation key" VerticalAlignment="Center" Margin="0,0,10,0" />
+                    <ComboBox x:Name="TryHotkeyPicker" Width="180"
+                              AutomationProperties.Name="Dictation key"
+                              AutomationProperties.HelpText="The key you hold down while dictating" />
+                </StackPanel>
+                <TextBlock x:Name="TryHotkeyWarning" TextWrapping="Wrap" Margin="0,6,0,0"
+                           Visibility="Collapsed" />
+
                 <TextBlock x:Name="TryInstruction" Margin="0,8,0,0" TextWrapping="Wrap" />
 
                 <!--
@@ -82,6 +98,23 @@
 
                 <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="Gray"
                            Text="Click into the box below first, so the words have somewhere to land." />
+
+                <!--
+                    Hold with the mouse instead of the key. Not a shortcut around the try-out but a
+                    way through it: a key eaten by a virtual machine client or a remote desktop
+                    never reaches this process, and without this button the person cannot tell that
+                    from a product that does not work at all.
+
+                    Focusable="False" on purpose, and it is a real trade-off. The text is inserted
+                    into whatever has focus, so a button that took focus would paste the dictation
+                    into itself; the price is that the hold is mouse and touch only.
+                -->
+                <Button x:Name="TryHoldButton" Content="Hold to dictate"
+                        HorizontalAlignment="Left" Padding="16,6" Margin="0,10,0,0"
+                        Focusable="False"
+                        AutomationProperties.Name="Hold to dictate"
+                        AutomationProperties.HelpText="Press and hold with the mouse, speak, then let go. Does exactly what holding the dictation key does." />
+
                 <TextBox x:Name="TryBox" Margin="0,10,0,0" Height="90" AcceptsReturn="True"
                          TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          AutomationProperties.Name="Try-out text box" />

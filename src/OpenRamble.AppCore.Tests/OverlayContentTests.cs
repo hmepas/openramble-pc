@@ -218,4 +218,97 @@ public sealed class OverlayContentTests
         Assert.Equal(OverlayIcon.Waveform, OverlayTone.Working.Icon);
         Assert.Equal(OverlayIcon.Done, OverlayTone.Idle.Icon);
     }
+
+    /// <summary>
+    /// While the engine is being read back into memory, the panel says so instead of claiming to
+    /// transcribe.
+    ///
+    /// Residency hands the weights back to the system when the machine is short of memory, and the
+    /// keypress that follows starts a full reload. Until it lands there is nothing to recognize
+    /// with - and "Transcribing…" over a model still coming off disk is a lie that can hold the
+    /// screen for a minute and a half. That minute and a half is when a person decides the product
+    /// is broken.
+    /// </summary>
+    [Fact]
+    public void ALoadingEngineIsNarratedInsteadOfClaimingToTranscribe()
+    {
+        EnginePreparationState loading = EnginePreparationState.Make(
+            EnginePreparationState.Phase.LoadingRecognizer,
+            TimeSpan.FromSeconds(34));
+
+        OverlayContent content = OverlayContent.Make(
+            DictationState.Transcribing,
+            notice: null,
+            elapsed: TimeSpan.FromSeconds(3),
+            enginePreparation: loading);
+
+        Assert.Equal(loading.Title, content.Title);
+        Assert.Contains("34", content.Title, StringComparison.Ordinal);
+        // The one thing a person waiting on a reload needs to know.
+        Assert.Equal("Your words are recorded and waiting.", content.Subtitle);
+        Assert.Equal(OverlayTone.Working, content.Tone);
+        Assert.Contains(loading.Title, content.AccessibilityLabel, StringComparison.Ordinal);
+        // Silent: the title carries a seconds counter, and announcing it would interrupt the
+        // screen reader once per second for as long as the load lasts.
+        Assert.Null(content.Announcement);
+    }
+
+    /// <summary>
+    /// A ready or idle engine changes nothing: the ordinary panel is the ordinary panel.
+    /// </summary>
+    [Fact]
+    public void AnEngineThatIsNotLoadingLeavesThePanelAlone()
+    {
+        foreach (EnginePreparationState.Phase phase in
+            new[] { EnginePreparationState.Phase.Idle, EnginePreparationState.Phase.Ready })
+        {
+            OverlayContent content = OverlayContent.Make(
+                DictationState.Transcribing,
+                notice: null,
+                elapsed: TimeSpan.Zero,
+                enginePreparation: EnginePreparationState.Make(phase, TimeSpan.Zero));
+
+            Assert.Equal("Transcribing…", content.Title);
+        }
+
+        Assert.Equal(
+            "Transcribing…",
+            OverlayContent.Make(DictationState.Transcribing, null, TimeSpan.Zero).Title);
+    }
+
+    /// <summary>
+    /// A reload while the microphone is still open changes nothing either.
+    ///
+    /// The warm-up rides under the person's voice on purpose, and the panel's job during those
+    /// seconds is to prove the microphone is live. Replacing "Listening" with a loading line would
+    /// take away the only thing that says it is safe to speak.
+    /// </summary>
+    [Fact]
+    public void ALoadingEngineNeverInterruptsTheRecordingPanel()
+    {
+        EnginePreparationState loading = EnginePreparationState.Make(
+            EnginePreparationState.Phase.LoadingRecognizer,
+            TimeSpan.FromSeconds(5));
+
+        Assert.Equal(
+            "Listening",
+            OverlayContent.Make(DictationState.Listening, null, TimeSpan.Zero, loading).Title);
+        Assert.Equal(
+            "Turning on the microphone…",
+            OverlayContent.Make(DictationState.Preparing, null, TimeSpan.Zero, loading).Title);
+    }
+
+    /// <summary>A message still outranks everything, a loading engine included.</summary>
+    [Fact]
+    public void AMessageStillOutranksALoadingEngine()
+    {
+        var notice = new DictationNotice(DictationNoticeKind.Failure, "Something to read.");
+        OverlayContent content = OverlayContent.Make(
+            DictationState.Transcribing,
+            notice,
+            TimeSpan.Zero,
+            EnginePreparationState.Make(EnginePreparationState.Phase.LoadingRecognizer, TimeSpan.FromSeconds(9)));
+
+        Assert.Equal("Something to read.", content.Title);
+    }
 }

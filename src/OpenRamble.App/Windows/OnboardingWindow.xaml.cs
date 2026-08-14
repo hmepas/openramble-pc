@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using DictationCore;
 using OpenRamble.AppCore;
 
 namespace OpenRamble.App;
@@ -37,12 +39,26 @@ public sealed partial class OnboardingWindow : Window
     private OnboardingStep step = OnboardingStep.Welcome;
     private bool skippedTryOut;
 
+    /// <summary>Guards the picker against reacting to the selection the render just set.</summary>
+    private bool updating;
+
     public OnboardingWindow(AppState state)
     {
         this.state = state;
         successesAtStart = state.SuccessfulDictationCount;
         pressesAtStart = state.HotkeyPressCount;
         InitializeComponent();
+
+        TryHotkeyPicker.ItemsSource = DictationHotkeyInfo.AllCases.Select(hotkey => hotkey.Title).ToArray();
+        TryHotkeyPicker.SelectionChanged += OnHotkeyChanged;
+
+        // The hold has to survive the pointer leaving the button, so the button captures the mouse
+        // and the release is taken from the capture rather than from the click: a button-up that
+        // lands outside would otherwise never arrive, and the microphone would stay open with
+        // nothing left to close it.
+        TryHoldButton.PreviewMouseLeftButtonDown += OnHoldPressed;
+        TryHoldButton.PreviewMouseLeftButtonUp += OnHoldReleased;
+        TryHoldButton.LostMouseCapture += (_, _) => state.ReleaseDictationButton();
 
         levelClock = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -55,6 +71,9 @@ public sealed partial class OnboardingWindow : Window
         Closed += (_, _) =>
         {
             state.PropertyChanged -= OnStateChanged;
+            // Closing the window mid-hold must not leave the microphone open: the mouse-up will
+            // be delivered to a window that no longer exists.
+            state.ReleaseDictationButton();
             levelClock.Stop();
         };
 
@@ -158,7 +177,25 @@ public sealed partial class OnboardingWindow : Window
             state.IsHotkeyHeld,
             state.HotkeyPressCount > pressesAtStart,
             state.DictationStateValue,
-            state.SuccessfulDictationCount > successesAtStart);
+            state.SuccessfulDictationCount > successesAtStart,
+            state.IsDictationButtonHeld,
+            state.HotkeyTrackingFailure);
+
+        updating = true;
+        try
+        {
+            TryHotkeyPicker.SelectedIndex = DictationHotkeyInfo.AllCases.ToList().IndexOf(state.Hotkey);
+        }
+        finally
+        {
+            updating = false;
+        }
+
+        // Changing the key mid-dictation would leave the running session with no key to stop it.
+        TryHotkeyPicker.IsEnabled = state.DictationStateValue == DictationState.Idle;
+        TryHotkeyWarning.Text = state.HotkeyWarning ?? string.Empty;
+        TryHotkeyWarning.Foreground = StatusBrushes.Attention;
+        TryHotkeyWarning.Visibility = state.HotkeyWarning is null ? Visibility.Collapsed : Visibility.Visible;
 
         TryInstruction.Text = tryOut.Instruction;
         TryKeyName.Text = state.Hotkey.Title;
@@ -178,6 +215,33 @@ public sealed partial class OnboardingWindow : Window
             levelClock.Stop();
             TryLevel.Value = 0;
         }
+    }
+
+    private void OnHotkeyChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (updating) { return; }
+        int index = TryHotkeyPicker.SelectedIndex;
+        if (index < 0 || index >= DictationHotkeyInfo.AllCases.Count) { return; }
+
+        // One property for both pickers: it persists the choice and re-arms the live hook, so the
+        // next hold on this very page uses the key that was just picked.
+        state.Hotkey = DictationHotkeyInfo.AllCases[index];
+        Render();
+    }
+
+    private void OnHoldPressed(object sender, MouseButtonEventArgs args)
+    {
+        // The words go where the caret already was, and on this page that is the try-out box.
+        // A hold that starts with focus somewhere else would insert into somewhere else.
+        TryBox.Focus();
+        TryHoldButton.CaptureMouse();
+        state.PressDictationButton();
+    }
+
+    private void OnHoldReleased(object sender, MouseButtonEventArgs args)
+    {
+        TryHoldButton.ReleaseMouseCapture();
+        state.ReleaseDictationButton();
     }
 
     private void OnPermissionAction(object sender, RoutedEventArgs args) => state.RequestMicrophone();

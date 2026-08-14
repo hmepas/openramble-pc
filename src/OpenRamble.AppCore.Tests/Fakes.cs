@@ -503,6 +503,72 @@ public sealed class CountingASREngine : IASREngineAdapting
 }
 
 /// <summary>
+/// An engine that can be made to wedge once and to lose one reload.
+/// </summary>
+/// <remarks>
+/// Both halves happen together in life, and together they are the trap: an inference stuck on
+/// something that died triggers the recycle, and the recycle's own reload is then overtaken by
+/// the unload that opened it - which reaches the owner as cancellation rather than as a broken
+/// model. A recovery that does not survive that leaves the engine permanently un-recyclable,
+/// while the person's key keeps starting dictations nothing can finish.
+/// </remarks>
+public sealed class WedgingASREngine : IASREngineAdapting
+{
+    private readonly Lock gate = new();
+    private int modelLoads;
+    private int inferences;
+    private int unloads;
+    private bool cancelNextLoad;
+    private bool failNextInference;
+
+    public int ModelLoads => Volatile.Read(ref modelLoads);
+
+    public int Inferences => Volatile.Read(ref inferences);
+
+    public int Unloads => Volatile.Read(ref unloads);
+
+    /// <summary>The next load is overtaken by an unload and reports cancellation.</summary>
+    public void CancelNextLoad() { lock (gate) { cancelNextLoad = true; } }
+
+    /// <summary>The next inference is the one stuck on a service that died.</summary>
+    public void FailNextInference() { lock (gate) { failNextInference = true; } }
+
+    public Task LoadModels(string directory)
+    {
+        Interlocked.Increment(ref modelLoads);
+        bool cancel;
+        lock (gate)
+        {
+            cancel = cancelNextLoad;
+            cancelNextLoad = false;
+        }
+
+        return cancel ? Task.FromException(new OperationCanceledException()) : Task.CompletedTask;
+    }
+
+    public Task<ASRResult> Transcribe(float[] samples)
+    {
+        Interlocked.Increment(ref inferences);
+        bool fail;
+        lock (gate)
+        {
+            fail = failNextInference;
+            failNextInference = false;
+        }
+
+        return fail
+            ? Task.FromException<ASRResult>(new ASREngineError.InferenceFailed("the engine is wedged"))
+            : Task.FromResult(new ASRResult(string.Empty, TimeSpan.Zero, TimeSpan.Zero));
+    }
+
+    public Task Unload()
+    {
+        Interlocked.Increment(ref unloads);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
 /// The dummy application environment.
 ///
 /// Assembled in one place so that different sets of checks do not drift apart in how the

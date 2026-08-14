@@ -337,4 +337,54 @@ public sealed class OverlayModelTests
         Assert.Equal("Listening", model.Content.Title);
         Assert.True(model.Elapsed > TimeSpan.FromSeconds(3.4), "notice time must remain part of recording time");
     }
+
+    /// <summary>
+    /// The panel picks up the engine's own narration, and drops it again when the load lands.
+    ///
+    /// Pushed in rather than passed to <c>Show</c>, because a reload starts before the key is
+    /// released and can outlast it: between the release and the result there is no state change
+    /// left to carry it.
+    /// </summary>
+    [Fact]
+    public void TheLoadingEngineReachesThePanelAndLeavesItAgain()
+    {
+        model.Show(DictationState.Transcribing, TimeSpan.FromSeconds(3));
+        Assert.Equal("Transcribing…", model.Content.Title);
+
+        model.UpdateEnginePreparation(EnginePreparationState.Make(
+            EnginePreparationState.Phase.LoadingRecognizer,
+            TimeSpan.FromSeconds(12)));
+
+        Assert.Contains("12", model.Content.Title, StringComparison.Ordinal);
+        Assert.True(model.IsVisible);
+
+        model.UpdateEnginePreparation(EnginePreparationState.Make(
+            EnginePreparationState.Phase.Ready,
+            TimeSpan.Zero));
+
+        Assert.Equal("Transcribing…", model.Content.Title);
+    }
+
+    /// <summary>
+    /// A load that ticks for a minute must not make the screen reader read a minute of seconds.
+    ///
+    /// The panel announces on entering a state, and the loading line changes every second. Reading
+    /// each one would bury whatever the person was actually listening to.
+    /// </summary>
+    [Fact]
+    public void TheTickingLoadIsNeverAnnounced()
+    {
+        model.Show(DictationState.Transcribing, TimeSpan.Zero);
+        int spokenBefore = announcer.Announcements.Count;
+
+        for (int second = 1; second <= 5; second += 1)
+        {
+            model.UpdateEnginePreparation(EnginePreparationState.Make(
+                EnginePreparationState.Phase.LoadingRecognizer,
+                TimeSpan.FromSeconds(second)));
+            model.Show(DictationState.Transcribing, TimeSpan.Zero);
+        }
+
+        Assert.Equal(spokenBefore, announcer.Announcements.Count);
+    }
 }

@@ -80,6 +80,17 @@ public sealed class SettingsStore
         }
     }
 
+    /// <summary>
+    /// Save the settings - all of them, or none.
+    /// </summary>
+    /// <remarks>
+    /// Written beside the file, then moved over it. A plain write is not one step: a process
+    /// killed between the truncation and the flush leaves a half-written file, a half-written file
+    /// does not parse, and <see cref="Read"/> then falls back to the defaults - so a crash quietly
+    /// takes the person's chosen dictation key away and puts the first-launch flow back on screen.
+    /// What this file holds is six values somebody set by hand; losing them to a crash is not
+    /// acceptable when the cure is a rename.
+    /// </remarks>
     public void Write(AppSettings settings)
     {
         string? directory = Path.GetDirectoryName(path);
@@ -88,6 +99,8 @@ public sealed class SettingsStore
             Directory.CreateDirectory(directory);
         }
 
-        File.WriteAllBytes(path, JsonSerializer.SerializeToUtf8Bytes(settings, SerializerOptions));
+        string staging = path + ".new";
+        File.WriteAllBytes(staging, JsonSerializer.SerializeToUtf8Bytes(settings, SerializerOptions));
+        File.Move(staging, path, overwrite: true);
     }
 }

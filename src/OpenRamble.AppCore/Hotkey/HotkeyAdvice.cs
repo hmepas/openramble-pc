@@ -52,6 +52,9 @@ public static class WindowsKeyUsageInfo
     public static WindowsKeyUsage Of(DictationHotkey hotkey, bool layoutHasAltGraph) => hotkey switch
     {
         DictationHotkey.RightCtrl => WindowsKeyUsage.Free,
+        // Held alone, Shift types nothing and toggles nothing: it only means something together
+        // with another key, and another key ends the gesture before it can mean anything.
+        DictationHotkey.RightShift => WindowsKeyUsage.Free,
         DictationHotkey.RightAlt => layoutHasAltGraph ? WindowsKeyUsage.AltGraph : WindowsKeyUsage.Free,
         DictationHotkey.CapsLock => WindowsKeyUsage.CapsLockToggle,
         DictationHotkey.F13 => WindowsKeyUsage.MissingOnManyKeyboards,

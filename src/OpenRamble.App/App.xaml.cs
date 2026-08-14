@@ -17,18 +17,7 @@ namespace OpenRamble.App;
 /// </remarks>
 public partial class App : Application
 {
-    /// <summary>
-    /// One instance per user session.
-    /// </summary>
-    /// <remarks>
-    /// Two running copies would install two low-level keyboard hooks and fight over one hotkey:
-    /// the first to see the press starts a dictation, the second starts another, and both hold the
-    /// microphone. <c>Local\</c> scope, not <c>Global\</c>: two people signed into the same machine
-    /// each get their own dictation, their own model folder and their own dictionary.
-    /// </remarks>
-    private const string InstanceMutexName = @"Local\OpenRamble.SingleInstance";
-
-    private Mutex? instance;
+    private SingleInstanceLock? instance;
     private MessageWindow? window;
     private TrayIcon? tray;
     private SystemEventSource? systemEvents;
@@ -44,8 +33,10 @@ public partial class App : Application
     {
         base.OnStartup(args);
 
-        instance = new Mutex(initiallyOwned: true, InstanceMutexName, out bool first);
-        if (!first)
+        // The rules for what counts as "already running" - and why a copy killed from Task Manager
+        // must not count - live in SingleInstanceLock, where they can be checked without a machine.
+        instance = SingleInstanceLock.Acquire(SingleInstanceLock.ApplicationName);
+        if (!instance.IsHeld)
         {
             // Nothing is shown. The person did not ask for a window, they asked for the app to be
             // running - and it already is.
@@ -109,7 +100,18 @@ public partial class App : Application
             // the only place a person can see that the microphone is actually delivering sound.
             onboarding?.UpdateInputLevel(level);
         };
-        state.PropertyChanged += (_, _) => Dispatcher.BeginInvoke(RefreshTray);
+        state.PropertyChanged += (_, args) =>
+        {
+            Dispatcher.BeginInvoke(RefreshTray);
+            // The panel is the only thing on screen while a dictation finishes, and a reload that
+            // rides under the person's voice is the one thing that can keep it there for a minute.
+            // Push it in as it ticks: nothing else redraws the panel between the key release and
+            // the result.
+            if (args.PropertyName == nameof(AppState.EnginePreparation))
+            {
+                overlay.UpdateEnginePreparation(state.EnginePreparation);
+            }
+        };
         tray.MenuProvider = BuildMenu;
         RefreshTray();
 

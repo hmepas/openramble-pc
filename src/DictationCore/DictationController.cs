@@ -168,6 +168,20 @@ public sealed class DictationController
     /// </summary>
     private readonly TimeSpan prepareDeadline;
 
+    /// <summary>
+    /// How long closing the take may run before the capture is presumed wedged.
+    /// </summary>
+    /// <remarks>
+    /// <b>Deviation from the macOS original, deliberate.</b> There, and here until now, the
+    /// stretch between the key release and the first watchdog was covered by nothing at all:
+    /// <c>StopRecording</c> was a bare await. Every other stretch of the finalization has a
+    /// deadline, so a capture that never closes its file was the one remaining way to hold
+    /// "Transcribing…" forever with no notice, no sound and no way out but Escape - which is
+    /// exactly the hang the deadline apparatus exists to prevent. Closing a WAV whose queue is
+    /// already drained is milliseconds of work, so no healthy stop ever meets this.
+    /// </remarks>
+    private readonly TimeSpan captureStopDeadline;
+
     // MARK: - Session state
 
     /// <summary>
@@ -234,7 +248,8 @@ public sealed class DictationController
         Func<MonotonicInstant>? monotonicNow = null,
         Func<TimeSpan, TimeSpan>? transcriptionDeadline = null,
         Func<CancellationToken, Task>? prepareForTranscription = null,
-        TimeSpan? prepareDeadline = null)
+        TimeSpan? prepareDeadline = null,
+        TimeSpan? captureStopDeadline = null)
     {
         this.capture = capture;
         this.transcribe = transcribe;
@@ -249,6 +264,7 @@ public sealed class DictationController
         this.transcriptionDeadline = transcriptionDeadline ?? TranscriptionDeadline.Deadline;
         this.prepareForTranscription = prepareForTranscription;
         this.prepareDeadline = prepareDeadline ?? TimeSpan.FromSeconds(90);
+        this.captureStopDeadline = captureStopDeadline ?? TimeSpan.FromSeconds(20);
     }
 
     // MARK: - Beginning
@@ -488,7 +504,18 @@ public sealed class DictationController
         (string Url, TimeSpan Duration) recording;
         try
         {
-            recording = await capture.StopRecording().ConfigureAwait(false);
+            // The caller's token is deliberately not passed in: Escape during the stop keeps the
+            // meaning it always had - the file is closed, and the checks below discard it quietly.
+            // Only the deadline is new, and it exists because this was the one stretch after the
+            // release that nothing bounded.
+            recording = await TranscriptionDeadline.WithTranscriptionDeadline(
+                captureStopDeadline,
+                _ => capture.StopRecording()).ConfigureAwait(false);
+        }
+        catch (TranscriptionTimeout)
+        {
+            await AbandonWedgedCapture(session, token).ConfigureAwait(false);
+            return;
         }
         catch (Exception error)
         {
@@ -670,6 +697,49 @@ public sealed class DictationController
             session,
             token).ConfigureAwait(false);
         await Discard(recording.Url).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The capture never closed its take. Let go of it and free the session.
+    /// </summary>
+    /// <remarks>
+    /// The abort is dispatched and not awaited on purpose: whatever wedged the stop is very
+    /// likely to wedge the abort as well, and waiting for it would reintroduce the very hang
+    /// this path exists to end. What it buys when it does return is the microphone: nothing else
+    /// will ever close it, because the session that owned it is gone by then.
+    ///
+    /// <para>
+    /// There is no take to keep: the WAV was never closed, so its header still says zero. The
+    /// import at the next launch is what repairs and recovers such a file - the same path that
+    /// already handles a recording left behind by a crash.
+    /// </para>
+    /// </remarks>
+    private async Task AbandonWedgedCapture(int session, CancellationToken token)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await capture.AbortRecording().ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Nothing left to tell: the session it belonged to has already been ended below.
+            }
+        });
+
+        if (!ShouldContinue(session, token))
+        {
+            await FinishWithoutInsertion(session).ConfigureAwait(false);
+            return;
+        }
+
+        await Report(new DictationNotice(
+            kind: DictationNoticeKind.Failure,
+            message: "The microphone didn't stop when the key was released, so this dictation was "
+                + "dropped. Restarting OpenRamble usually fixes this.",
+            wordsDidNotLand: true)).ConfigureAwait(false);
+        await Cleanup(session).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -898,11 +968,28 @@ public sealed class DictationController
         (string Url, TimeSpan Duration)? recording;
         try
         {
-            recording = await capture.StopRecording().ConfigureAwait(false);
+            // Under the same budget as the ordinary stop, and here it matters most: this path runs
+            // because the device or the permission just disappeared, which is precisely when a
+            // stop is likely to be a call into something that no longer answers.
+            recording = await TranscriptionDeadline.WithTranscriptionDeadline(
+                captureStopDeadline,
+                _ => capture.StopRecording()).ConfigureAwait(false);
         }
         catch (Exception)
         {
             recording = null;
+            // Nothing else will ever close the microphone: the stop that owned it is abandoned.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await capture.AbortRecording().ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // The session is ended below either way.
+                }
+            });
         }
 
         // While the file was closing, the person could press Escape. From that

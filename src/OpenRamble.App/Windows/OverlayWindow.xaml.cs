@@ -103,6 +103,21 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
     public void UpdateInputLevel(float level) => model.UpdateInputLevel(level);
 
     /// <summary>
+    /// What the recognition engine is doing, for the panel to say while it waits on it.
+    /// </summary>
+    /// <remarks>
+    /// Redraws immediately rather than waiting for the next <see cref="Present"/>: between the key
+    /// release and the result there is no further state change and the redraw clock is stopped, so
+    /// without this the seconds on a reload would never move.
+    /// </remarks>
+    public void UpdateEnginePreparation(EnginePreparationState preparation) =>
+        Dispatcher.BeginInvoke(() =>
+        {
+            model.UpdateEnginePreparation(preparation);
+            Render();
+        });
+
+    /// <summary>
     /// Say it out loud.
     /// </summary>
     /// <remarks>

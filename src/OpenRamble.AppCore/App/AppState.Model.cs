@@ -220,6 +220,16 @@ public sealed partial class AppState
 
             EvaluateResidency();
         }
+        catch (OperationCanceledException)
+        {
+            // The load was overtaken: an unload bumped the transcriber's generation while the
+            // weights were still coming off disk, which is exactly what wedge recovery and model
+            // deletion do. Not a broken model - the newer owner is responsible for the engine from
+            // here - so no repair state and no message. Catching it matters more than the silence:
+            // letting it escape kills the recycle task before it clears
+            // <see cref="isRecyclingEngine"/>, and one wedge then makes every later wedge
+            // incurable.
+        }
         catch (Exception error) when (error is ASREngineError or IOException or InvalidOperationException)
         {
             string detail = "the files passed verification, but the engine couldn't load the model: "
@@ -250,6 +260,14 @@ public sealed partial class AppState
         _ = Task.Run(async () =>
         {
             Task warm = transcriber.WarmUpInference();
+            // The loser of the race is abandoned, and an abandoned task that faults later is an
+            // unobserved exception. Read it here so nothing is thrown into the void.
+            _ = warm.ContinueWith(
+                static finished => _ = finished.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+
             Task finished = await Task.WhenAny(warm, Task.Delay(deadline)).ConfigureAwait(false);
             if (finished != warm || warm.IsFaulted)
             {
@@ -330,9 +348,19 @@ public sealed partial class AppState
         IsEngineReady = false;
         _ = Task.Run(async () =>
         {
-            await transcriber.Unload().ConfigureAwait(false);
-            await WarmUpEngine().ConfigureAwait(false);
-            lock (gate) { isRecyclingEngine = false; }
+            try
+            {
+                await transcriber.Unload().ConfigureAwait(false);
+                await WarmUpEngine().ConfigureAwait(false);
+            }
+            finally
+            {
+                // The flag falls whatever happened. Leaving it raised after a failed recovery
+                // makes the engine permanently un-recyclable: every later wedge returns at the
+                // "one wedge, one cure" guard, the residency evaluator sees a forever-busy
+                // engine, and the person's key keeps starting dictations nothing can finish.
+                lock (gate) { isRecyclingEngine = false; }
+            }
         });
     }
 

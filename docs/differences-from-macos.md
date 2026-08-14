@@ -74,6 +74,56 @@ resumable per-file downloads) cannot address. A mirror would mean hosting the
 unpacked files in our own GitHub release — straightforward once this project
 has releases at all.
 
+## Additions the Windows key path forced
+
+Four things exist here with no counterpart in the mac app. All of them answer
+the same platform fact: on Windows the dictation key can be eaten before the
+process ever sees it — a virtual machine client, a remote desktop, an elevated
+window in front, a low-level hook the system refuses to install — and every one
+of those is indistinguishable from the outside from a product that does not
+work at all.
+
+- **Right Shift joins the key list.** The mac list is Fn / Right Command /
+  Right Option / Left Control, none of which can be intercepted on the way in.
+  Here the fallback when Right Ctrl does not arrive has to be a *different
+  physical key* that is still free, still holdable and still on every keyboard;
+  before this the only alternatives were AltGr (composes characters), Caps Lock
+  (shouts) and F13 (most keyboards cannot send it).
+- **The hotkey picker also lives in the try-out step.** The mac app does this
+  too (`OnboardingView.swift`); the port had it only in Settings. Sending a
+  person out of the first-launch flow to fix the very thing that flow just
+  discovered is where a first launch ends.
+- **"Hold to dictate" on the try-out page.** A press-and-hold button that
+  drives the same `AppState` entry point the hotkey monitor drives — not a
+  second dictation path — so the whole record → recognize → insert chain can be
+  proved while the key is being swallowed. It deliberately does not move the
+  key badge: that badge is the step's evidence about the keyboard, and a mouse
+  press is not evidence about a keyboard.
+- **A kept reason for tracking that never started.** The failure notice lives
+  four seconds; a hook the system refused lives for the rest of the process, so
+  the try-out step keeps its reason and shows it in place of "nothing has
+  reached OpenRamble yet".
+
+## Deadlines the original does not have
+
+The mac `finalize` leaves `stopRecording()` uncovered by any timeout — every
+later stretch (the engine reload, the recognition) is raced against one, but
+the first is a bare `await`. On Windows that stop is a WASAPI call, and a call
+into an audio service that died does not come back: the panel then sits on
+"Transcribing…" with the microphone still open, no message and no sound, until
+the process is killed. This port races it against its own budget
+(`captureStopDeadline`, 20 s) on both the ordinary and the device-disconnected
+path, abandons the wedged call, asks the capture to close anyway, and ends the
+session with a failure notice.
+
+The panel also narrates an engine reload. Residency gives the model's memory
+back under pressure, the next keypress starts a full reload, and until it lands
+there is nothing to transcribe with — which is up to 90 seconds of
+"Transcribing…" over a model still coming off disk. The mac HUD has no state
+for this; here the existing `EnginePreparationState` line (which both apps
+already show in Settings and onboarding) goes on the panel instead — silently,
+so a screen reader is not made to read a seconds counter once per second.
+
 ## Engine warm-up copy is approximate
 
 The readiness screen still promises "20–40 seconds" — a number measured on

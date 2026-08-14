@@ -80,4 +80,57 @@ public sealed class HotkeyAdviceTests
             HotkeyAdvice.Warning(DictationHotkey.F13, WindowsKeyUsage.MissingOnManyKeyboards));
         Assert.Contains("F13", warning, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Right Shift is a clean fallback, on every layout, with nothing to warn about.
+    ///
+    /// It is the answer to the failure mode Right Ctrl actually has on Windows - a virtual machine
+    /// client or a remote desktop keeping one key for itself - so an advice line sending the
+    /// person off to pick yet another key would be the opposite of help. Held alone it types
+    /// nothing and toggles nothing, so there is genuinely nothing to say.
+    /// </summary>
+    [Fact]
+    public void RightShiftIsFreeOnEveryLayoutAndNeverWarns()
+    {
+        Assert.Equal(
+            WindowsKeyUsage.Free,
+            WindowsKeyUsageInfo.Of(DictationHotkey.RightShift, layoutHasAltGraph: true));
+        Assert.Equal(
+            WindowsKeyUsage.Free,
+            WindowsKeyUsageInfo.Of(DictationHotkey.RightShift, layoutHasAltGraph: false));
+        Assert.Null(HotkeyAdvice.Warning(DictationHotkey.RightShift, WindowsKeyUsage.Free));
+    }
+
+    /// <summary>
+    /// Every offered key is classified, distinguishable and nameable.
+    ///
+    /// A key that fell through to <see cref="WindowsKeyUsage.Unknown"/> would warn about "a system
+    /// action" nobody can name; two keys sharing a virtual-key code would be one key wearing two
+    /// names in the picker, and picking either would arm the other.
+    /// </summary>
+    [Fact]
+    public void EveryOfferedKeyIsClassifiedAndDistinct()
+    {
+        var codes = new HashSet<int>();
+        var titles = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (DictationHotkey hotkey in DictationHotkeyInfo.AllCases)
+        {
+            Assert.NotEqual(
+                WindowsKeyUsage.Unknown,
+                WindowsKeyUsageInfo.Of(hotkey, layoutHasAltGraph: false));
+            Assert.True(codes.Add(hotkey.VirtualKey), $"{hotkey.Title} shares a virtual-key code");
+            Assert.True(titles.Add(hotkey.Title), $"{hotkey.Title} is offered twice");
+        }
+
+        // The four the first-launch picker promises, in the order it promises them.
+        Assert.Equal(
+            [
+                DictationHotkey.RightCtrl,
+                DictationHotkey.RightShift,
+                DictationHotkey.RightAlt,
+                DictationHotkey.CapsLock,
+            ],
+            DictationHotkeyInfo.AllCases.Take(4));
+    }
 }

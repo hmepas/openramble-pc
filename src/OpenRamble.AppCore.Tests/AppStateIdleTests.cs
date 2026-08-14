@@ -440,6 +440,46 @@ public sealed class AppStateIdleTests : IDisposable
         Assert.Equal(2, engine.Inferences);
     }
 
+    /// <summary>
+    /// A recovery that fails still gives the engine back: one wedge must not be terminal.
+    ///
+    /// The recycle unloads and reloads, and the unload that opens it can overtake the reload it
+    /// started - which arrives as cancellation, not as a broken model. If that ends the recovery
+    /// task uncaught, the "one wedge, one cure" guard stays raised for the life of the process:
+    /// every later wedge returns at it, the residency evaluator sees a forever-busy engine, and
+    /// the key keeps starting dictations nothing can ever finish. The person's only move left is
+    /// Task Manager, which is exactly where this was found.
+    /// </summary>
+    [Fact]
+    public async Task ARecycleWhoseReloadIsOvertakenStillLetsTheEngineComeBack()
+    {
+        harness.InstallModelMarker();
+        var engine = new WedgingASREngine();
+        harness.WarmUpEngine = engine;
+        AppState state = harness.MakeState();
+        await TestWait.For("the engine warmed up", () => state.IsEngineReady);
+
+        // Waking finds a wedged inference and starts the recycle; the recycle's own reload is
+        // overtaken and reports cancellation.
+        engine.FailNextInference();
+        engine.CancelNextLoad();
+        harness.SystemEvents.PostDidWake();
+
+        await TestWait.For("the wedged engine was let go", () => !state.IsEngineReady);
+        await TestWait.For("the recycle tried to reload", () => engine.ModelLoads >= 2);
+
+        // An overtaken load is not a damaged model: offering a 670 MB redownload here would be a
+        // lie about files that are perfectly intact.
+        Assert.True(state.ModelStateValue.IsReady);
+        Assert.True(state.IsDictationReady, "the press must still start a recording");
+
+        // And the next press brings the engine back - possible only if the recovery flag fell
+        // when the failed recycle ended.
+        state.WarmEngineUnderVoiceIfCold();
+        await TestWait.For("the engine came back", () => state.IsEngineReady);
+        Assert.Equal(1, engine.Unloads);
+    }
+
     /// <summary>A healthy machine keeps the engine warm and arms no timer.</summary>
     [Fact]
     public async Task NormalPressureLeavesTheEngineAloneAndArmsNoTimer()

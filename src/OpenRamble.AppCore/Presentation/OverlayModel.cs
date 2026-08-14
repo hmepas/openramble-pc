@@ -40,6 +40,7 @@ public sealed class OverlayModel
 
     private DictationState state = DictationState.Idle;
     private DictationNotice? notice;
+    private EnginePreparationState? enginePreparation;
     private bool isVisible;
     private TimeSpan frozenElapsed;
     private MonotonicInstant? startedAt;
@@ -134,8 +135,25 @@ public sealed class OverlayModel
         {
             lock (gate)
             {
-                return OverlayContent.Make(state, notice, ElapsedLocked());
+                return OverlayContent.Make(state, notice, ElapsedLocked(), enginePreparation);
             }
+        }
+    }
+
+    /// <summary>
+    /// What the recognition engine is doing, pushed in by whoever manages its residency.
+    /// </summary>
+    /// <remarks>
+    /// A separate channel from <see cref="Show"/> because it is not the dictation's state: a
+    /// reload that rides under the person's voice starts before the key is released and can
+    /// outlast it. The panel only ever mentions it while there is nothing else to say - see
+    /// <see cref="OverlayContent.Make"/>.
+    /// </remarks>
+    public void UpdateEnginePreparation(EnginePreparationState? value)
+    {
+        lock (gate)
+        {
+            enginePreparation = value;
         }
     }
 
@@ -339,7 +357,7 @@ public sealed class OverlayModel
 
     private OverlayContent? TakeAnnouncementLocked()
     {
-        OverlayContent content = OverlayContent.Make(state, notice, ElapsedLocked());
+        OverlayContent content = OverlayContent.Make(state, notice, ElapsedLocked(), enginePreparation);
         if (content.Announcement is not string announcement || announcement == lastAnnouncement)
         {
             return null;

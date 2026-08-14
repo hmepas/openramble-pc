@@ -50,7 +50,15 @@ public sealed record OverlayContent
     /// <summary>An urgent announcement interrupts whatever the screen reader is reading.</summary>
     public required bool IsAnnouncementUrgent { get; init; }
 
-    public static OverlayContent Make(DictationState state, DictationNotice? notice, TimeSpan elapsed)
+    /// <param name="enginePreparation">
+    /// What the recognition engine is doing right now; <c>null</c> when nobody manages its
+    /// residency and it is simply always there.
+    /// </param>
+    public static OverlayContent Make(
+        DictationState state,
+        DictationNotice? notice,
+        TimeSpan elapsed,
+        EnginePreparationState? enginePreparation = null)
     {
         // The message is more important than the state: it is shown instead.
         if (notice is not null)
@@ -65,6 +73,29 @@ public sealed record OverlayContent
                 // The message comes exactly when something goes wrong. Waiting for the end of
                 // someone else's sentence means saying it too late to be useful.
                 IsAnnouncementUrgent = notice.Kind != DictationNoticeKind.Info,
+            };
+        }
+
+        if (state == DictationState.Transcribing && IsLoading(enginePreparation))
+        {
+            // The engine was handed back to the system while the app sat idle, and the keypress
+            // started a full reload. Until it lands there is nothing to recognize with, and a
+            // panel saying "Transcribing…" over a model still being read off disk is a lie that
+            // can last a minute and a half - the exact minute and a half in which a person
+            // decides the product is broken and reaches for Task Manager.
+            string title = enginePreparation!.Title;
+            const string waiting = "Your words are recorded and waiting.";
+            return new OverlayContent
+            {
+                Title = title,
+                Subtitle = waiting,
+                Tone = OverlayTone.Working,
+                AccessibilityLabel = $"{title}. {waiting}",
+                // Deliberately silent. The title carries a seconds counter, so announcing it
+                // would interrupt the screen reader once per second for as long as the load
+                // lasts; entering "Transcribing" has already been announced once.
+                Announcement = null,
+                IsAnnouncementUrgent = false,
             };
         }
 
@@ -129,6 +160,12 @@ public sealed record OverlayContent
             _ => throw new ArgumentOutOfRangeException(nameof(state)),
         };
     }
+
+    /// <summary>Is the engine being read into memory right now, rather than merely idle or ready?</summary>
+    private static bool IsLoading(EnginePreparationState? preparation) =>
+        preparation?.PhaseValue
+            is EnginePreparationState.Phase.LoadingRecognizer
+            or EnginePreparationState.Phase.LoadingVocabulary;
 
     private static OverlayTone ToneFor(DictationNoticeKind kind) => kind switch
     {

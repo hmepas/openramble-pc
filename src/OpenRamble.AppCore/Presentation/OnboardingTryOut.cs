@@ -14,8 +14,20 @@ public enum OnboardingTryPhase
     /// <summary>Nothing has happened yet. The step is waiting for the key.</summary>
     Waiting,
 
+    /// <summary>
+    /// Key tracking could not be installed at all, so no key will ever arrive. This is the one
+    /// thing the step cannot find out by waiting, and the one thing that makes waiting pointless.
+    /// </summary>
+    TrackingUnavailable,
+
     /// <summary>The key is down and OpenRamble saw it. Dictation has not started recording yet.</summary>
     KeyDown,
+
+    /// <summary>
+    /// The on-screen button is held instead of the key. Proves the microphone, the recognition
+    /// and the insertion - and deliberately proves nothing about the key.
+    /// </summary>
+    ButtonHeld,
 
     /// <summary>The key is down and the microphone is live.</summary>
     Recording,
@@ -69,15 +81,28 @@ public sealed record OnboardingTryOut
     /// <param name="hotkeyEverPressed">Has it been down at least once since the step opened.</param>
     /// <param name="dictationState">What the dictation kernel is doing.</param>
     /// <param name="dictationSucceeded">Has a dictation been recognized and inserted since the step opened.</param>
+    /// <param name="isButtonHeld">
+    /// Is the on-screen "Hold to dictate" button being held. Kept apart from
+    /// <paramref name="isHotkeyHeld"/> on purpose: the badge is the step's answer to "does the
+    /// key reach OpenRamble", and lighting it from a mouse press would answer a question nobody
+    /// asked with a fact that is not true.
+    /// </param>
+    /// <param name="trackingFailure">
+    /// Why key tracking is not running, if it is not. Nothing else on the page can say it: every
+    /// other symptom of a hook that never installed is identical to a person not pressing a key.
+    /// </param>
     public static OnboardingTryOut Make(
         DictationHotkey hotkey,
         bool isHotkeyHeld,
         bool hotkeyEverPressed,
         DictationState dictationState,
-        bool dictationSucceeded)
+        bool dictationSucceeded,
+        bool isButtonHeld = false,
+        string? trackingFailure = null)
     {
         string key = hotkey.Title;
-        string instruction = $"Hold {key}, say a sentence, then let go.";
+        string instruction = $"Hold {key}, say a sentence, then let go. "
+            + "You can also hold the button below with the mouse — it drives the same dictation.";
 
         // Success outranks everything: the words are already in the box, and a key that is down
         // again is the person trying a second time, not a reason to take the result away.
@@ -88,6 +113,27 @@ public sealed record OnboardingTryOut
                 instruction,
                 $"{key} works, and the words landed in the box. That is the whole product. You are set up.",
                 StatusColorRole.Success);
+        }
+
+        // The button first, because while it is held it is the thing that is happening, and
+        // because its copy must never claim the key did anything.
+        if (isButtonHeld)
+        {
+            return dictationState switch
+            {
+                DictationState.Listening => Make(
+                    OnboardingTryPhase.ButtonHeld,
+                    instruction,
+                    "Holding the button — recording. Say a sentence, then let go of the mouse.",
+                    StatusColorRole.Recording,
+                    showsInputLevel: true),
+
+                _ => Make(
+                    OnboardingTryPhase.ButtonHeld,
+                    instruction,
+                    "Holding the button — turning on the microphone…",
+                    StatusColorRole.Processing),
+            };
         }
 
         if (isHotkeyHeld)
@@ -124,6 +170,19 @@ public sealed record OnboardingTryOut
                 instruction,
                 "Recognizing what you said…",
                 StatusColorRole.Processing);
+        }
+
+        // Before every "nothing has arrived yet", because there is a difference between a key that
+        // has not been pressed and a key that cannot be seen, and only one of them is worth
+        // waiting for. Below the live states, because whatever is happening right now outranks a
+        // reason recorded at launch. The button is the way through in the meantime.
+        if (trackingFailure is string failure)
+        {
+            return Make(
+                OnboardingTryPhase.TrackingUnavailable,
+                instruction,
+                failure,
+                StatusColorRole.Attention);
         }
 
         if (hotkeyEverPressed)

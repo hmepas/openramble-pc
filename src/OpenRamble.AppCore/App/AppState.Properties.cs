@@ -23,6 +23,8 @@ public sealed partial class AppState
     private int successfulDictationCount;
     private bool isHotkeyHeld;
     private int hotkeyPressCount;
+    private bool isDictationButtonHeld;
+    private string? hotkeyTrackingFailure;
     private LastDictation? lastDictation;
     private IReadOnlyList<RecentDictation> recentDictations = [];
     private ReplacementsStore.Problem? dictionaryProblem;
@@ -210,6 +212,35 @@ public sealed partial class AppState
     {
         get { lock (gate) { return hotkeyPressCount; } }
         private set => Set(ref hotkeyPressCount, value);
+    }
+
+    /// <summary>
+    /// Is the on-screen press-and-hold control down right now?
+    /// </summary>
+    /// <remarks>
+    /// A separate flag from <see cref="IsHotkeyHeld"/>, and it must stay separate: the try-out
+    /// badge is the answer to "does the key reach OpenRamble", and a mouse press proves nothing
+    /// about a key. Merging them would make the badge light up for a keyboard that never worked.
+    /// </remarks>
+    public bool IsDictationButtonHeld
+    {
+        get { lock (gate) { return isDictationButtonHeld; } }
+        private set => Set(ref isDictationButtonHeld, value);
+    }
+
+    /// <summary>
+    /// Why the dictation key is not being watched, if it is not. <c>null</c> - tracking is up.
+    /// </summary>
+    /// <remarks>
+    /// A hook the system refuses to install is the one failure with no symptom of its own: every
+    /// callback simply stays quiet for the life of the process, which looks exactly like a person
+    /// who is not pressing anything. The notice that announces it lives four seconds; this
+    /// outlives it, so the try-out step can say so for as long as it is true.
+    /// </remarks>
+    public string? HotkeyTrackingFailure
+    {
+        get { lock (gate) { return hotkeyTrackingFailure; } }
+        private set => Set(ref hotkeyTrackingFailure, value);
     }
 
     public LastDictation? LastDictationValue

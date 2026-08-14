@@ -16,6 +16,13 @@ namespace OpenRamble.AppCore;
 /// <item><description><b>Right Command → Right Ctrl.</b> The default. A modifier nobody
 /// presses alone, present on every keyboard, and distinguishable from its left twin by
 /// virtual-key code.</description></item>
+/// <item><description><b>Right Shift</b> has no macOS counterpart in the original list and is
+/// added here, because Windows has a failure mode macOS does not: a virtual-machine client, a
+/// remote desktop or a keyboard remapper can eat one particular key on its way to the
+/// application, and Right Ctrl is a favourite. Right Shift is a modifier nobody presses alone,
+/// present on every keyboard, free of any action of its own, and - the point - a different
+/// physical key. Without it, everything left to fall back on either composes characters,
+/// shouts, or is absent from the keyboard.</description></item>
 /// <item><description><b>Right Option → Right Alt,</b> with a real caveat: on layouts that
 /// have AltGr (most European ones, including the Russian typographic layouts this product
 /// is dictated in) Right Alt *is* AltGr and composes characters. See
@@ -32,6 +39,7 @@ namespace OpenRamble.AppCore;
 public enum DictationHotkey
 {
     RightCtrl,
+    RightShift,
     RightAlt,
     CapsLock,
     F13,
@@ -60,18 +68,30 @@ public static class DictationHotkeyInfo
 {
     /// <summary>Virtual-key codes, from <c>winuser.h</c>.</summary>
     private const int VkRightControl = 0xA3;
+    private const int VkRightShift = 0xA1;
     private const int VkRightMenu = 0xA5;
     private const int VkCapital = 0x14;
     private const int VkF13 = 0x7C;
 
+    /// <summary>
+    /// The picker's order, and it is an order: the keys that just work come first, and the two
+    /// that carry a warning come last.
+    /// </summary>
     public static IReadOnlyList<DictationHotkey> AllCases { get; } =
-        [DictationHotkey.RightCtrl, DictationHotkey.RightAlt, DictationHotkey.CapsLock, DictationHotkey.F13];
+    [
+        DictationHotkey.RightCtrl,
+        DictationHotkey.RightShift,
+        DictationHotkey.RightAlt,
+        DictationHotkey.CapsLock,
+        DictationHotkey.F13,
+    ];
 
     extension(DictationHotkey hotkey)
     {
         public string Title => hotkey switch
         {
             DictationHotkey.RightCtrl => "Right Ctrl",
+            DictationHotkey.RightShift => "Right Shift",
             DictationHotkey.RightAlt => "Right Alt",
             DictationHotkey.CapsLock => "Caps Lock",
             DictationHotkey.F13 => "F13",
@@ -90,6 +110,7 @@ public static class DictationHotkeyInfo
         public int VirtualKey => hotkey switch
         {
             DictationHotkey.RightCtrl => VkRightControl,
+            DictationHotkey.RightShift => VkRightShift,
             DictationHotkey.RightAlt => VkRightMenu,
             DictationHotkey.CapsLock => VkCapital,
             DictationHotkey.F13 => VkF13,
@@ -106,6 +127,7 @@ public static class DictationHotkeyInfo
         public HotkeyModifiers Kind => hotkey switch
         {
             DictationHotkey.RightCtrl => HotkeyModifiers.Control,
+            DictationHotkey.RightShift => HotkeyModifiers.Shift,
             DictationHotkey.RightAlt => HotkeyModifiers.Alt,
             DictationHotkey.CapsLock => HotkeyModifiers.None,
             DictationHotkey.F13 => HotkeyModifiers.None,

@@ -300,13 +300,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private void WireHotkey()
     {
         hotkeyMonitor.SetHotkey(Hotkey);
-        hotkeyMonitor.OnPress = () =>
-        {
-            if (IsRecoveryOperationActive) { return; }
-            if (!ExplainIfNotReady()) { return; }
-            controller?.Begin(handsFree: false, isEnabled: IsDictationReady, isModelReady: ModelStateValue.IsReady);
-        };
-        hotkeyMonitor.OnRelease = () => controller?.Stop();
+        hotkeyMonitor.OnPress = BeginHoldToDictate;
+        hotkeyMonitor.OnRelease = EndHoldToDictate;
         hotkeyMonitor.OnDoubleTap = () =>
         {
             switch (DictationStateValue)
@@ -339,7 +334,14 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         };
         hotkeyMonitor.OnHotkeyUp = () => IsHotkeyHeld = false;
         hotkeyMonitor.OnTrackingFailure = reason =>
+        {
+            // Kept, not just announced. A panel lives four seconds; a hook that never installed
+            // lives for the rest of the process, and the first-launch try-out - the one screen
+            // whose entire job is to answer "does the key reach OpenRamble" - has no other way to
+            // tell a dead hook from a person who has not pressed anything yet.
+            HotkeyTrackingFailure = reason;
             Notify(new DictationNotice(DictationNoticeKind.Failure, reason));
+        };
         hotkeyMonitor.OnSingleTapWhileHandsFree = () => controller?.StopHandsFree();
         // The hold turned out to be a shortcut over the chosen key: the recording ends quietly -
         // no insertion, no message, no error sound. The person pressed a shortcut, they did not
@@ -348,6 +350,64 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // Escape cancels only a dictation in progress. The rest of the time it is an ordinary
         // key and is not intercepted.
         hotkeyMonitor.OnEscape = CancelCurrentDictation;
+    }
+
+    /// <summary>
+    /// The dictation key went down. The only place a hold-to-dictate gesture may start from.
+    /// </summary>
+    private void BeginHoldToDictate()
+    {
+        if (IsRecoveryOperationActive) { return; }
+        if (!ExplainIfNotReady()) { return; }
+        controller?.Begin(handsFree: false, isEnabled: IsDictationReady, isModelReady: ModelStateValue.IsReady);
+    }
+
+    /// <summary>The dictation key came back up.</summary>
+    private void EndHoldToDictate() => controller?.Stop();
+
+    /// <summary>
+    /// Start a dictation from an on-screen press-and-hold control instead of the key.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Not a second way to dictate - a second way to press the same key.</b> This calls the
+    /// very method the hotkey monitor calls, so the readiness explanation, the session policy and
+    /// every completion path are the ones the key already uses. A parallel "start dictation"
+    /// entry point would be a second machine that agrees with the first only until one of them is
+    /// changed.
+    /// </para>
+    /// <para>
+    /// It exists because on Windows the key can be eaten before the application ever sees it - a
+    /// virtual machine client, a remote desktop, an elevated window - and until the person knows
+    /// that, they cannot tell a broken keyboard path from a broken product. A button that runs
+    /// the whole record → recognize → insert chain settles it in one hold.
+    /// </para>
+    /// <para>
+    /// <see cref="IsHotkeyHeld"/> and <see cref="HotkeyPressCount"/> are deliberately left alone:
+    /// they are the try-out's evidence about the key, and a mouse press is not evidence about the
+    /// key.
+    /// </para>
+    /// </remarks>
+    public void PressDictationButton()
+    {
+        if (IsDictationButtonHeld) { return; }
+        IsDictationButtonHeld = true;
+        BeginHoldToDictate();
+    }
+
+    /// <summary>
+    /// The on-screen control was released - the same thing as letting the key go.
+    /// </summary>
+    /// <remarks>
+    /// Safe to call without a matching press: the mouse can leave the button, the window can lose
+    /// capture, and both of those have to end the hold. A stop with nothing running is ignored by
+    /// the kernel, which is what makes calling it twice harmless.
+    /// </remarks>
+    public void ReleaseDictationButton()
+    {
+        if (!IsDictationButtonHeld) { return; }
+        IsDictationButtonHeld = false;
+        EndHoldToDictate();
     }
 
     /// <summary>

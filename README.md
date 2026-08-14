@@ -4,6 +4,16 @@ Windows port of [OpenRamble](https://github.com/mikwiseman/openramble) —
 private, local dictation. Hold a hotkey, speak, release it: the text appears
 at the cursor of the focused application.
 
+> **Provenance.** This is an unofficial, **AI-written port**: the Swift
+> codebase of the original macOS app by
+> [Mik Wiseman](https://github.com/mikwiseman) was rewritten in C# for
+> Windows by Claude (Anthropic), orchestrated by a human. It is not
+> affiliated with or endorsed by the upstream project. The architecture, the
+> test suite (ported 1:1), the privacy rules, the app icon and the product
+> behavior all follow the original; deviations are documented in
+> [docs/differences-from-macos.md](docs/differences-from-macos.md).
+> Upstream code and icon are used under the [MIT license](LICENSE).
+
 Recognition runs locally (NVIDIA Parakeet TDT 0.6b v3 via sherpa-onnx —
 the same model the macOS app runs via Core ML). Audio is never uploaded,
 there are no accounts, no analytics, and transcripts are never written to
@@ -57,3 +67,16 @@ used under the upstream project's MIT licence (© 2026 Mik Wiseman).
 
 The macOS original is expected as a sibling checkout at `../openramble`
 (reference only; not needed to build).
+
+## Third-party components
+
+- [OpenRamble](https://github.com/mikwiseman/openramble) (MIT) — the
+  original application this port rewrites, including its icon.
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) —
+  offline speech recognition runtime.
+- [NVIDIA Parakeet TDT 0.6b v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
+  (CC-BY-4.0) — the recognition model, downloaded on first run from the
+  [k2-fsa ONNX export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8).
+- [NAudio](https://github.com/naudio/NAudio) (MIT) — WASAPI capture.
+- [Velopack](https://github.com/velopack/velopack) (MIT) — installer and
+  in-place upgrades.

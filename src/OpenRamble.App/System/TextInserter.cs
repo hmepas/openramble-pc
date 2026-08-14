@@ -108,8 +108,18 @@ public sealed partial class TextInserter : ITextInserting
 
     public async Task<InsertionMarks> InsertReportingMarks(string text, TargetApplication? target)
     {
+        // Length, never content: the log has to be able to say "the text was there and the
+        // insertion still did not happen", and that takes a number, not the words.
+        InsertionPath path = InsertionPathPolicy.Choose(text.Length);
+        DiagnosticLog.Emit(
+            "insert.begin",
+            ("chars", text.Length),
+            ("path", path),
+            ("has_target", target is not null));
+
         if (TextInsertionPolicy.IsNoOp(text))
         {
+            DiagnosticLog.Emit("insert.end", ("ok", true), ("path", "none"));
             return new InsertionMarks();
         }
 
@@ -124,6 +134,7 @@ public sealed partial class TextInserter : ITextInserting
 
         if (TextInsertionPolicy.BeforeClipboard(target, alive, ReadEnvironment()) is InsertionRefusal refused)
         {
+            DiagnosticLog.Emit("insert.refused", ("path", path), ("reason", refused), ("activated", alive));
             throw TextInsertionPolicy.ToError(refused);
         }
 
@@ -132,11 +143,32 @@ public sealed partial class TextInserter : ITextInserting
 
         await WaitForModifiersRelease().ConfigureAwait(false);
 
-        return InsertionPathPolicy.Choose(text.Length) switch
+        try
         {
-            InsertionPath.SynthesizedKeystrokes => TypeDirectly(text, destination),
-            _ => PasteThroughClipboard(text, destination),
-        };
+            InsertionMarks marks = path switch
+            {
+                InsertionPath.SynthesizedKeystrokes => TypeDirectly(text, destination),
+                _ => PasteThroughClipboard(text, destination),
+            };
+            DiagnosticLog.Emit(
+                "insert.end",
+                ("ok", true),
+                ("path", path),
+                ("pasted", marks.PasteDispatchedAt is not null),
+                ("restored", marks.ClipboardRestoredAt is not null));
+            return marks;
+        }
+        catch (Exception error)
+        {
+            // The Win32 code, where there is one: SendInput answers a protected field with
+            // ERROR_ACCESS_DENIED and nothing else, and that number is the whole diagnosis.
+            DiagnosticLog.EmitException(
+                "insert.failed",
+                error,
+                ("path", path),
+                ("win32", Marshal.GetLastPInvokeError()));
+            throw;
+        }
     }
 
     public Task PressReturn()

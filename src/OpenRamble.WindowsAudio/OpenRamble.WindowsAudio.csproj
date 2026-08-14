@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>OpenRamble.WindowsAudio</RootNamespace>
+    <!-- Allows the WASAPI layer to be built (not run) on a non-Windows host. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The capture is the only piece of the app that both the shell and the bench tool need, and
+      the bench tool cannot reference a WPF executable. It is a library of its own for that one
+      reason: `asr-bench mic` has to record through exactly the code the product records with,
+      or it measures something else.
+    -->
+    <ProjectReference Include="../OpenRamble.AppCore/OpenRamble.AppCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pinned exactly: the audio path is the one place a silent behaviour change costs words. -->
+    <PackageReference Include="NAudio" Version="[2.2.1]" />
+  </ItemGroup>
+
+</Project>

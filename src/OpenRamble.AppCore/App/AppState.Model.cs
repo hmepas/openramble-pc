@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DictationCore;
 using LocalASR;
 
@@ -204,11 +205,19 @@ public sealed partial class AppState
         IsEngineReady = false;
         IsPreparingEngine = true;
         BeginPreparationCountdown(EnginePreparationState.Phase.LoadingRecognizer);
+        long loadBegan = Stopwatch.GetTimestamp();
+        DiagnosticLog.Emit("engine.load.begin", ("state", DictationStateValue));
 
         try
         {
             await transcriber.Prepare(engineDirectory).ConfigureAwait(false);
+            long loaded = Stopwatch.GetTimestamp();
             await transcriber.WarmUpInference().ConfigureAwait(false);
+            DiagnosticLog.Emit(
+                "engine.load.end",
+                ("ok", true),
+                ("load_ms", Stopwatch.GetElapsedTime(loadBegan, loaded)),
+                ("warm_ms", Stopwatch.GetElapsedTime(loaded)));
 
             IsEngineReady = true;
             lock (gate)
@@ -222,6 +231,11 @@ public sealed partial class AppState
         }
         catch (OperationCanceledException)
         {
+            DiagnosticLog.Emit(
+                "engine.load.end",
+                ("ok", false),
+                ("reason", "overtaken"),
+                ("load_ms", Stopwatch.GetElapsedTime(loadBegan)));
             // The load was overtaken: an unload bumped the transcriber's generation while the
             // weights were still coming off disk, which is exactly what wedge recovery and model
             // deletion do. Not a broken model - the newer owner is responsible for the engine from
@@ -232,6 +246,10 @@ public sealed partial class AppState
         }
         catch (Exception error) when (error is ASREngineError or IOException or InvalidOperationException)
         {
+            DiagnosticLog.EmitException(
+                "engine.load.failed",
+                error,
+                ("load_ms", Stopwatch.GetElapsedTime(loadBegan)));
             string detail = "the files passed verification, but the engine couldn't load the model: "
                 + error.Message;
             lock (gate) { engineLoadFailure = detail; }

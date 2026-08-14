@@ -31,9 +31,12 @@ namespace OpenRamble.AppCore;
 /// keyboard - Ctrl+C, Ctrl+V, Ctrl+Z - and offering it as a hold-to-dictate key would fire
 /// the abort path several times a minute. Caps Lock is the Windows key nobody needs, and a
 /// low-level hook can swallow its toggle.</description></item>
-/// <item><description><b>F13</b> is added: no shipping keyboard sends it by accident, no
-/// application binds it, and it is what keyboard remappers and macro keys emit. The cost is
-/// that most keyboards cannot produce it at all.</description></item>
+/// <item><description><b>F13 was offered and is not any more.</b> Nothing binds it and nothing
+/// sends it by accident - and nothing sends it at all: it needs a remapper or a macro key, which
+/// makes it a choice that cannot be tried out on the machine where it is being chosen. A picker
+/// row that most people cannot test is a row that costs attention and returns nothing. The case
+/// stays in this enum only so a settings file written by an earlier build still parses; see
+/// <see cref="DictationHotkeyInfo.AllCases"/>, which no longer offers it.</description></item>
 /// </list>
 /// </summary>
 public enum DictationHotkey
@@ -42,6 +45,8 @@ public enum DictationHotkey
     RightShift,
     RightAlt,
     CapsLock,
+
+    /// <summary>Not offered. Kept so a stored choice from an earlier build is still readable.</summary>
     F13,
 }
 
@@ -74,16 +79,22 @@ public static class DictationHotkeyInfo
     private const int VkF13 = 0x7C;
 
     /// <summary>
-    /// The picker's order, and it is an order: the keys that just work come first, and the two
-    /// that carry a warning come last.
+    /// What the pickers offer, and it is an order: the keys that just work come first, and the
+    /// two that carry a warning come last.
     /// </summary>
+    /// <remarks>
+    /// <see cref="DictationHotkey.F13"/> is deliberately absent. It is the only candidate a
+    /// person cannot try on the keyboard in front of them - it takes a remapper to send at all -
+    /// and a row that cannot be tested where it is chosen teaches nothing. Reading a stored
+    /// choice checks it against this list, so a settings file that still says <c>F13</c> falls
+    /// back to the default rather than leaving the key silent.
+    /// </remarks>
     public static IReadOnlyList<DictationHotkey> AllCases { get; } =
     [
         DictationHotkey.RightCtrl,
         DictationHotkey.RightShift,
         DictationHotkey.RightAlt,
         DictationHotkey.CapsLock,
-        DictationHotkey.F13,
     ];
 
     extension(DictationHotkey hotkey)

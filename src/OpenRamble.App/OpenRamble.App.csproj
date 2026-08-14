@@ -14,10 +14,15 @@
   <ItemGroup>
     <ProjectReference Include="../LocalASR/LocalASR.csproj" />
     <ProjectReference Include="../OpenRamble.AppCore/OpenRamble.AppCore.csproj" />
+    <ProjectReference Include="../OpenRamble.WindowsAudio/OpenRamble.WindowsAudio.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Pinned exactly: the audio path is the one place a silent behaviour change costs words. -->
+    <!--
+      Pinned exactly: the audio path is the one place a silent behaviour change costs words.
+      Still named here even though OpenRamble.WindowsAudio brings it in: MicrophoneConsent opens
+      the endpoint itself to find out whether the microphone is granted.
+    -->
     <PackageReference Include="NAudio" Version="[2.2.1]" />
   </ItemGroup>
 

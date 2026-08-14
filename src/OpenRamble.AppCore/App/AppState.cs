@@ -172,6 +172,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
             built.OnStateChange = state =>
             {
+                DiagnosticLog.Emit("dictation.state", ("to", state), ("hands_free", IsHandsFreeActive));
                 DictationStateValue = state;
                 FlushNoticeAfterSession(state);
                 // The person just pressed the key and is about to speak for seconds: if the
@@ -185,6 +186,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             };
             built.OnNotice = notice =>
             {
+                EmitNotice("dictation.notice", notice);
                 LastNotice = notice;
                 if (notice.RecoverableText is string text)
                 {
@@ -215,7 +217,19 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             };
             // Kept for diagnostics and performance tests; deliberately not shown over the
             // destination app after the text has already arrived.
-            built.OnSpeed = report => LastSpeed = report;
+            built.OnSpeed = report =>
+            {
+                // The stage durations of one dictation, and the only place they exist: release to
+                // text, release to paste, release to a restored clipboard, and how long the
+                // microphone took to wake up.
+                DiagnosticLog.Emit(
+                    "dictation.speed",
+                    ("recognized_ms", report.ToRecognizedText),
+                    ("pasted_ms", report.ToPasteDispatched),
+                    ("restored_ms", report.ToClipboardRestored),
+                    ("mic_startup_ms", report.MicrophoneStartup));
+                LastSpeed = report;
+            };
             built.OnDictationCompleted = provenance =>
             {
                 LastDictationValue = new LastDictation(provenance.FinalText, provenance);
@@ -357,13 +371,54 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// </summary>
     private void BeginHoldToDictate()
     {
-        if (IsRecoveryOperationActive) { return; }
-        if (!ExplainIfNotReady()) { return; }
+        if (IsRecoveryOperationActive)
+        {
+            DiagnosticLog.Emit("dictation.begin", ("started", false), ("refused", "recovery"));
+            return;
+        }
+
+        if (!ExplainIfNotReady())
+        {
+            DiagnosticLog.Emit("dictation.begin", ("started", false), ("refused", "not-ready"));
+            return;
+        }
+
+        // The policy each session is started under, so a session that behaves differently from
+        // the last one can be told apart from a session that was started differently.
+        DiagnosticLog.Emit(
+            "dictation.begin",
+            ("started", true),
+            ("hands_free", false),
+            ("enabled", IsDictationReady),
+            ("model_ready", ModelStateValue.IsReady),
+            ("state", DictationStateValue));
         controller?.Begin(handsFree: false, isEnabled: IsDictationReady, isModelReady: ModelStateValue.IsReady);
     }
 
     /// <summary>The dictation key came back up.</summary>
-    private void EndHoldToDictate() => controller?.Stop();
+    private void EndHoldToDictate()
+    {
+        DiagnosticLog.Emit("dictation.stop", ("state", DictationStateValue));
+        controller?.Stop();
+    }
+
+    /// <summary>
+    /// One notice, as the log may carry it.
+    /// </summary>
+    /// <remarks>
+    /// The message is written because every one of them is a fixed template from this
+    /// repository - which is the whole point of grepping for it - and because the recognized
+    /// text a failure hands back travels in <c>RecoverableText</c>, which is not written here and
+    /// must never be.
+    /// </remarks>
+    private static void EmitNotice(string name, DictationNotice notice) =>
+        DiagnosticLog.Emit(
+            name,
+            ("kind", notice.Kind),
+            ("words_lost", notice.WordsDidNotLand),
+            ("recoverable_chars", notice.RecoverableText?.Length),
+            ("kept_audio", notice.RecoveryAudio is not null),
+            ("message", notice.Message));
 
     /// <summary>
     /// Start a dictation from an on-screen press-and-hold control instead of the key.
@@ -599,6 +654,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// </summary>
     private void Notify(DictationNotice notice)
     {
+        EmitNotice("app.notice", notice);
         LastNotice = notice;
         _ = overlay.PresentNotice(notice);
     }

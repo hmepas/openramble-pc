@@ -231,6 +231,10 @@ public sealed partial class KeyboardHook : IDisposable
     {
         nint installed = SetWindowsHookExW(WhKeyboardLl, callback, GetModuleHandleW(null), 0);
         int error = installed == 0 ? Marshal.GetLastPInvokeError() : 0;
+        // The one fact about this file worth writing down, and it costs nothing to be wrong
+        // about: a hook that did not install is silent for the rest of the process, which looks
+        // exactly like a person who is not pressing the key.
+        DiagnosticLog.Emit("hook.install", ("ok", installed != 0), ("error", error));
         lock (gate)
         {
             hook = installed;
@@ -263,6 +267,7 @@ public sealed partial class KeyboardHook : IDisposable
         finally
         {
             UnhookWindowsHookEx(installed);
+            DiagnosticLog.Emit("hook.removed");
             lock (gate)
             {
                 hook = 0;

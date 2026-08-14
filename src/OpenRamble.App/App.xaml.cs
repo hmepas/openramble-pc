@@ -1,8 +1,12 @@
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Markup;
+using System.Windows.Threading;
 using DictationCore;
 using LocalASR;
 using OpenRamble.AppCore;
+using OpenRamble.WindowsAudio;
 
 namespace OpenRamble.App;
 
@@ -27,11 +31,14 @@ public partial class App : Application
     private AppState? state;
     private SettingsWindow? settings;
     private OnboardingWindow? onboarding;
+    private DiagnosticLog? diagnostics;
     private bool reportedTrayFailure;
 
     protected override void OnStartup(StartupEventArgs args)
     {
         base.OnStartup(args);
+
+        StartDiagnostics(args.Args);
 
         // The rules for what counts as "already running" - and why a copy killed from Task Manager
         // must not count - live in SingleInstanceLock, where they can be checked without a machine.
@@ -77,8 +84,32 @@ public partial class App : Application
             },
             Transcribe = (engineDirectory, languageHint) => async (path, token) =>
             {
-                await transcriber.Prepare(engineDirectory).ConfigureAwait(false);
-                return await transcriber.Transcribe(path, languageHint(), token).ConfigureAwait(false);
+                // The recognized text never reaches the log - only how long it took and how many
+                // characters came back, which is what tells "the engine answered" apart from "the
+                // engine answered with nothing".
+                long began = Stopwatch.GetTimestamp();
+                DiagnosticLog.Emit("transcribe.begin", ("language", languageHint() ?? "auto"));
+                try
+                {
+                    await transcriber.Prepare(engineDirectory).ConfigureAwait(false);
+                    ASRResult result =
+                        await transcriber.Transcribe(path, languageHint(), token).ConfigureAwait(false);
+                    DiagnosticLog.Emit(
+                        "transcribe.end",
+                        ("ms", Stopwatch.GetElapsedTime(began)),
+                        ("audio_ms", result.AudioDuration),
+                        ("chars", result.Text.Length),
+                        ("words", result.Words.Count));
+                    return result;
+                }
+                catch (Exception error)
+                {
+                    DiagnosticLog.EmitException(
+                        "transcribe.failed",
+                        error,
+                        ("ms", Stopwatch.GetElapsedTime(began)));
+                    throw;
+                }
             },
             // One second: the promise is a tray icon that lies for no longer than two.
             PermissionPollInterval = TimeSpan.FromSeconds(1),
@@ -123,6 +154,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs args)
     {
+        DiagnosticLog.Emit("app.exit", ("code", args.ApplicationExitCode));
         state?.Dispose();
         hotkeys?.Dispose();
         capture?.Dispose();
@@ -130,7 +162,79 @@ public partial class App : Application
         systemEvents?.Dispose();
         window?.Dispose();
         instance?.Dispose();
+        diagnostics?.Dispose();
         base.OnExit(args);
+    }
+
+    /// <summary>
+    /// Open the diagnostic log, if this run was asked for one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// First thing in the startup, before the instance lock: a second copy that exits immediately
+    /// is one of the things a person may be trying to explain, and it has to be able to say so.
+    /// </para>
+    /// <para>
+    /// A failure to open the file is shown, not swallowed. Somebody asked for a log; leaving them
+    /// to watch an empty path for an hour is worse than the missing log itself. And it is not
+    /// fatal - the application runs without diagnostics, which is how it runs every other time.
+    /// </para>
+    /// <para>
+    /// Shared for reading while we hold it, so the file can be tailed from another window while
+    /// the very hang it is recording is still going on.
+    /// </para>
+    /// </remarks>
+    private void StartDiagnostics(string[] arguments)
+    {
+        string? path = DiagnosticLog.PathFrom(
+            Environment.GetEnvironmentVariable(DiagnosticLog.EnvironmentVariable),
+            arguments);
+        if (path is null) { return; }
+
+        try
+        {
+            string? folder = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (folder is { Length: > 0 }) { Directory.CreateDirectory(folder); }
+
+            var file = new FileStream(
+                path,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            diagnostics = new DiagnosticLog(new StreamWriter(file), ownsSink: true);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException
+            or ArgumentException or NotSupportedException)
+        {
+            MessageBox.Show(
+                $"OpenRamble couldn't open its diagnostic log: {error.Message}\n\n"
+                + "The app will run normally, without diagnostics.",
+                "OpenRamble",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        DiagnosticLog.Install(diagnostics);
+        DiagnosticLog.Emit(
+            "app.start",
+            ("pid", Environment.ProcessId),
+            ("version", typeof(App).Assembly.GetName().Version?.ToString() ?? "unknown"),
+            ("os", Environment.OSVersion.VersionString));
+
+        // The three ways a .NET exception escapes everything. Each one otherwise ends a dictation
+        // - or the process - with nothing anywhere saying which line let go.
+        DispatcherUnhandledException += (_, unhandled) =>
+            DiagnosticLog.EmitException("app.unhandled", unhandled.Exception, ("where", "dispatcher"));
+        AppDomain.CurrentDomain.UnhandledException += (_, unhandled) =>
+        {
+            if (unhandled.ExceptionObject is Exception error)
+            {
+                DiagnosticLog.EmitException("app.unhandled", error, ("where", "domain"));
+            }
+        };
+        TaskScheduler.UnobservedTaskException += (_, unobserved) =>
+            DiagnosticLog.EmitException("app.unobserved", unobserved.Exception, ("where", "task"));
     }
 
     private void RefreshTray()
@@ -162,8 +266,9 @@ public partial class App : Application
     /// change, and a message per attempt would be its own fault.
     /// </summary>
     /// <remarks>
-    /// A message box, not a log file: the project writes no diagnostics to disk, and a failure the
-    /// person cannot see is the same as no failure at all.
+    /// A message box, not a log line. <see cref="DiagnosticLog"/> exists now, but it is off unless
+    /// somebody asked for it, so it is where a failure is explained - never where it is announced.
+    /// A failure the person cannot see is the same as no failure at all.
     /// </remarks>
     private void ReportTrayFailure()
     {

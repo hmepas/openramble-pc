@@ -7,8 +7,9 @@ at the cursor of the focused application.
 Recognition runs locally (NVIDIA Parakeet TDT 0.6b v3 via sherpa-onnx —
 the same model the macOS app runs via Core ML). Audio is never uploaded,
 there are no accounts, no analytics, and transcripts are never written to
-disk or logs. The only network access is downloading the model and nothing
-else. See [docs/differences-from-macos.md](docs/differences-from-macos.md)
+disk or logs — including the opt-in diagnostic log, which records what the
+app *did* (states, durations, counts, error codes) and never what was said.
+The only network access is downloading the model and nothing else. See [docs/differences-from-macos.md](docs/differences-from-macos.md)
 for what this port does and does not carry over.
 
 ## Building (on Linux)
@@ -43,8 +44,11 @@ download by importing the host's cached model): see
 - `src/OpenRamble.AppCore` — app policies (hotkey state machine, insertion
   policy, tray/overlay state), testable on Linux.
 - `src/OpenRamble.App` — WPF shell and Win32 adapters (keyboard hook,
-  text insertion, WASAPI capture, tray).
-- `src/AsrBench` — WER/CER measurement tool (`asr-bench`).
+  text insertion, tray).
+- `src/OpenRamble.WindowsAudio` — the WASAPI capture, in a library of its own
+  so the bench tool records through exactly the code the app records with.
+- `src/AsrBench` — WER/CER measurement tool (`asr-bench`), and `asr-bench mic`
+  to test microphone → capture → engine without the app.
 - `PORTING.md` — the Swift→C# conventions this port follows.
 
 The macOS original is expected as a sibling checkout at `../openramble`

@@ -29,6 +29,12 @@ internal static class Program
               bench <file>...       recognize and measure speed and memory
               timings <file>...     recognize and print word timings
               eval <manifest.json>  run a corpus and compute WER/CER
+              mic [options]         record from the microphone, then recognize (Windows only)
+
+            mic options:
+              --seconds <n>         how long to record (default 5)
+              --out <file>          where to keep the take (default take.wav)
+              --no-transcribe       record and report only, skip recognition
 
             Environment variables:
               OPENRAMBLE_MODELS_ROOT     installation root (%LOCALAPPDATA%\OpenRamble\Models default)
@@ -61,12 +67,32 @@ internal static class Program
             "import" => operands.Length == 0 ? Usage() : await Import(operands[0]).ConfigureAwait(false),
             "delete" => await Delete().ConfigureAwait(false),
             "eval" => operands.Length == 0 ? Usage() : await Eval(operands[0]).ConfigureAwait(false),
+            "mic" => await Mic(operands).ConfigureAwait(false),
             "timings" => operands.Length == 0 ? Usage() : await Timings(operands).ConfigureAwait(false),
             "transcribe" or "bench" => operands.Length == 0
                 ? Usage()
                 : await Transcribe(operands, measure: command == "bench").ConfigureAwait(false),
             _ => Usage(),
         };
+    }
+
+    /// <summary>
+    /// Record from the microphone. Present only where there is one this tool can open.
+    /// </summary>
+    /// <remarks>
+    /// The capture is WASAPI and lives in a Windows-only library; the portable build of this tool
+    /// says so rather than pretending the command does not exist, because the person reading the
+    /// usage text on the wrong machine deserves the reason.
+    /// </remarks>
+    private static Task<int> Mic(string[] operands)
+    {
+#if WINDOWS
+        return MicCommand.Run(operands);
+#else
+        _ = operands;
+        Console.WriteLine("mic: the microphone commands exist only in the Windows build of asr-bench.");
+        return Task.FromResult(69);
+#endif
     }
 
     // MARK: - Storage
@@ -261,7 +287,7 @@ internal static class Program
         return raw;
     }
 
-    private static async Task<LocalTranscriber> PrepareTranscriber()
+    internal static async Task<LocalTranscriber> PrepareTranscriber()
     {
         // An explicit engine folder is the only way to compare two file sets: the storage
         // checks the installation against the manifest and rightly rejects an extra file.
@@ -361,7 +387,7 @@ internal static class Program
     /// It exists so the hypothesis "a hard language choice helps" can be checked by running
     /// rather than by discussing.
     /// </summary>
-    private static string? LanguageHint()
+    internal static string? LanguageHint()
     {
         string? raw = Environment.GetEnvironmentVariable("OPENRAMBLE_ASR_LANGUAGE");
         if (raw is null)

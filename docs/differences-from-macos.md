@@ -89,6 +89,11 @@ work at all.
   physical key* that is still free, still holdable and still on every keyboard;
   before this the only alternatives were AltGr (composes characters), Caps Lock
   (shouts) and F13 (most keyboards cannot send it).
+- **F13 is no longer offered.** It was in the picker and is out: sending it
+  takes a remapper or a macro key, so it is the one candidate a person cannot
+  try on the keyboard they are choosing it with. The enum case survives only so
+  a settings file written by an earlier build still parses — a choice that is
+  not on the offered list falls back to Right Ctrl.
 - **The hotkey picker also lives in the try-out step.** The mac app does this
   too (`OnboardingView.swift`); the port had it only in Settings. Sending a
   person out of the first-launch flow to fix the very thing that flow just

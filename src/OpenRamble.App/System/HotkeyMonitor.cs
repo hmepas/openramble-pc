@@ -77,6 +77,7 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
         // come and the try-out would show a key held down forever.
         if (wasDown) { OnHotkeyUp?.Invoke(); }
 
+        DiagnosticLog.Emit("hotkey.configured", ("key", hotkey), ("suppressed", hotkey.NeedsSuppression));
         hook.Hotkey = hotkey;
         hook.SuppressesHotkey = hotkey.NeedsSuppression;
         // Changing the key mid-hold ends the hold: the machine says so, and ignoring it would
@@ -116,11 +117,13 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
     {
         HotkeyAction action;
         bool? edge = null;
+        DictationHotkey configured;
         lock (gate)
         {
+            configured = machine.Hotkey;
             // Auto-repeat resends the key-down for as long as it is held; only a change of side
             // is an edge.
-            if (keyboardEvent.VirtualKey == machine.Hotkey.VirtualKey
+            if (keyboardEvent.VirtualKey == configured.VirtualKey
                 && keyboardEvent.IsDown != rawKeyDown)
             {
                 rawKeyDown = keyboardEvent.IsDown;
@@ -132,13 +135,31 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
 
         // Before the gesture, deliberately. The raw edge is what says "the key arrived", and it
         // must reach the screen even when the gesture that follows decides to do nothing.
-        if (edge is bool down) { (down ? OnHotkeyDown : OnHotkeyUp)?.Invoke(); }
+        if (edge is bool down)
+        {
+            // An edge only ever exists for the configured key, so this is the one key name the
+            // log can carry. Every other key on the machine is compared and dropped, which is
+            // the whole design of KeyboardHook and is not undone by a log.
+            //
+            // This is a file write on the hook thread, and the hook thread is the one Windows
+            // unhooks if it gets slow. It is two lines per dictation and only when somebody
+            // switched diagnostics on for the run - when they are off, which is every other run,
+            // this is a null check. Queueing it instead would defeat the point: the log exists
+            // for the run that is about to be killed, and a queued line is the one that is lost.
+            DiagnosticLog.Emit("hotkey.edge", ("key", configured), ("down", down));
+            (down ? OnHotkeyDown : OnHotkeyUp)?.Invoke();
+        }
 
         Dispatch(action);
     }
 
     private void Dispatch(HotkeyAction action)
     {
+        if (action.Kind != HotkeyActionKind.None)
+        {
+            DiagnosticLog.Emit("hotkey.gesture", ("kind", action.Kind), ("delay_ms", action.ReleaseDelay));
+        }
+
         switch (action.Kind)
         {
             case HotkeyActionKind.None:

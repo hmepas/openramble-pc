@@ -182,6 +182,16 @@ public sealed class DictationController
     /// </remarks>
     private readonly TimeSpan captureStopDeadline;
 
+    /// <summary>
+    /// The budget every stop is given when the owner does not name one.
+    /// </summary>
+    /// <remarks>
+    /// Public so the platform's capture can size its own waits against it. A capture whose
+    /// internal budgets added up to more than this could only ever report the wedge this
+    /// deadline exists to catch, with the recording already safely closed.
+    /// </remarks>
+    public static TimeSpan DefaultCaptureStopDeadline { get; } = TimeSpan.FromSeconds(20);
+
     // MARK: - Session state
 
     /// <summary>
@@ -264,7 +274,7 @@ public sealed class DictationController
         this.transcriptionDeadline = transcriptionDeadline ?? TranscriptionDeadline.Deadline;
         this.prepareForTranscription = prepareForTranscription;
         this.prepareDeadline = prepareDeadline ?? TimeSpan.FromSeconds(90);
-        this.captureStopDeadline = captureStopDeadline ?? TimeSpan.FromSeconds(20);
+        this.captureStopDeadline = captureStopDeadline ?? DefaultCaptureStopDeadline;
     }
 
     // MARK: - Beginning

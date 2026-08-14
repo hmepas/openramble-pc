@@ -10,11 +10,12 @@
     <InternalsVisibleTo Include="DictationCore.Tests" />
     <!--
       The Windows capture is the driver half of DictationAudio/MicrophoneCapture.swift, which
-      lives in the app because it needs WASAPI. It has to reuse the two pieces of that file that
-      were ported here - the frame queue that guarantees ordering, and the recognition sample
-      cap - instead of growing a second copy of them that can drift.
+      lives outside this package because it needs WASAPI. It has to reuse the two pieces of that
+      file that were ported here - the frame queue that guarantees ordering, and the recognition
+      sample cap - instead of growing a second copy of them that can drift. It sits in its own
+      assembly so the bench tool can record through the very same code the product records with.
     -->
-    <InternalsVisibleTo Include="OpenRamble.App" />
+    <InternalsVisibleTo Include="OpenRamble.WindowsAudio" />
   </ItemGroup>
 
 </Project>

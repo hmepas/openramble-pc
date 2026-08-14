@@ -59,6 +59,12 @@ public sealed partial class OnboardingWindow : Window
         TryHoldButton.PreviewMouseLeftButtonDown += OnHoldPressed;
         TryHoldButton.PreviewMouseLeftButtonUp += OnHoldReleased;
         TryHoldButton.LostMouseCapture += (_, _) => state.ReleaseDictationButton();
+        // The fourth way a hold can end without a button-up: the window goes to the back. An
+        // Alt+Tab, a UAC prompt or another application taking the foreground while the button is
+        // down leaves no event on the button at all - and a hold that never ends is a microphone
+        // that never closes. Ending it is idempotent, so this costs nothing when the mouse-up
+        // does arrive.
+        Deactivated += (_, _) => state.ReleaseDictationButton();
 
         levelClock = new DispatcherTimer(DispatcherPriority.Background)
         {

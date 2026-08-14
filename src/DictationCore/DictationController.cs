@@ -242,6 +242,17 @@ public sealed class DictationController
     /// </summary>
     private int currentSession;
 
+    /// <summary>
+    /// That same number, readable from outside.
+    /// </summary>
+    /// <remarks>
+    /// For the diagnostic log and nothing else: a dictation crosses four components, each of
+    /// which writes its own events, and without a shared number the recognition and the insertion
+    /// of one session cannot be told from the next one's in a file of them. No decision is taken
+    /// on it here - the session identity that matters inside is the private field.
+    /// </remarks>
+    public int CurrentSession { get { lock (gate) { return currentSession; } } }
+
     /// <summary>Whether this session has already asked for the person's attention.</summary>
     private bool hasSoundedThisSession;
 
@@ -681,7 +692,7 @@ public sealed class DictationController
 
         TextPipeline.RunResult run = pipeline().Run(recognized.Text);
         TextPipeline.Output processed = run.Output;
-        if (processed.Text.Length == 0)
+        if (!RecognizedTextPolicy.CarriesWords(processed.Text))
         {
             // An empty result is not an error: the person could have stayed
             // silent, spoken too quietly or used the wrong microphone. But one
@@ -690,6 +701,11 @@ public sealed class DictationController
             // person goes looking for the missing phrase in someone else's
             // window. A press that is too short does not get here - it is
             // filtered out above and needs no explanation.
+            //
+            // The original asks only whether the text is empty, because its
+            // engine answers silence with nothing. This one answers silence with
+            // punctuation, and a transcript without a single letter or digit in
+            // it is the same "nothing was recognized" - see RecognizedTextPolicy.
             await Discard(recording.Url).ConfigureAwait(false);
             await Report(new DictationNotice(
                 kind: DictationNoticeKind.Info,

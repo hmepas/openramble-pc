@@ -347,6 +347,39 @@ public sealed class DictationControllerFailurePathTests
         Assert.Equal(DictationState.Idle, controller.State);
     }
 
+    /// <summary>
+    /// A key that went down and up in the same millisecond leaves nothing behind either.
+    /// </summary>
+    /// <remarks>
+    /// Not a person's gesture - a QEMU/spice guest re-synchronising the Caps Lock LED sends a
+    /// compensating down and up with the same timestamp, and there is nothing this side of the
+    /// hook that can tell those from a real touch of the key. The gesture machine holds the
+    /// release for the rest of the double-tap window, so the microphone does open and about
+    /// three hundred milliseconds of room noise do reach the take - the exact length seen in the
+    /// field log. That take must go the way every other accidental touch goes: not to the engine,
+    /// which answers three hundred milliseconds of nothing with punctuation, and not to the
+    /// person's document.
+    /// </remarks>
+    [Fact]
+    public async Task TestPhantomInstantPressNeverReachesTheEngineOrTheDocument()
+    {
+        capture.SetDuration(TimeSpan.FromMilliseconds(284));
+        var controller = MakeController();
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        // The release the machine deferred to the end of the double-tap window.
+        controller.Stop();
+        await Settle();
+
+        Assert.Equal(1, capture.StartCount);
+        Assert.Equal(0, transcribeCalls.Count);
+        Assert.Empty(inserter.InsertedTexts);
+        // Nobody pressed anything, so there is nothing to explain to anybody.
+        Assert.Empty(overlay.Notices);
+        Assert.Equal(DictationState.Idle, controller.State);
+    }
+
     [Fact]
     public async Task TestLongHoldWithAnEmptyRecordingBlamesTheMicrophone()
     {
@@ -401,6 +434,59 @@ public sealed class DictationControllerFailurePathTests
         // The voice does not stay on disk.
         Assert.Null(overlay.Notices[0].RecoveryAudio);
         Assert.Equal(DictationState.Idle, controller.State);
+    }
+
+    /// <summary>
+    /// Silence does not come back from this engine as nothing - it comes back as punctuation.
+    /// </summary>
+    /// <remarks>
+    /// A comma, an ellipsis, a run of dozens of them. Seen from a text field that is a
+    /// hallucination, and it landed in a person's document between two dictated phrases: the
+    /// emptiness gate waved it through, because a string of ellipses is not an empty string.
+    /// </remarks>
+    [Theory]
+    [InlineData("...")]
+    [InlineData("…")]
+    [InlineData(",")]
+    [InlineData(". . .")]
+    [InlineData("…………………")]
+    [InlineData(" , … . ")]
+    public async Task TestPunctuationOnlyRecognitionTellsThePersonInsteadOfInserting(string invented)
+    {
+        var controller = MakeController(recognized: invented);
+
+        await RunFullDictation(controller);
+
+        Assert.Empty(inserter.InsertedTexts);
+        // The same answer an empty result gets: not a failure, but never silence either.
+        Assert.Single(overlay.Notices);
+        Assert.Equal(DictationNoticeKind.Info, overlay.Notices[0].Kind);
+        Assert.True(overlay.Notices[0].WordsDidNotLand);
+        // The voice does not stay on disk.
+        Assert.Null(overlay.Notices[0].RecoveryAudio);
+        Assert.Equal(DictationState.Idle, controller.State);
+    }
+
+    /// <summary>
+    /// One letter or one digit is a dictation, and the gate must not eat it.
+    /// </summary>
+    /// <remarks>
+    /// A number dictated into a form is the shortest real dictation there is. Over-filtering
+    /// here would lose it exactly as the hallucination loses trust, only more quietly.
+    /// </remarks>
+    [Theory]
+    [InlineData("3", "3")]
+    [InlineData("3.14", "3.14")]
+    [InlineData("ok", "Ok")]
+    [InlineData("да!", "Да!")]
+    public async Task TestOneDictatedCharacterIsStillADictation(string recognized, string expected)
+    {
+        var controller = MakeController(recognized: recognized);
+
+        await RunFullDictation(controller);
+
+        Assert.Equal([expected], inserter.InsertedTexts);
+        Assert.Empty(overlay.Notices);
     }
 
     [Fact]

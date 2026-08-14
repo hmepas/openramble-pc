@@ -129,6 +129,27 @@ for this; here the existing `EnginePreparationState` line (which both apps
 already show in Settings and onboarding) goes on the panel instead — silently,
 so a screen reader is not made to read a seconds counter once per second.
 
+## A gate the original does not need: punctuation-only transcripts
+
+The mac asks one question of the finished text — is it empty — and that is
+enough there, because its engine answers silence with an empty string. Its own
+end-to-end test pins exactly that (`testSilentRecordingProducesNoInsertion`
+asserts the *raw* model output is `""` after three seconds of quiet).
+
+The ONNX Parakeet this port runs answers silence and room noise with
+punctuation instead: a comma, an ellipsis, a run of dozens of them. That is not
+an empty string, so the emptiness gate passed it and the hallucination arrived
+at the cursor — in the field log that produced `insert.begin chars=51` in the
+middle of a dictated sentence.
+
+So the question the original asks of its engine is asked here of the text:
+`RecognizedTextPolicy.CarriesWords` looks for one letter or one digit anywhere
+in the pipeline's output, counting Unicode scalars rather than UTF-16 code
+units. Without one, the session takes the same "Nothing was recognized —
+nothing was inserted" path an empty result takes. Nothing else is filtered: a
+transcript with a single letter or digit in it (`3`, `ok`) is a real dictation
+and goes in untouched, punctuation and all.
+
 ## Engine warm-up copy is approximate
 
 The readiness screen still promises "20–40 seconds" — a number measured on

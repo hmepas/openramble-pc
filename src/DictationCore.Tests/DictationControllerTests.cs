@@ -488,6 +488,39 @@ public sealed class DictationControllerTests
         Assert.Equal(1, capture.StartCount);
     }
 
+    /// <summary>
+    /// The session number advances once per session that actually began, and never otherwise.
+    /// </summary>
+    /// <remarks>
+    /// It is what the diagnostic log tags the recording, the recognition and the insertion of one
+    /// dictation with, and a number that moved for a press the kernel refused would attach the
+    /// next dictation's events to a session that never recorded anything. A press landing on a
+    /// session that is still finishing is not a hypothetical: a virtual machine sends phantom key
+    /// events mid-transcription, and the field log has one arriving in exactly that gap.
+    /// </remarks>
+    [Fact]
+    public async Task TestSessionNumberAdvancesOnlyForASessionThatBegan()
+    {
+        var controller = MakeController();
+        Assert.Equal(0, controller.CurrentSession);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        Assert.Equal(1, controller.CurrentSession);
+
+        // Refused: the previous session is still busy.
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        Assert.Equal(1, controller.CurrentSession);
+
+        controller.Stop();
+        await Settle();
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        Assert.Equal(2, controller.CurrentSession);
+    }
+
     // MARK: Cancel
 
     [Fact]

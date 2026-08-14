@@ -9,7 +9,16 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- The Win32 adapters marshal by hand; every P/Invoke here is source-generated. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationIcon>Assets/OpenRamble.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The same file again as a WPF resource, not only as the executable's icon: the windows name
+      it by pack URI, and TrayIconArt reads its 32-pixel plane to draw the tray picture on.
+    -->
+    <Resource Include="Assets/OpenRamble.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../LocalASR/LocalASR.csproj" />

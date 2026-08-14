@@ -92,6 +92,25 @@ public sealed class DiagnosticLog : IDisposable
     public static bool IsEnabled => Current is not null;
 
     /// <summary>
+    /// The dictation session the events being written right now belong to.
+    /// </summary>
+    /// <remarks>
+    /// Ambient for the same reason the log itself is: one dictation is written by the keyboard
+    /// hook, the capture, the engine and the inserter, and threading a number through four ports
+    /// would change the shape of code whose shape is the product. It is published once, when the
+    /// kernel opens a session, and every event written afterwards carries it - which is what
+    /// makes an <c>insert.begin</c> attributable to the <c>capture.start</c> it came from in a
+    /// file holding a dozen sessions.
+    /// </remarks>
+    public static int Session
+    {
+        get => Volatile.Read(ref session);
+        set => Volatile.Write(ref session, value);
+    }
+
+    private static int session;
+
+    /// <summary>
     /// Point the ambient log at <paramref name="log"/>, returning what undoes it.
     /// </summary>
     /// <remarks>

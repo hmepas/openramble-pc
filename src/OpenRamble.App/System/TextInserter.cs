@@ -111,15 +111,19 @@ public sealed partial class TextInserter : ITextInserting
         // Length, never content: the log has to be able to say "the text was there and the
         // insertion still did not happen", and that takes a number, not the words.
         InsertionPath path = InsertionPathPolicy.Choose(text.Length);
+        // The dictation these words came out of, so that an insertion can be read together with
+        // the recording and the recognition that produced it rather than guessed at by timestamp.
+        int session = DiagnosticLog.Session;
         DiagnosticLog.Emit(
             "insert.begin",
+            ("session", session),
             ("chars", text.Length),
             ("path", path),
             ("has_target", target is not null));
 
         if (TextInsertionPolicy.IsNoOp(text))
         {
-            DiagnosticLog.Emit("insert.end", ("ok", true), ("path", "none"));
+            DiagnosticLog.Emit("insert.end", ("session", session), ("ok", true), ("path", "none"));
             return new InsertionMarks();
         }
 
@@ -134,7 +138,12 @@ public sealed partial class TextInserter : ITextInserting
 
         if (TextInsertionPolicy.BeforeClipboard(target, alive, ReadEnvironment()) is InsertionRefusal refused)
         {
-            DiagnosticLog.Emit("insert.refused", ("path", path), ("reason", refused), ("activated", alive));
+            DiagnosticLog.Emit(
+                "insert.refused",
+                ("session", session),
+                ("path", path),
+                ("reason", refused),
+                ("activated", alive));
             throw TextInsertionPolicy.ToError(refused);
         }
 
@@ -152,6 +161,7 @@ public sealed partial class TextInserter : ITextInserting
             };
             DiagnosticLog.Emit(
                 "insert.end",
+                ("session", session),
                 ("ok", true),
                 ("path", path),
                 ("pasted", marks.PasteDispatchedAt is not null),
@@ -165,6 +175,7 @@ public sealed partial class TextInserter : ITextInserting
             DiagnosticLog.EmitException(
                 "insert.failed",
                 error,
+                ("session", session),
                 ("path", path),
                 ("win32", Marshal.GetLastPInvokeError()));
             throw;

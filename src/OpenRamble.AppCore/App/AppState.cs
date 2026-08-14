@@ -172,7 +172,16 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
             built.OnStateChange = state =>
             {
-                DiagnosticLog.Emit("dictation.state", ("to", state), ("hands_free", IsHandsFreeActive));
+                // The first state of a session is the first thing anyone hears about it, and it
+                // arrives before the microphone is asked for anything. Publishing the number here
+                // is what lets the capture, the engine and the inserter write their own events
+                // against the same session.
+                DiagnosticLog.Session = built.CurrentSession;
+                DiagnosticLog.Emit(
+                    "dictation.state",
+                    ("session", DiagnosticLog.Session),
+                    ("to", state),
+                    ("hands_free", IsHandsFreeActive));
                 DictationStateValue = state;
                 FlushNoticeAfterSession(state);
                 // The person just pressed the key and is about to speak for seconds: if the
@@ -186,7 +195,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             };
             built.OnNotice = notice =>
             {
-                EmitNotice("dictation.notice", notice);
+                EmitNotice("dictation.notice", notice, DiagnosticLog.Session);
                 LastNotice = notice;
                 if (notice.RecoverableText is string text)
                 {
@@ -224,6 +233,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 // microphone took to wake up.
                 DiagnosticLog.Emit(
                     "dictation.speed",
+                    ("session", DiagnosticLog.Session),
                     ("recognized_ms", report.ToRecognizedText),
                     ("pasted_ms", report.ToPasteDispatched),
                     ("restored_ms", report.ToClipboardRestored),
@@ -373,32 +383,54 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     {
         if (IsRecoveryOperationActive)
         {
-            DiagnosticLog.Emit("dictation.begin", ("started", false), ("refused", "recovery"));
+            DiagnosticLog.Emit(
+                "dictation.begin",
+                ("session", DiagnosticLog.Session),
+                ("started", false),
+                ("refused", "recovery"));
             return;
         }
 
         if (!ExplainIfNotReady())
         {
-            DiagnosticLog.Emit("dictation.begin", ("started", false), ("refused", "not-ready"));
+            DiagnosticLog.Emit(
+                "dictation.begin",
+                ("session", DiagnosticLog.Session),
+                ("started", false),
+                ("refused", "not-ready"));
             return;
         }
 
+        // The state the press arrived in, read before it is acted on: it is the reason a press
+        // that started nothing started nothing.
+        DictationState before = DictationStateValue;
+        int previousSession = controller?.CurrentSession ?? 0;
+        controller?.Begin(handsFree: false, isEnabled: IsDictationReady, isModelReady: ModelStateValue.IsReady);
+
         // The policy each session is started under, so a session that behaves differently from
-        // the last one can be told apart from a session that was started differently.
+        // the last one can be told apart from a session that was started differently. Written
+        // after the call and not before it: the kernel refuses a press that lands on a session
+        // still finishing, and a line claiming "started" for one of those - a phantom key event
+        // arriving mid-transcription is a virtual machine's daily bread - sent a reader looking
+        // for a recording that never existed.
+        int session = controller?.CurrentSession ?? 0;
         DiagnosticLog.Emit(
             "dictation.begin",
-            ("started", true),
+            ("session", session),
+            ("started", session != previousSession),
             ("hands_free", false),
             ("enabled", IsDictationReady),
             ("model_ready", ModelStateValue.IsReady),
-            ("state", DictationStateValue));
-        controller?.Begin(handsFree: false, isEnabled: IsDictationReady, isModelReady: ModelStateValue.IsReady);
+            ("state", before));
     }
 
     /// <summary>The dictation key came back up.</summary>
     private void EndHoldToDictate()
     {
-        DiagnosticLog.Emit("dictation.stop", ("state", DictationStateValue));
+        DiagnosticLog.Emit(
+            "dictation.stop",
+            ("session", DiagnosticLog.Session),
+            ("state", DictationStateValue));
         controller?.Stop();
     }
 
@@ -411,9 +443,15 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// text a failure hands back travels in <c>RecoverableText</c>, which is not written here and
     /// must never be.
     /// </remarks>
-    private static void EmitNotice(string name, DictationNotice notice) =>
+    /// <param name="session">
+    /// The dictation it ends, or <c>null</c> for the notices that belong to no dictation at all -
+    /// a failed download, a hook the system refused. Those read <c>session=none</c>, which is the
+    /// true answer rather than the number of whatever was dictated last.
+    /// </param>
+    private static void EmitNotice(string name, DictationNotice notice, int? session = null) =>
         DiagnosticLog.Emit(
             name,
+            ("session", session),
             ("kind", notice.Kind),
             ("words_lost", notice.WordsDidNotLand),
             ("recoverable_chars", notice.RecoverableText?.Length),

@@ -145,4 +145,36 @@ public sealed class DictationStateEdgeCaseTests
                 cancellationRequested: false,
                 taskCancelled: false));
     }
+
+    // MARK: - Nothing was said
+
+    /// <summary>
+    /// Punctuation on its own is what this engine hears in silence, and it is not a dictation.
+    /// </summary>
+    /// <remarks>
+    /// The border is a single letter or a single digit anywhere in the text. The counting unit is
+    /// the Unicode scalar and not the UTF-16 code unit, which is why a letter from outside the
+    /// Basic Multilingual Plane counts: neither half of its surrogate pair is a letter alone.
+    /// </remarks>
+    [Theory]
+    // Nothing a voice put there.
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData("...", false)]
+    [InlineData("\u2026", false)]
+    [InlineData(",", false)]
+    [InlineData("\u2026\u2026\u2026\u2026\u2026", false)]
+    [InlineData(" , \u2026 . ", false)]
+    [InlineData("-\u2014-", false)]
+    // A voice was there.
+    [InlineData("3", true)]
+    [InlineData("3.14", true)]
+    [InlineData("\u0434\u0430!", true)]
+    [InlineData("ok", true)]
+    // Outside the Basic Multilingual Plane: mathematical bold capital A, one letter in two
+    // UTF-16 units. Counting code units, neither of them is a letter and the whole dictation
+    // would have been thrown away.
+    [InlineData("\U0001D400", true)]
+    public void TestOnlyLettersAndDigitsMakeATranscriptWorthInserting(string text, bool carries) =>
+        Assert.Equal(carries, RecognizedTextPolicy.CarriesWords(text));
 }

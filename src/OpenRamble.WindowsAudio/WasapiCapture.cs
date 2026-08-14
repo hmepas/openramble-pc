@@ -81,8 +81,6 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
     /// </remarks>
     private Session? latest;
 
-    private int sessions;
-
     /// <param name="takesDirectory">
     /// Where the take is written. The file lives exactly until the end of recognition - a
     /// person's voice has no business staying on disk.
@@ -354,7 +352,12 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
         var queue = new FrameSink();
         var memory = new RecognitionSampleBuffer(MaximumBufferedSamples);
         var session = new Session(
-            ++sessions,
+            // The dictation the take belongs to, not a counter of our own: the kernel publishes
+            // the number before it asks for a recording, and every event of that session - the
+            // recognition and the insertion included - is written against it. A second counter
+            // here would agree with that one until the first session that ends before it
+            // records, and disagree with it silently for the rest of the run.
+            DiagnosticLog.Session,
             device,
             writer,
             queue,

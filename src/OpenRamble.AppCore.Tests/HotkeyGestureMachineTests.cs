@@ -450,4 +450,44 @@ public sealed class HotkeyGestureMachineTests
         // keyboard shouting.
         Assert.True(DictationHotkey.CapsLock.NeedsSuppression);
     }
+
+    // MARK: - The phantom press a virtual machine sends
+
+    /// <summary>
+    /// A down and an up with the same timestamp is one short hold, and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A QEMU/spice guest re-synchronises the Caps Lock LED by sending a compensating pair of
+    /// events, both stamped with the same millisecond. Nothing this side of the hook can tell
+    /// that from a person brushing the key, and nothing should try: the machine already has an
+    /// answer for a press of no length, and it is the answer a person's shortest tap gets.
+    /// </para>
+    /// <para>
+    /// What matters is what it is <b>not</b>. It is not a hands-free toggle - that takes a second
+    /// press inside the window, and one phantom pair is one press. It is not an immediate stop
+    /// either: the release waits out the whole double-tap window, which is why such a press still
+    /// costs a third of a second of open microphone. That third of a second is under
+    /// <c>DictationDurationPolicy.Minimum</c> and is dropped there, unheard.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void TestPhantomInstantPressIsAShortHoldNotAHandsFreeToggle()
+    {
+        var machine = new HotkeyGestureMachine(DictationHotkey.CapsLock);
+
+        Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.CapsLock, HotkeyModifiers.None)));
+        Assert.Equal(
+            ReleaseAfter(0.35),
+            machine.Handle(Up(DictationHotkey.CapsLock, HotkeyModifiers.None)));
+        Assert.False(machine.IsHeld);
+        Assert.False(machine.IsHandsFreeActive);
+
+        // The next phantom pair arrives seconds later, as they did in the field log: a fresh
+        // press, not the second half of a double tap.
+        Assert.Equal(
+            HotkeyAction.Press,
+            machine.Handle(Down(DictationHotkey.CapsLock, HotkeyModifiers.None, after: 2)));
+        Assert.False(machine.IsHandsFreeActive);
+    }
 }

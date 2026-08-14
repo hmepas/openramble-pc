@@ -1,21 +1,20 @@
 using System.Runtime.InteropServices;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using OpenRamble.AppCore;
 
 namespace OpenRamble.App;
 
 /// <summary>
-/// The tray picture, drawn from code.
-///
-/// A rounded brand mark plus the status dot from <see cref="TrayBadge"/> - one shape, one meaning
-/// per colour, exactly the vocabulary <see cref="StatusColorRole"/> defines.
+/// The tray picture: the brand mark with the status dot from <see cref="TrayBadge"/> on it - one
+/// shape, one meaning per colour, exactly the vocabulary <see cref="StatusColorRole"/> defines.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Drawn, not shipped.</b> The macOS build loads <c>BrandIconMenuBar</c> from its asset
-/// catalog. That asset is a macOS template image and does not cross over, and this port has no
-/// designed Windows icon yet - so the mark is computed into a pixel buffer instead of a
-/// placeholder <c>.ico</c> being invented and then quietly shipped as if it were the brand. When
-/// a real icon exists this file becomes a resource load.
+/// The mark is the real one, the same art the macOS app ships, read out of
+/// <c>Assets/OpenRamble.ico</c> - the very file that is also the executable's icon, so the tray,
+/// the taskbar and Alt+Tab cannot drift apart. Only the dot is drawn here, over the mark's
+/// 32-pixel plane.
 /// </para>
 /// <para>
 /// Icons are built once per badge and cached: the tray asks for the picture on every status
@@ -26,6 +25,7 @@ public static partial class TrayIconArt
 {
     private static readonly Dictionary<TrayBadge, nint> Cache = [];
     private static readonly Lock Gate = new();
+    private static uint[]? mark;
 
     /// <summary>
     /// 32 pixels: the size the shell asks for at 200% scaling, and it downsamples cleanly for
@@ -33,6 +33,12 @@ public static partial class TrayIconArt
     /// for a picture 16 pixels across.
     /// </summary>
     private const int Size = 32;
+
+    /// <summary>
+    /// The mark's own white. The dot sits on a halo of it, so its edge keeps its own shape where
+    /// it crosses the dark art underneath - at 16 pixels that edge is the whole signal.
+    /// </summary>
+    private const uint Halo = 0xFFF9F9F9;
 
     public static nint Icon(TrayBadge badge)
     {
@@ -56,8 +62,7 @@ public static partial class TrayIconArt
 
     private static nint Build(TrayBadge badge)
     {
-        uint[] pixels = new uint[Size * Size];
-        DrawMark(pixels);
+        uint[] pixels = (uint[])Mark().Clone();
         if (badge != TrayBadge.Hidden) { DrawBadge(pixels, BadgeColor(badge)); }
 
         nint colour = CreateBitmap(Size, Size, 1, 32, MemoryMarshal.AsBytes<uint>(pixels).ToArray());
@@ -81,42 +86,60 @@ public static partial class TrayIconArt
     }
 
     /// <summary>
-    /// The mark: a rounded square outline. Deliberately not a microphone - Windows draws its own
-    /// microphone glyph in the tray while anything records, and two microphones side by side read
-    /// as two applications.
+    /// The brand mark's 32-pixel plane, premultiplied, as every 32-bit GDI surface expects.
+    /// Decoded once: the file rides inside the assembly and cannot change under us.
     /// </summary>
-    private static void DrawMark(uint[] pixels)
+    private static uint[] Mark()
     {
-        const int inset = 4;
-        const int radius = 7;
-        const double stroke = 2.6;
-        uint colour = 0xFFE8E8E8;
+        if (mark is not null) { return mark; }
 
-        for (int y = 0; y < Size; y++)
+        var decoder = new IconBitmapDecoder(
+            new Uri("pack://application:,,,/Assets/OpenRamble.ico"),
+            BitmapCreateOptions.None,
+            BitmapCacheOption.OnLoad);
+
+        // The plane is in the file; picking the nearest and scaling is for the decoder, which is
+        // free to hand back one frame of its own choosing rather than every plane.
+        BitmapSource source = decoder.Frames
+            .OrderBy(frame => Math.Abs(frame.PixelWidth - Size))
+            .First();
+        if (source.PixelWidth != Size || source.PixelHeight != Size)
         {
-            for (int x = 0; x < Size; x++)
-            {
-                double distance = RoundedSquareDistance(x, y, inset, Size - 1 - inset, radius);
-                double coverage = Math.Clamp((stroke / 2) - Math.Abs(distance) + 0.5, 0, 1);
-                if (coverage > 0) { pixels[(y * Size) + x] = Blend(colour, coverage); }
-            }
+            source = new TransformedBitmap(
+                source,
+                new ScaleTransform((double)Size / source.PixelWidth, (double)Size / source.PixelHeight));
         }
+
+        uint[] pixels = new uint[Size * Size];
+        new FormatConvertedBitmap(source, PixelFormats.Pbgra32, null, 0)
+            .CopyPixels(pixels, Size * sizeof(uint), 0);
+        mark = pixels;
+        return pixels;
     }
 
-    /// <summary>The dot sits bottom-right, clear of the mark's stroke so both stay readable.</summary>
+    /// <summary>
+    /// The dot sits bottom-right, on the mark rather than beside it: the tray hands out one
+    /// square and the mark already fills it.
+    /// </summary>
     private static void DrawBadge(uint[] pixels, uint colour)
     {
         const double centreX = 23.5;
         const double centreY = 23.5;
         const double radius = 6.5;
+        const double halo = 1.25;
 
         for (int y = 0; y < Size; y++)
         {
             for (int x = 0; x < Size; x++)
             {
                 double distance = Math.Sqrt(((x - centreX) * (x - centreX)) + ((y - centreY) * (y - centreY)));
+                int index = (y * Size) + x;
+
+                double ring = Math.Clamp(radius + halo - distance + 0.5, 0, 1);
+                if (ring > 0) { pixels[index] = Over(pixels[index], Blend(Halo, ring)); }
+
                 double coverage = Math.Clamp(radius - distance + 0.5, 0, 1);
-                if (coverage > 0) { pixels[(y * Size) + x] = Blend(colour, coverage); }
+                if (coverage > 0) { pixels[index] = Over(pixels[index], Blend(colour, coverage)); }
             }
         }
     }
@@ -130,16 +153,6 @@ public static partial class TrayIconArt
         _ => 0,
     };
 
-    private static double RoundedSquareDistance(int x, int y, double min, double max, double radius)
-    {
-        double halfWidth = ((max - min) / 2) - radius;
-        double centre = (min + max) / 2;
-        double dx = Math.Abs(x - centre) - halfWidth;
-        double dy = Math.Abs(y - centre) - halfWidth;
-        double outside = Math.Sqrt((Math.Max(dx, 0) * Math.Max(dx, 0)) + (Math.Max(dy, 0) * Math.Max(dy, 0)));
-        return outside + Math.Min(Math.Max(dx, dy), 0) - radius;
-    }
-
     /// <summary>Premultiplied, as every 32-bit GDI surface expects.</summary>
     private static uint Blend(uint colour, double coverage)
     {
@@ -149,6 +162,22 @@ public static partial class TrayIconArt
         byte blue = (byte)Math.Round((colour & 0xFF) * coverage);
         return ((uint)alpha << 24) | ((uint)red << 16) | ((uint)green << 8) | blue;
     }
+
+    /// <summary>
+    /// Source-over, both sides premultiplied. Assigning instead would punch the mark out along
+    /// the dot's anti-aliased rim, which over opaque art reads as a hole rather than an edge.
+    /// </summary>
+    private static uint Over(uint under, uint over)
+    {
+        double keep = 1 - (((over >> 24) & 0xFF) / 255.0);
+        return ((uint)Mix(over, under, 24, keep) << 24)
+            | ((uint)Mix(over, under, 16, keep) << 16)
+            | ((uint)Mix(over, under, 8, keep) << 8)
+            | Mix(over, under, 0, keep);
+    }
+
+    private static byte Mix(uint over, uint under, int shift, double keep) =>
+        (byte)Math.Clamp(Math.Round(((over >> shift) & 0xFF) + (((under >> shift) & 0xFF) * keep)), 0, 255);
 
     /// <remarks>
     /// <c>IsIcon</c> is a raw <c>BOOL</c> rather than a marshalled <c>bool</c>: the struct has to

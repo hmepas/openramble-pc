@@ -50,8 +50,13 @@ another window while the hang it is recording is still going on:
 powershell -Command "Get-Content -Wait $env:USERPROFILE\Desktop\openramble-diag.txt"
 ```
 
-One line per event: an instant, an event name, then `key=value`. What to grep
-for, in the order a dictation goes through them:
+One line per event: an instant, an event name, then `key=value`. Everything one
+dictation does carries the same `session=` — the recording, the recognition and
+the insertion alike — so one session can be read out of a file holding a dozen
+of them with `findstr "session=7"`. Events that belong to no dictation (an app
+notice, a failed download) say `session=none` or carry no session at all.
+
+What to grep for, in the order a dictation goes through them:
 
 | Event | Says |
 |---|---|
@@ -61,7 +66,7 @@ for, in the order a dictation goes through them:
 | `hotkey.configured` | which key is armed, and whether it is swallowed |
 | `hotkey.edge` | the configured key physically went down/up |
 | `hotkey.gesture` | what the gesture machine made of it |
-| `dictation.begin` | a press started a session, or `refused=` why not |
+| `dictation.begin` | `started=` whether a session actually began, `state=` what the press landed on, or `refused=` why it was not even offered |
 | `dictation.stop` | a release asked the session to finish |
 | `dictation.state` | `Preparing → Listening → Transcribing → Inserting → Idle` |
 | `capture.start` | the device opened, its rate and channels |
@@ -116,6 +121,36 @@ delivered nothing.
    `capture.stop.end` lines must all report back in well under a second, and
    `capture.stop.device-abandoned` must not appear. If it does, the audio path
    is not releasing its thread — the session survives it by design, but say so.
+
+### VM keyboard quirk
+
+In a QEMU/spice VM on a Wayland host, the physical **Right** Ctrl, Right Shift
+and Right Alt may never reach the guest at all — spice-gtk's keycode mapping
+drops them, so the app sees no key event and the hotkey looks dead. Physical
+Caps Lock does come through, which is the quickest way to tell a broken hook
+from a swallowed key: pick Caps Lock in Settings and try again.
+
+To test the right-hand keys anyway, inject them from the QEMU monitor on the
+host (1500 ms is long enough for a short dictation):
+
+```
+sendkey ctrl_r 1500
+```
+
+Caps Lock brings its own quirk with it. The client re-synchronises the guest's
+LED by sending a compensating pair of key events, both stamped with the same
+millisecond — visible in the log as `hotkey.edge down=true` and `down=false` on
+one instant. The app cannot tell that from a person brushing the key, so it
+treats it as the shortest possible hold: the microphone opens, the gesture
+machine holds the release for the rest of the double-tap window, and the
+resulting ~290 ms take is dropped without reaching the engine
+(`DictationDurationPolicy.Minimum` is 350 ms). In the log such a session runs
+`capture.start` → `capture.stop.end audio_ms≈290` → `dictation.state to=Idle`
+with no `transcribe.*` and no `insert.*` between them. That is the expected
+shape; a phantom pair that ends in an insertion is a bug.
+
+None of this applies on real hardware — it is the VM's input path, not the
+app's.
 
 ## Known gaps vs the mac app (by design, this build)
 

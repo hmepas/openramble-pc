@@ -88,7 +88,14 @@ public partial class App : Application
                 // characters came back, which is what tells "the engine answered" apart from "the
                 // engine answered with nothing".
                 long began = Stopwatch.GetTimestamp();
-                DiagnosticLog.Emit("transcribe.begin", ("language", languageHint() ?? "auto"));
+                // Read once, at the start: the recognition of a long dictation outlives the
+                // session that asked for it often enough that the number must be the one this
+                // call belongs to, not the one running by the time it answers.
+                int session = DiagnosticLog.Session;
+                DiagnosticLog.Emit(
+                    "transcribe.begin",
+                    ("session", session),
+                    ("language", languageHint() ?? "auto"));
                 try
                 {
                     await transcriber.Prepare(engineDirectory).ConfigureAwait(false);
@@ -96,6 +103,7 @@ public partial class App : Application
                         await transcriber.Transcribe(path, languageHint(), token).ConfigureAwait(false);
                     DiagnosticLog.Emit(
                         "transcribe.end",
+                        ("session", session),
                         ("ms", Stopwatch.GetElapsedTime(began)),
                         ("audio_ms", result.AudioDuration),
                         ("chars", result.Text.Length),
@@ -107,6 +115,7 @@ public partial class App : Application
                     DiagnosticLog.EmitException(
                         "transcribe.failed",
                         error,
+                        ("session", session),
                         ("ms", Stopwatch.GetElapsedTime(began)));
                     throw;
                 }

@@ -25,6 +25,11 @@ namespace OpenRamble.App;
 /// would activate it anyway).
 /// </para>
 /// <para>
+/// It carries no <c>Icon</c>, and setting one would change nothing: with <c>WindowStyle="None"</c>
+/// there is no title bar, <c>ShowInTaskbar="False"</c> takes the taskbar button away, and
+/// <c>WS_EX_TOOLWINDOW</c> the Alt+Tab entry - no surface is left that would draw it.
+/// </para>
+/// <para>
 /// What is written on it is <see cref="OverlayContent"/>'s decision, and when it appears and
 /// hides is <see cref="OverlayModel"/>'s - both are checked without a screen. This file draws
 /// and nothing else.

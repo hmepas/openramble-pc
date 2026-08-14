@@ -51,5 +51,9 @@ download by importing the host's cached model): see
   to test microphone → capture → engine without the app.
 - `PORTING.md` — the Swift→C# conventions this port follows.
 
+`src/OpenRamble.App/Assets/OpenRamble.ico` — the executable, window and tray
+icon — is the macOS app's own `AppIcon.icns` art rendered to Windows sizes,
+used under the upstream project's MIT licence (© 2026 Mik Wiseman).
+
 The macOS original is expected as a sibling checkout at `../openramble`
 (reference only; not needed to build).

@@ -10,6 +10,8 @@
     <!-- The Win32 adapters marshal by hand; every P/Invoke here is source-generated. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationIcon>Assets/OpenRamble.ico</ApplicationIcon>
+    <!-- Explicit entry point: Velopack's bootstrap must run before WPF starts. -->
+    <StartupObject>OpenRamble.App.Program</StartupObject>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,6 +35,7 @@
       the endpoint itself to find out whether the microphone is granted.
     -->
     <PackageReference Include="NAudio" Version="[2.2.1]" />
+    <PackageReference Include="Velopack" Version="[1.2.0]" />
   </ItemGroup>
 
 </Project>

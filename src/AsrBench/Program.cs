@@ -52,6 +52,17 @@ internal static class Program
 
     private static async Task<int> Main(string[] arguments)
     {
+        // Windows consoles default to an OEM code page that cannot print
+        // Cyrillic - recognized text came out as "???". Harmless elsewhere.
+        try
+        {
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+        }
+        catch (IOException)
+        {
+            // No console attached (redirected output); the default is fine.
+        }
+
         if (arguments.Length == 0)
         {
             return Usage();

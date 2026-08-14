@@ -322,6 +322,39 @@ public sealed class OverlayModelTests
         Assert.Equal(["Check the microphone.", "Check the microphone."], announcer.Messages);
     }
 
+    /// <summary>
+    /// A failing start shows its notice and the cleanup dismisses the session right behind it.
+    /// The notice must still leave on its own - and must not expire into the dead session's
+    /// "Turning on the microphone…", which nothing would ever remove.
+    /// </summary>
+    [Fact]
+    public async Task FailureNoticeAfterSessionCleanupHidesThePanel()
+    {
+        model.Show(DictationState.Preparing, TimeSpan.Zero);
+        model.ShowNotice(new DictationNotice(DictationNoticeKind.Failure, "Couldn't record audio."));
+        model.Hide();
+
+        await WaitForNoticeToHide();
+
+        Assert.False(model.IsVisible);
+    }
+
+    /// <summary>
+    /// Same trap through the other door: a menu-action notice after a finished dictation must not
+    /// resurrect that dictation's HUD out of the stale state the panel was hidden in.
+    /// </summary>
+    [Fact]
+    public async Task NoticeAfterFinishedSessionDoesNotResurrectItsHud()
+    {
+        model.Show(DictationState.Listening, TimeSpan.Zero);
+        model.Hide();
+
+        model.ShowNotice(new DictationNotice(DictationNoticeKind.Info, "Copied."));
+        await WaitForNoticeToHide();
+
+        Assert.False(model.IsVisible);
+    }
+
     [Fact]
     public async Task NoticeDuringRecordingReturnsToLiveHudAfterExpiry()
     {

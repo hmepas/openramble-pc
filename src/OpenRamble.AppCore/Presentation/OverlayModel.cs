@@ -253,6 +253,10 @@ public sealed class OverlayModel
     private bool? HideLocked()
     {
         SetElapsedLocked(ElapsedLocked(), ticking: false);
+        // The session that owned the HUD is over. Without this line a notice shown by a failing
+        // start would expire into the dead session's "Turning on the microphone…" - a panel
+        // nothing is ever going to remove.
+        state = DictationState.Idle;
         if (notice is not null)
         {
             return null;

@@ -150,11 +150,13 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
             session.Sink.Cancel();
             session.Writer.Discard();
             _ = ReleaseDevice(session);
-            DiagnosticLog.Emit(
+            // The full exception, not just its type: a WASAPI refusal says everything useful in
+            // its HRESULT message, and this line is the only place it survives.
+            DiagnosticLog.EmitException(
                 "capture.start",
+                error,
                 ("session", session.Number),
-                ("ok", false),
-                ("reason", error.GetType().Name));
+                ("ok", false));
             throw new AudioCaptureError.EngineUnavailable(error.Message);
         }
 
@@ -313,6 +315,12 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
         {
             // No microphone, or the audio service is down. Both are "the engine is not
             // available", and neither may be reported as an empty recording.
+            DiagnosticLog.EmitException(
+                "capture.start",
+                error,
+                ("session", DiagnosticLog.Session),
+                ("ok", false),
+                ("stage", "device-lookup"));
             throw new AudioCaptureError.EngineUnavailable(error.Message);
         }
 
@@ -480,7 +488,8 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
             DiagnosticLog.Emit(
                 "capture.failed",
                 ("session", session.Number),
-                ("kind", error.GetType().Name));
+                ("kind", error.GetType().Name),
+                ("message", error.Message));
             // False, not an exception: "there is no recording any more" is what the port promises
             // here, and promising "speak" where nothing is being written is the one thing this
             // must never do.

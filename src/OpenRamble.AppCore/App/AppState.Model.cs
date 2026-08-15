@@ -94,6 +94,10 @@ public sealed partial class AppState
         }
     }
 
+    /// <summary>Did a model ship inside this installation?</summary>
+    public bool HasBundledModel =>
+        bundledModelDirectory is { } bundle && Directory.Exists(bundle);
+
     public void InstallModel()
     {
         // Pressing again during the download must not start anything: the button lives on screen
@@ -139,7 +143,14 @@ public sealed partial class AppState
                     }
                 });
 
-                if (latest.IsReady || latest.RequiresRepair) { await store.Repair().ConfigureAwait(false); }
+                bool repair = latest.IsReady || latest.RequiresRepair;
+                if (bundledModelDirectory is { } bundle && Directory.Exists(bundle))
+                {
+                    // Same verification, same atomic promotion as a download - only the bytes come
+                    // from next to the executable instead of the network.
+                    await store.ImportModel(bundle, force: repair).ConfigureAwait(false);
+                }
+                else if (repair) { await store.Repair().ConfigureAwait(false); }
                 else { await store.Install().ConfigureAwait(false); }
 
                 await monitor.CancelAsync().ConfigureAwait(false);

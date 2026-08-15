@@ -3,7 +3,7 @@
 Build on the Linux host:
 
 ```bash
-./scripts/build-win.sh            # → dist/win-x64 (~200 MB, model not included)
+./scripts/build-win.sh            # → dist/win-x64 (~900 MB, model included)
 ```
 
 Copy `dist/win-x64/` into the Windows VM (virtiofs/samba share or plain copy)
@@ -12,16 +12,14 @@ notification area. First launch opens onboarding.
 
 ## Model
 
-Onboarding downloads Parakeet TDT 0.6b v3 int8 (~670 MB) from Hugging Face
-into `%LOCALAPPDATA%\OpenRambleData` (the installer owns `%LOCALAPPDATA%\OpenRamble` and wipes it on reinstall, so data lives next door). To skip the in-VM download, copy a cached
-model from the host (`~/.cache/openramble-win/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/`)
-into the VM and import it:
+The build carries the recognition model in `model/` next to the executable (Parakeet TDT
+0.6b v3, our own weight-only int4 build - see `scripts/quantize-parakeet-int4.py` for why
+not the stock int8). On first launch the app copies and verifies it into
+`%LOCALAPPDATA%\OpenRambleData\Models` by itself; nothing is downloaded. `build-win.sh`
+expects the bundle at `~/.cache/openramble-win/parakeet-int4` (or `$OPENRAMBLE_MODEL_BUNDLE`)
+and refuses to build without it.
 
-```
-tools\asr-bench.exe import <path-to-copied-folder>
-```
-
-(or let onboarding download; both paths end in the same verified install).
+`tools\asr-bench.exe import <folder>` still works for a copy in an unusual place.
 
 ## Diagnostic log
 

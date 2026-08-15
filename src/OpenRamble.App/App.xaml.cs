@@ -72,6 +72,8 @@ public partial class App : Application
             Inserter = inserter,
             Overlay = overlay,
             Sounds = new SoundPlayer(),
+            // scripts/build-win.sh puts the model here; the installer carries it along.
+            BundledModelDirectory = Path.Combine(AppContext.BaseDirectory, "model"),
             MakeCapture = (takes, onFailure, onSamples) =>
             {
                 var device = new WasapiCapture(takes) { Failed = onFailure };

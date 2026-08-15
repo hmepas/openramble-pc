@@ -53,6 +53,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly ReplacementsStore replacementsStore;
     private readonly EditLearningWatcher editWatcher;
     private readonly LocalTranscriber? transcriber;
+    private readonly string? bundledModelDirectory;
 
     private AppSettings settings;
     private DictationController? controller;
@@ -73,6 +74,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     {
         paths = environment.Paths;
         settingsStore = environment.Settings;
+        bundledModelDirectory = environment.BundledModelDirectory;
         permissions = environment.Permissions;
         hotkeyMonitor = environment.HotkeyMonitor;
         inserter = environment.Inserter;
@@ -320,7 +322,17 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         {
             await ImportAbandonedRecordings().ConfigureAwait(false);
             await RefreshModelState().ConfigureAwait(false);
-            if (ModelStateValue.IsReady) { await WarmUpEngine().ConfigureAwait(false); }
+            if (ModelStateValue.IsReady)
+            {
+                await WarmUpEngine().ConfigureAwait(false);
+            }
+            else if (HasBundledModel)
+            {
+                // The model came with the installer. Nobody should have to press a button, let
+                // alone wait for a download, to get what is already on their disk: put it in
+                // place now, before the setup window even reaches the question.
+                InstallModel();
+            }
         });
     }
 

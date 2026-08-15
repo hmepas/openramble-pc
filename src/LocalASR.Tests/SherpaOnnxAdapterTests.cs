@@ -224,11 +224,11 @@ public class SherpaOnnxAdapterTests
     /// so the two can be measured against each other, and it is not what ships.
     /// </summary>
     [Fact]
-    public void QuantizedEncoderIsTheDefault()
+    public void WeightOnlyInt4EncoderIsTheDefault()
     {
         var adapter = new SherpaOnnxAdapter();
 
-        Assert.Equal(EncoderPrecision.Int8, adapter.Encoder);
+        Assert.Equal(EncoderPrecision.Int4WeightOnly, adapter.Encoder);
     }
 
     /// <summary>
@@ -241,12 +241,17 @@ public class SherpaOnnxAdapterTests
     {
         IReadOnlyList<string> quantized = SherpaOnnxAdapter.RequiredFiles(EncoderPrecision.Int8);
         IReadOnlyList<string> full = SherpaOnnxAdapter.RequiredFiles(EncoderPrecision.Float32);
+        IReadOnlyList<string> weightOnly = SherpaOnnxAdapter.RequiredFiles(EncoderPrecision.Int4WeightOnly);
 
         Assert.Contains("encoder.int8.onnx", quantized);
         Assert.DoesNotContain("encoder.onnx", quantized);
         Assert.Contains("encoder.weights", full);
+        Assert.Contains("encoder.int4.onnx", weightOnly);
+        // Self-contained: the 4-bit encoder carries its weights inside the graph.
+        Assert.DoesNotContain("encoder.weights", weightOnly);
         Assert.Contains("tokens.txt", quantized);
         Assert.Contains("tokens.txt", full);
+        Assert.Contains("tokens.txt", weightOnly);
     }
 
     /// <summary>

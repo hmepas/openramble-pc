@@ -468,6 +468,66 @@ public class ModelStoreTests : IDisposable
     }
 
     /// <summary>
+    /// A new revision replaces the old one on disk, not beside it: after the new install is
+    /// promoted, the previous revision's folder is gone.
+    /// </summary>
+    [Fact]
+    public async Task ANewRevisionSweepsThePreviousOneAfterPromotion()
+    {
+        ModelManifest old = MakeManifest();
+        (ModelStore oldStore, ModelInstallLayout oldLayout) = MakeStore(old, WorkingDownloader());
+        await oldStore.Install();
+        Assert.True(Directory.Exists(oldLayout.InstalledDirectory));
+
+        var fresh = new ModelManifest(
+            old.ModelID,
+            old.Repository,
+            new string('c', 40),
+            old.FluidAudioVersion,
+            old.Quantization,
+            old.License,
+            old.Files);
+        (ModelStore freshStore, ModelInstallLayout freshLayout) = MakeStore(fresh, WorkingDownloader());
+        await freshStore.Install();
+
+        Assert.True(freshStore.CurrentState().IsReady);
+        Assert.True(Directory.Exists(freshLayout.InstalledDirectory));
+        Assert.False(Directory.Exists(oldLayout.InstalledDirectory));
+    }
+
+    /// <summary>
+    /// The bundled model's path in: a folder next to the executable, imported without a byte
+    /// from the network - and, with <c>force</c>, imported again over a copy the store believes
+    /// ready, which is what "repair" means when the model shipped with the app.
+    /// </summary>
+    [Fact]
+    public async Task ImportInstallsFromAFolderAndForceReimportsOverAReadyCopy()
+    {
+        FakeDownloader downloader = WorkingDownloader();
+        (ModelStore store, ModelInstallLayout layout) = MakeStore(MakeManifest(), downloader);
+        string bundle = Path.Combine(root, "bundle");
+        Directory.CreateDirectory(Path.Combine(bundle, "Encoder.mlmodelc"));
+        File.WriteAllBytes(Path.Combine(bundle, "Encoder.mlmodelc", "weight.bin"), FileA);
+        File.WriteAllBytes(Path.Combine(bundle, "vocab.json"), FileB);
+
+        await store.ImportModel(bundle);
+        Assert.True(store.CurrentState().IsReady);
+        Assert.Empty(downloader.RequestedPaths);
+
+        // The engine rejected the installed copy: damage the file the way a bad sector would.
+        string installed = Path.Combine(layout.EngineDirectory, "vocab.json");
+        File.WriteAllBytes(installed, [1, 2, 3]);
+
+        await store.ImportModel(bundle);
+        Assert.Equal(new byte[] { 1, 2, 3 }, File.ReadAllBytes(installed));
+
+        await store.ImportModel(bundle, force: true);
+        Assert.True(store.CurrentState().IsReady);
+        Assert.Equal(FileB, File.ReadAllBytes(installed));
+        Assert.Empty(downloader.RequestedPaths);
+    }
+
+    /// <summary>
     /// Updating FluidAudio must not cost the user a model download.
     ///
     /// The model revision is a pinned commit SHA; if it has not changed, the disk holds

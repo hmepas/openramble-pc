@@ -33,6 +33,13 @@ public sealed class AppEnvironment
     public required CaptureFactory MakeCapture { get; init; }
 
     /// <summary>
+    /// The model that shipped inside the application, if one did: a folder holding the bundled
+    /// manifest's files. When it is there, installing means copying and verifying from it, and
+    /// nothing is ever downloaded; when it is not, the manifest's network sources are used.
+    /// </summary>
+    public string? BundledModelDirectory { get; init; }
+
+    /// <summary>
     /// How to recognize. The same kind of system edge as the microphone and the insertion: in
     /// the application it is a model on disk, in a test it is a known answer. Without this seam
     /// the whole dictation path could not be checked at all - the tests would only reach the

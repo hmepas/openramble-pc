@@ -150,7 +150,7 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
     public const string DefaultDecodingMethod = "greedy_search";
 
     public SherpaOnnxAdapter(
-        EncoderPrecision precision = EncoderPrecision.Int8,
+        EncoderPrecision precision = EncoderPrecision.Int4WeightOnly,
         int numThreads = DefaultNumThreads,
         string provider = "cpu",
         string decodingMethod = DefaultDecodingMethod)

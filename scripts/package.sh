@@ -19,6 +19,9 @@ mkdir -p "$OUT"
 ./scripts/build-win.sh
 
 ( cd dist && python3 -m zipfile -c "../$OUT/OpenRamble-win-x64-$VERSION.zip" win-x64 )
+# Sits beside Setup.exe on the share: restarts the installed app with the diagnostic
+# log written next to itself.
+cp scripts/OpenRamble-diag.bat "$OUT/"
 
 vpk '[win]' pack --yes \
     --packId OpenRamble \

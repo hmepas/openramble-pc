@@ -50,6 +50,11 @@ another window while the hang it is recording is still going on:
 powershell -Command "Get-Content -Wait $env:USERPROFILE\Desktop\openramble-diag.txt"
 ```
 
+For an installed copy there is `OpenRamble-diag.bat` (in `releases/`, next to
+`OpenRamble-win-Setup.exe`): it stops the running app and restarts it with the
+log written next to the `.bat` itself - put both on a share, install from it,
+double-click the `.bat`, and read the log from any machine that sees the share.
+
 One line per event: an instant, an event name, then `key=value`. Everything one
 dictation does carries the same `session=` — the recording, the recognition and
 the insertion alike — so one session can be read out of a file holding a dozen

@@ -68,3 +68,6 @@ dotnet_naming_rule.types_should_be_pascal_case.symbols = type_symbols
 dotnet_naming_rule.types_should_be_pascal_case.style = pascal_case
 dotnet_naming_symbols.type_symbols.applicable_kinds = class,struct,enum,delegate
 dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+[*.bat]
+end_of_line = crlf

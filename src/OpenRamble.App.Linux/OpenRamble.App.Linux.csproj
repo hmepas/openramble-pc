@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>OpenRamble.App.Linux</RootNamespace>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!--
+      AVLN3001: "won't be reachable via runtime loader, as no public constructor was found". The
+      settings and setup windows are built with an AppState and have no parameterless constructor,
+      on purpose - a window of either that came up without one would render nothing and call back
+      into nothing. Their markup is compiled into the assembly and reached through the generated
+      InitializeComponent, never through the runtime loader the warning is about.
+    -->
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);AVLN3001</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../LocalASR/LocalASR.csproj" />
+    <ProjectReference Include="../OpenRamble.AppCore/OpenRamble.AppCore.csproj" />
+    <ProjectReference Include="../OpenRamble.LinuxAudio/OpenRamble.LinuxAudio.csproj" />
+    <ProjectReference Include="../OpenRamble.LinuxInput/OpenRamble.LinuxInput.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Pinned exactly, the way the audio package is on the other platform: this is the whole
+      interface, and a silent behaviour change in a tray or a window is not something a test suite
+      of ours would catch. The 11.3 line rather than the newer 12.x: it is what this port was
+      planned against, and moving a major version of the toolkit is a change to make deliberately
+      and on its own, not as a side effect of writing the first shell on it.
+    -->
+    <PackageReference Include="Avalonia" Version="[11.3.20]" />
+    <PackageReference Include="Avalonia.Desktop" Version="[11.3.20]" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="[11.3.20]" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The brand mark, linked rather than copied: it is the Windows executable's icon and the
+      Windows tray picture, and a second copy of the file is a second thing to forget when the art
+      changes. TrayIconArt reads the .ico's PNG plane out of it at run time.
+    -->
+    <AvaloniaResource Include="../OpenRamble.App/Assets/OpenRamble.ico" Link="Assets/OpenRamble.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The pixel arithmetic behind the tray badge, the .ico reader and the autostart entry writer
+      are the pieces of logic this assembly invents, and all three are checked without a desktop.
+    -->
+    <InternalsVisibleTo Include="OpenRamble.App.Linux.Tests" />
+  </ItemGroup>
+
+</Project>

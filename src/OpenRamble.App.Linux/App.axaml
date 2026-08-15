@@ -1,0 +1,16 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="OpenRamble.App.Linux.App"
+             RequestedThemeVariant="Default">
+
+  <!--
+    Fluent, unstyled beyond it. The Windows shell takes every control from the shell itself so
+    that high contrast, text scaling and the screen reader come for free; Avalonia draws its own
+    controls whatever we do, so the nearest equivalent is the theme that follows the desktop's
+    light/dark preference and nothing on top of it. "Default" is that following.
+  -->
+  <Application.Styles>
+    <FluentTheme />
+  </Application.Styles>
+
+</Application>

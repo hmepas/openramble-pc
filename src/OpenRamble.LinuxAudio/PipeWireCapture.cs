@@ -108,6 +108,18 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         this.launch = launch;
     }
 
+    /// <summary>
+    /// The recorder this capture runs, by the name a person would type.
+    /// </summary>
+    /// <remarks>
+    /// Published for the one caller that has to know whether recording is possible <i>without</i>
+    /// recording: the shell's microphone reading is asked once a second, and the honest probe for
+    /// it opens the device - which a person who is not dictating must never have happen. Asking
+    /// whether the tool exists is the cheap half of that question, and it must be asked about this
+    /// exact tool rather than a second copy of the name that can drift from it.
+    /// </remarks>
+    public static string RecorderExecutable => PwRecordProcess.Executable;
+
     /// <inheritdoc/>
     public Action<float>? OnInputLevel { get; set; }
 

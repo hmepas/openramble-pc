@@ -1,0 +1,126 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+        xmlns:core="clr-namespace:DictationCore;assembly=DictationCore"
+        x:Class="OpenRamble.App.Linux.SettingsWindow"
+        Title="OpenRamble Settings"
+        Width="620"
+        Height="560"
+        WindowStartupLocation="CenterScreen">
+  <TabControl Margin="12">
+
+    <TabItem Header="General">
+      <StackPanel Margin="16">
+        <TextBlock Text="Dictation key" FontWeight="SemiBold" />
+        <TextBlock Text="Hold it and speak. Press it twice to keep recording without holding."
+                   Foreground="Gray" TextWrapping="Wrap" Margin="0,2,0,6" />
+        <ComboBox x:Name="HotkeyPicker" Width="220" HorizontalAlignment="Left"
+                  automation:AutomationProperties.Name="Dictation key" />
+        <TextBlock x:Name="HotkeyWarning" TextWrapping="Wrap" Margin="0,8,0,0"
+                   IsVisible="False" />
+
+        <Separator Margin="0,18" />
+
+        <CheckBox x:Name="SoundsToggle" Content="Play a sound when something needs attention" />
+        <TextBlock Text="Only when the words did not reach the field. Silence means it worked."
+                   Foreground="Gray" TextWrapping="Wrap" Margin="24,2,0,0" />
+
+        <CheckBox x:Name="LaunchToggle" Content="Start OpenRamble when I sign in" Margin="0,14,0,0" />
+
+        <Separator Margin="0,18" />
+
+        <TextBlock Text="Permissions" FontWeight="SemiBold" />
+        <TextBlock x:Name="PermissionTitle" Margin="0,6,0,0" />
+        <TextBlock x:Name="PermissionDetail" Foreground="Gray" TextWrapping="Wrap" Margin="0,2,0,6" />
+        <Button x:Name="PermissionButton" HorizontalAlignment="Left" Padding="12,4"
+                Click="OnPermissionAction" />
+      </StackPanel>
+    </TabItem>
+
+    <TabItem Header="Model">
+      <StackPanel Margin="16">
+        <TextBlock Text="Recognition language" FontWeight="SemiBold" />
+        <TextBlock Text="Automatic detects the language from the sound. Pick one only if detection keeps guessing wrong — mixed speech is better left automatic."
+                   Foreground="Gray" TextWrapping="Wrap" Margin="0,2,0,6" />
+        <ComboBox x:Name="LanguagePicker" Width="260" HorizontalAlignment="Left"
+                  automation:AutomationProperties.Name="Recognition language" />
+
+        <Separator Margin="0,18" />
+
+        <TextBlock x:Name="ModelTitle" FontWeight="SemiBold" />
+        <TextBlock x:Name="ModelDetail" Foreground="Gray" TextWrapping="Wrap" Margin="0,4,0,0" />
+        <ProgressBar x:Name="ModelProgress" Height="6" Margin="0,10,0,0" IsVisible="False"
+                     Minimum="0" Maximum="1" />
+        <TextBlock x:Name="ModelProgressLabel" Foreground="Gray" Margin="0,4,0,0"
+                   IsVisible="False" />
+        <StackPanel x:Name="ModelActions" Orientation="Horizontal" Margin="0,12,0,0" />
+      </StackPanel>
+    </TabItem>
+
+    <TabItem Header="Dictionary">
+      <DockPanel Margin="16">
+        <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="Gray"
+                   Text="Words the recognizer hears one way and you write another. Speak the phrase on the left; OpenRamble writes the text on the right." />
+        <TextBlock x:Name="DictionaryProblem" DockPanel.Dock="Top" TextWrapping="Wrap"
+                   Margin="0,8,0,0" IsVisible="False" />
+
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
+          <TextBox x:Name="SpokenBox" Width="180" automation:AutomationProperties.Name="Heard phrase" />
+          <TextBlock Text="→" Margin="8,4" />
+          <TextBox x:Name="WrittenBox" Width="180" automation:AutomationProperties.Name="Written text" />
+          <Button Content="Add" Margin="8,0,0,0" Padding="12,2" Click="OnAddReplacement" />
+          <Button Content="Remove selected" Margin="8,0,0,0" Padding="12,2" Click="OnRemoveReplacement" />
+        </StackPanel>
+
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
+          <Button Content="Import…" Padding="12,2" Click="OnImportDictionary" />
+          <Button Content="Export…" Margin="8,0,0,0" Padding="12,2" Click="OnExportDictionary" />
+        </StackPanel>
+
+        <!--
+          A ListBox with a two-column template where WPF has a ListView with a GridView. Avalonia
+          ships neither; the grid control that could do the header for us lives in a separate
+          package, and two columns of text is not worth a dependency. The header is the row of
+          labels below, kept in step with the template's own column widths by hand.
+        -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="240,*" Margin="4,12,0,4">
+          <TextBlock Grid.Column="0" Text="Heard" FontWeight="SemiBold" />
+          <TextBlock Grid.Column="1" Text="Written" FontWeight="SemiBold" />
+        </Grid>
+
+        <ListBox x:Name="ReplacementList"
+                 automation:AutomationProperties.Name="Replacement dictionary">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="core:DictionaryReplacement">
+              <Grid ColumnDefinitions="240,*">
+                <TextBlock Grid.Column="0" Text="{Binding Spoken}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1" Text="{Binding Written}" TextTrimming="CharacterEllipsis" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </TabItem>
+
+    <TabItem Header="Privacy">
+      <StackPanel Margin="16">
+        <TextBlock FontWeight="SemiBold" Text="Everything happens on this PC." />
+        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
+                   Text="Speech is recognized by a model that lives on this machine. No audio and no text is ever sent anywhere. The application makes exactly one kind of network request in its life: downloading the recognition model, when you ask it to." />
+        <TextBlock TextWrapping="Wrap" Margin="0,10,0,0"
+                   Text="There is no telemetry, no analytics and no crash reporting. Dictated words are never written to a log." />
+        <TextBlock TextWrapping="Wrap" Margin="0,10,0,0"
+                   Text="A recording is deleted the moment its text is inserted. Only a recording that failed — a crash, a disconnected microphone, a recognition error — is kept, on this PC, for a few days, so that words are never lost silently." />
+        <Button Content="Open recordings folder" HorizontalAlignment="Left" Padding="12,4"
+                Margin="0,12,0,0" Click="OnOpenRecordings" />
+
+        <Separator Margin="0,18" />
+
+        <TextBlock FontWeight="SemiBold" Text="Learning from your edits" />
+        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,6,0,6"
+                   Text="When this is on, OpenRamble re-reads the field it just inserted into — for half a minute, in that field only — and turns your corrections of terms into dictionary entries. It is off unless you switch it on, because it is the only feature that looks at the contents of another window." />
+        <CheckBox x:Name="LearnToggle" Content="Learn terms from my corrections" />
+      </StackPanel>
+    </TabItem>
+  </TabControl>
+</Window>

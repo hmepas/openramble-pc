@@ -59,6 +59,11 @@ download by importing the host's cached model): see
   so the bench tool records through exactly the code the app records with.
 - `src/OpenRamble.LinuxAudio` — the same capture against PipeWire, recording
   through a `pw-record` subprocess; the peer of the WASAPI one, same contract.
+- `src/OpenRamble.LinuxInput` — the Linux halves of the keyboard hook and the
+  text insertion: `/dev/input` for the hotkey, `wtype`/`wl-clipboard` for the
+  words.
+- `src/OpenRamble.App.Linux` — Avalonia shell and the remaining Linux adapters
+  (tray, overlay, XDG autostart); the peer of `src/OpenRamble.App`.
 - `src/AsrBench` — WER/CER measurement tool (`asr-bench`), and `asr-bench mic`
   to test microphone → capture → engine without the app (Windows and Linux).
 - `PORTING.md` — the Swift→C# conventions this port follows.

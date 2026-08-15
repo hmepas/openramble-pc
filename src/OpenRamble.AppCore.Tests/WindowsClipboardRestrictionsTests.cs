@@ -11,7 +11,7 @@ namespace OpenRamble.AppCore.Tests;
 /// dictated text - passwords, numbers, whatever the person said - has no business surviving in
 /// a store that outlives both the dictation and the application.
 /// </summary>
-public sealed class ClipboardRestrictionsTests
+public sealed class WindowsClipboardRestrictionsTests
 {
     /// <summary>
     /// The clipboard-history opt-out. Without it Win+V keeps the last 25 entries, dictation
@@ -20,7 +20,7 @@ public sealed class ClipboardRestrictionsTests
     [Fact]
     public void Scenario001()
     {
-        Assert.Contains(ClipboardRestrictions.CanIncludeInClipboardHistory, ClipboardRestrictions.RequiredFormats);
+        Assert.Contains(WindowsClipboardRestrictions.CanIncludeInClipboardHistory, WindowsClipboardRestrictions.RequiredFormats);
     }
 
     /// <summary>
@@ -30,7 +30,7 @@ public sealed class ClipboardRestrictionsTests
     [Fact]
     public void Scenario002()
     {
-        Assert.Contains(ClipboardRestrictions.CanUploadToCloudClipboard, ClipboardRestrictions.RequiredFormats);
+        Assert.Contains(WindowsClipboardRestrictions.CanUploadToCloudClipboard, WindowsClipboardRestrictions.RequiredFormats);
     }
 
     /// <summary>
@@ -42,23 +42,23 @@ public sealed class ClipboardRestrictionsTests
     public void Scenario003()
     {
         Assert.Contains(
-            ClipboardRestrictions.ExcludeFromMonitorProcessing,
-            ClipboardRestrictions.RequiredFormats);
+            WindowsClipboardRestrictions.ExcludeFromMonitorProcessing,
+            WindowsClipboardRestrictions.RequiredFormats);
     }
 
     /// <summary>All three, every time. A write missing any of them is a leak, not a nuisance.</summary>
     [Fact]
     public void Scenario004()
     {
-        Assert.Equal(3, ClipboardRestrictions.RequiredFormats.Count);
-        Assert.True(ClipboardRestrictions.IsRestricted(ClipboardRestrictions.RequiredFormats));
+        Assert.Equal(3, WindowsClipboardRestrictions.RequiredFormats.Count);
+        Assert.True(WindowsClipboardRestrictions.IsRestricted(WindowsClipboardRestrictions.RequiredFormats));
 
-        foreach (string omitted in ClipboardRestrictions.RequiredFormats)
+        foreach (string omitted in WindowsClipboardRestrictions.RequiredFormats)
         {
-            IEnumerable<string> incomplete = ClipboardRestrictions.RequiredFormats
+            IEnumerable<string> incomplete = WindowsClipboardRestrictions.RequiredFormats
                 .Where(format => format != omitted);
             Assert.False(
-                ClipboardRestrictions.IsRestricted(incomplete),
+                WindowsClipboardRestrictions.IsRestricted(incomplete),
                 $"a write without {omitted} must not be allowed to reach the clipboard");
         }
     }
@@ -72,19 +72,19 @@ public sealed class ClipboardRestrictionsTests
     {
         Assert.Equal(
             new byte[] { 0, 0, 0, 0 },
-            ClipboardRestrictions.PayloadFor(ClipboardRestrictions.CanIncludeInClipboardHistory));
+            WindowsClipboardRestrictions.PayloadFor(WindowsClipboardRestrictions.CanIncludeInClipboardHistory));
         Assert.Equal(
             new byte[] { 0, 0, 0, 0 },
-            ClipboardRestrictions.PayloadFor(ClipboardRestrictions.CanUploadToCloudClipboard));
+            WindowsClipboardRestrictions.PayloadFor(WindowsClipboardRestrictions.CanUploadToCloudClipboard));
         // The exclusion marker's presence is the whole message.
-        Assert.Empty(ClipboardRestrictions.PayloadFor(ClipboardRestrictions.ExcludeFromMonitorProcessing));
+        Assert.Empty(WindowsClipboardRestrictions.PayloadFor(WindowsClipboardRestrictions.ExcludeFromMonitorProcessing));
     }
 
     /// <summary>An unknown format has no payload to invent.</summary>
     [Fact]
     public void Scenario006()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => ClipboardRestrictions.PayloadFor("CF_UNICODETEXT"));
+        Assert.Throws<ArgumentOutOfRangeException>(() => WindowsClipboardRestrictions.PayloadFor("CF_UNICODETEXT"));
     }
 
     /// <summary>The names are the registered format names; a typo is a silent leak.</summary>
@@ -93,8 +93,8 @@ public sealed class ClipboardRestrictionsTests
     {
         Assert.Equal(
             "ExcludeClipboardContentFromMonitorProcessing",
-            ClipboardRestrictions.ExcludeFromMonitorProcessing);
-        Assert.Equal("CanIncludeInClipboardHistory", ClipboardRestrictions.CanIncludeInClipboardHistory);
-        Assert.Equal("CanUploadToCloudClipboard", ClipboardRestrictions.CanUploadToCloudClipboard);
+            WindowsClipboardRestrictions.ExcludeFromMonitorProcessing);
+        Assert.Equal("CanIncludeInClipboardHistory", WindowsClipboardRestrictions.CanIncludeInClipboardHistory);
+        Assert.Equal("CanUploadToCloudClipboard", WindowsClipboardRestrictions.CanUploadToCloudClipboard);
     }
 }

@@ -310,7 +310,7 @@ public sealed partial class KeyboardHook : IDisposable
 
         KeyEvent?.Invoke(new HotkeyEvent(virtualKey, isDown, HeldModifiers(), DateTimeOffset.UtcNow));
 
-        if (virtualKey == current.VirtualKey && suppress)
+        if (virtualKey == WindowsHotkeyKeymap.Instance.CodeFor(current) && suppress)
         {
             // Swallowed: 1 means "handled", and the event never reaches anyone else.
             return 1;

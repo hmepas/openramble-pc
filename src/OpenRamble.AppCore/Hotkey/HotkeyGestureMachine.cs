@@ -4,19 +4,25 @@ namespace OpenRamble.AppCore;
 /// Keyboard event without the hook.
 ///
 /// A gesture is a table "what happened + what came → what we are doing", and it has to be
-/// checked as a table. A <c>KBDLLHOOKSTRUCT</c> cannot be assembled in a test, so parsing the
-/// gesture works with this record and the hook turns its callback into one at the very edge.
+/// checked as a table. A <c>KBDLLHOOKSTRUCT</c> - or an <c>input_event</c> - cannot be assembled
+/// in a test, so parsing the gesture works with this record and the event source turns its
+/// callback into one at the very edge.
 /// </summary>
-/// <param name="VirtualKey">The <c>vkCode</c> the low-level hook reported.</param>
+/// <param name="KeyCode">
+/// The number this platform calls the key by: the <c>vkCode</c> a Windows low-level hook reports,
+/// the evdev keycode a Linux input device reports. Which of the two is meant is settled by the
+/// <see cref="IHotkeyKeymap"/> the machine was built with, and mixing the two would silently
+/// answer to the wrong physical key.
+/// </param>
 /// <param name="IsDown">Key-down (<c>WM_KEYDOWN</c>/<c>WM_SYSKEYDOWN</c>) or key-up.</param>
 /// <param name="HeldModifiers">
 /// Every chord modifier down at this moment, the hotkey's own included. On macOS this was a
-/// raw flags mask carrying keyboard side bits; Windows gives the side in
-/// <paramref name="VirtualKey"/>, so only the kinds are needed here.
+/// raw flags mask carrying keyboard side bits; both ported platforms give the side in
+/// <paramref name="KeyCode"/>, so only the kinds are needed here.
 /// </param>
 /// <param name="At">When the event happened.</param>
 public readonly record struct HotkeyEvent(
-    int VirtualKey,
+    int KeyCode,
     bool IsDown,
     HotkeyModifiers HeldModifiers,
     DateTimeOffset At);
@@ -85,13 +91,20 @@ public readonly record struct HotkeyAction
 /// Everything else is decided on the spot.
 /// </summary>
 /// <remarks>
+/// <para>
 /// One deviation from the macOS original, forced by the platform and only by it: there is a
 /// single entry point. AppKit delivers modifier changes and regular key presses on two
 /// separate monitors, so the original needed <c>handle(_:)</c> and <c>handleForeignKeyDown()</c>
-/// side by side. <c>WH_KEYBOARD_LL</c> is one stream carrying every key including modifiers,
-/// and splitting it back in two would invent a distinction the platform does not make. All
-/// the original's decisions survive; the shortcut abort now arrives through
+/// side by side. <c>WH_KEYBOARD_LL</c> is one stream carrying every key including modifiers - as
+/// is an evdev device - and splitting it back in two would invent a distinction neither platform
+/// makes. All the original's decisions survive; the shortcut abort now arrives through
 /// <see cref="Handle"/> as a foreign key-down.
+/// </para>
+/// <para>
+/// The machine compares numbers it never chooses: which number belongs to which key is
+/// <see cref="Keymap"/>'s, and the events fed to <see cref="Handle"/> must come from the same
+/// platform as that keymap.
+/// </para>
 /// </remarks>
 public sealed class HotkeyGestureMachine
 {
@@ -101,13 +114,23 @@ public sealed class HotkeyGestureMachine
     /// <summary>The current hold turned out to be a shortcut: releasing it means nothing.</summary>
     private bool abortedByShortcut;
 
-    public HotkeyGestureMachine(DictationHotkey hotkey, TimeSpan? doubleTapWindow = null)
+    public HotkeyGestureMachine(
+        DictationHotkey hotkey,
+        IHotkeyKeymap keymap,
+        TimeSpan? doubleTapWindow = null)
     {
         Hotkey = hotkey;
+        Keymap = keymap;
         DoubleTapWindow = doubleTapWindow ?? TimeSpan.FromSeconds(0.35);
     }
 
     public DictationHotkey Hotkey { get; private set; }
+
+    /// <summary>
+    /// The numbering the incoming events are written in. Fixed for the life of the machine: an
+    /// event source does not change platform mid-run.
+    /// </summary>
+    public IHotkeyKeymap Keymap { get; }
 
     /// <summary>
     /// Whether recording occurs without holding.
@@ -152,7 +175,7 @@ public sealed class HotkeyGestureMachine
 
     public HotkeyAction Handle(HotkeyEvent keyboardEvent)
     {
-        if (keyboardEvent.VirtualKey != Hotkey.VirtualKey)
+        if (keyboardEvent.KeyCode != Keymap.CodeFor(Hotkey))
         {
             return HandleForeignKey(keyboardEvent);
         }
@@ -239,7 +262,7 @@ public sealed class HotkeyGestureMachine
             return HotkeyAction.None;
         }
 
-        bool isModifier = IsModifierKey(keyboardEvent.VirtualKey);
+        bool isModifier = Keymap.IsModifierCode(keyboardEvent.KeyCode);
         if (isModifier && IsExclusivelyPressed(keyboardEvent.HeldModifiers))
         {
             return HotkeyAction.None;
@@ -258,13 +281,4 @@ public sealed class HotkeyGestureMachine
     /// background recording on every complex shortcut.
     /// </summary>
     private bool IsExclusivelyPressed(HotkeyModifiers held) => (held & ~Hotkey.Kind) == HotkeyModifiers.None;
-
-    private static bool IsModifierKey(int virtualKey) => virtualKey switch
-    {
-        0x10 or 0xA0 or 0xA1 => true, // VK_SHIFT, VK_LSHIFT, VK_RSHIFT
-        0x11 or 0xA2 or 0xA3 => true, // VK_CONTROL, VK_LCONTROL, VK_RCONTROL
-        0x12 or 0xA4 or 0xA5 => true, // VK_MENU, VK_LMENU, VK_RMENU
-        0x5B or 0x5C => true,         // VK_LWIN, VK_RWIN
-        _ => false,
-    };
 }

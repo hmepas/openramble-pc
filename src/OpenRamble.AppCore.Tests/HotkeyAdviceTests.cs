@@ -3,22 +3,28 @@ using OpenRamble.AppCore;
 namespace OpenRamble.AppCore.Tests;
 
 /// <summary>
-/// Ported from <c>FnKeyUsageTests</c>. Fn does not exist on Windows, so the subject is recast:
+/// Ported from <c>FnKeyUsageTests</c>. Fn does not exist on a PC, so the subject is recast:
 /// the question "what else already uses this key" is the same, the answers are the ones a PC
 /// keyboard can actually give.
 /// </summary>
 public sealed class HotkeyAdviceTests
 {
+    /// <summary>
+    /// The platform half of the copy. The classification above it is shared - Caps Lock shouts
+    /// and AltGr composes on every desktop - so only this sentence is chosen per platform.
+    /// </summary>
+    private const string WindowsHint = HotkeyAdvice.WindowsSettingsHint;
+
     [Fact]
     public void Scenario001()
     {
-        Assert.Equal(WindowsKeyUsage.Free, WindowsKeyUsageInfo.Of(DictationHotkey.RightCtrl, layoutHasAltGraph: true));
-        Assert.Equal(WindowsKeyUsage.AltGraph, WindowsKeyUsageInfo.Of(DictationHotkey.RightAlt, layoutHasAltGraph: true));
-        Assert.Equal(WindowsKeyUsage.Free, WindowsKeyUsageInfo.Of(DictationHotkey.RightAlt, layoutHasAltGraph: false));
-        Assert.Equal(WindowsKeyUsage.CapsLockToggle, WindowsKeyUsageInfo.Of(DictationHotkey.CapsLock, layoutHasAltGraph: false));
+        Assert.Equal(KeyUsage.Free, KeyUsageInfo.Of(DictationHotkey.RightCtrl, layoutHasAltGraph: true));
+        Assert.Equal(KeyUsage.AltGraph, KeyUsageInfo.Of(DictationHotkey.RightAlt, layoutHasAltGraph: true));
+        Assert.Equal(KeyUsage.Free, KeyUsageInfo.Of(DictationHotkey.RightAlt, layoutHasAltGraph: false));
+        Assert.Equal(KeyUsage.CapsLockToggle, KeyUsageInfo.Of(DictationHotkey.CapsLock, layoutHasAltGraph: false));
         Assert.Equal(
-            WindowsKeyUsage.MissingOnManyKeyboards,
-            WindowsKeyUsageInfo.Of(DictationHotkey.F13, layoutHasAltGraph: false));
+            KeyUsage.MissingOnManyKeyboards,
+            KeyUsageInfo.Of(DictationHotkey.F13, layoutHasAltGraph: false));
     }
 
     /// <summary>
@@ -28,20 +34,20 @@ public sealed class HotkeyAdviceTests
     [Fact]
     public void Scenario002()
     {
-        Assert.True(WindowsKeyUsage.Unknown.IsTakenBySystem);
-        Assert.True(WindowsKeyUsage.CapsLockToggle.IsTakenBySystem);
-        Assert.True(WindowsKeyUsage.AltGraph.IsTakenBySystem);
-        Assert.False(WindowsKeyUsage.Free.IsTakenBySystem);
+        Assert.True(KeyUsage.Unknown.IsTakenBySystem);
+        Assert.True(KeyUsage.CapsLockToggle.IsTakenBySystem);
+        Assert.True(KeyUsage.AltGraph.IsTakenBySystem);
+        Assert.False(KeyUsage.Free.IsTakenBySystem);
         // Not taken - absent. It earns a warning for a different reason.
-        Assert.False(WindowsKeyUsage.MissingOnManyKeyboards.IsTakenBySystem);
+        Assert.False(KeyUsage.MissingOnManyKeyboards.IsTakenBySystem);
     }
 
     /// <summary>The default choice never warns: only a person who picked otherwise gets here.</summary>
     [Fact]
     public void Scenario003()
     {
-        Assert.Null(HotkeyAdvice.Warning(DictationHotkey.RightCtrl, WindowsKeyUsage.Free));
-        Assert.Null(HotkeyAdvice.Warning(DictationHotkey.RightAlt, WindowsKeyUsage.Free));
+        Assert.Null(HotkeyAdvice.Warning(DictationHotkey.RightCtrl, KeyUsage.Free, WindowsHint));
+        Assert.Null(HotkeyAdvice.Warning(DictationHotkey.RightAlt, KeyUsage.Free, WindowsHint));
     }
 
     /// <summary>A key the system already uses: dictation and that action fire together.</summary>
@@ -49,11 +55,11 @@ public sealed class HotkeyAdviceTests
     public void Scenario004()
     {
         string caps = Assert.IsType<string>(
-            HotkeyAdvice.Warning(DictationHotkey.CapsLock, WindowsKeyUsage.CapsLockToggle));
+            HotkeyAdvice.Warning(DictationHotkey.CapsLock, KeyUsage.CapsLockToggle, WindowsHint));
         Assert.Contains("the caps lock toggle", caps, StringComparison.Ordinal);
 
         string altGraph = Assert.IsType<string>(
-            HotkeyAdvice.Warning(DictationHotkey.RightAlt, WindowsKeyUsage.AltGraph));
+            HotkeyAdvice.Warning(DictationHotkey.RightAlt, KeyUsage.AltGraph, WindowsHint));
         Assert.Contains("AltGr character composition", altGraph, StringComparison.Ordinal);
     }
 
@@ -62,7 +68,7 @@ public sealed class HotkeyAdviceTests
     public void Scenario005()
     {
         string warning = Assert.IsType<string>(
-            HotkeyAdvice.Warning(DictationHotkey.RightCtrl, WindowsKeyUsage.Unknown));
+            HotkeyAdvice.Warning(DictationHotkey.RightCtrl, KeyUsage.Unknown, WindowsHint));
         Assert.Contains("Right Ctrl", warning, StringComparison.Ordinal);
     }
 
@@ -77,7 +83,7 @@ public sealed class HotkeyAdviceTests
     public void Scenario006()
     {
         string warning = Assert.IsType<string>(
-            HotkeyAdvice.Warning(DictationHotkey.F13, WindowsKeyUsage.MissingOnManyKeyboards));
+            HotkeyAdvice.Warning(DictationHotkey.F13, KeyUsage.MissingOnManyKeyboards, WindowsHint));
         Assert.Contains("F13", warning, StringComparison.Ordinal);
     }
 
@@ -93,18 +99,18 @@ public sealed class HotkeyAdviceTests
     public void RightShiftIsFreeOnEveryLayoutAndNeverWarns()
     {
         Assert.Equal(
-            WindowsKeyUsage.Free,
-            WindowsKeyUsageInfo.Of(DictationHotkey.RightShift, layoutHasAltGraph: true));
+            KeyUsage.Free,
+            KeyUsageInfo.Of(DictationHotkey.RightShift, layoutHasAltGraph: true));
         Assert.Equal(
-            WindowsKeyUsage.Free,
-            WindowsKeyUsageInfo.Of(DictationHotkey.RightShift, layoutHasAltGraph: false));
-        Assert.Null(HotkeyAdvice.Warning(DictationHotkey.RightShift, WindowsKeyUsage.Free));
+            KeyUsage.Free,
+            KeyUsageInfo.Of(DictationHotkey.RightShift, layoutHasAltGraph: false));
+        Assert.Null(HotkeyAdvice.Warning(DictationHotkey.RightShift, KeyUsage.Free, WindowsHint));
     }
 
     /// <summary>
     /// Every offered key is classified, distinguishable and nameable.
     ///
-    /// A key that fell through to <see cref="WindowsKeyUsage.Unknown"/> would warn about "a system
+    /// A key that fell through to <see cref="KeyUsage.Unknown"/> would warn about "a system
     /// action" nobody can name; two keys sharing a virtual-key code would be one key wearing two
     /// names in the picker, and picking either would arm the other.
     /// </summary>
@@ -117,9 +123,11 @@ public sealed class HotkeyAdviceTests
         foreach (DictationHotkey hotkey in DictationHotkeyInfo.AllCases)
         {
             Assert.NotEqual(
-                WindowsKeyUsage.Unknown,
-                WindowsKeyUsageInfo.Of(hotkey, layoutHasAltGraph: false));
-            Assert.True(codes.Add(hotkey.VirtualKey), $"{hotkey.Title} shares a virtual-key code");
+                KeyUsage.Unknown,
+                KeyUsageInfo.Of(hotkey, layoutHasAltGraph: false));
+            Assert.True(
+                codes.Add(WindowsHotkeyKeymap.Instance.CodeFor(hotkey)),
+                $"{hotkey.Title} shares a key code");
             Assert.True(titles.Add(hotkey.Title), $"{hotkey.Title} is offered twice");
         }
 
@@ -132,5 +140,66 @@ public sealed class HotkeyAdviceTests
                 DictationHotkey.CapsLock,
             ],
             DictationHotkeyInfo.AllCases.Take(4));
+    }
+
+    // MARK: - The one sentence that is not shared
+
+    /// <summary>
+    /// The Windows warning is what it was before the platform split, to the character.
+    ///
+    /// The whole point of passing the sentence in is that nothing about the shipping copy moves;
+    /// a refactor that quietly reworded a warning people have already read would be the failure
+    /// this pins.
+    /// </summary>
+    [Fact]
+    public void TheWindowsWarningIsUnchangedByTheSplit()
+    {
+        Assert.Equal(
+            "Pressing Caps Lock already triggers the caps lock toggle — dictation and that "
+            + "action will fire together unless OpenRamble is allowed to swallow the key. "
+            + "To change this: Settings → Time & language → Typing.",
+            HotkeyAdvice.Warning(DictationHotkey.CapsLock, KeyUsage.CapsLockToggle, WindowsHint));
+    }
+
+    /// <summary>
+    /// Linux gets the same diagnosis and a different remedy - and no Windows Settings path.
+    /// </summary>
+    [Fact]
+    public void TheLinuxWarningKeepsTheDiagnosisAndChangesTheRemedy()
+    {
+        string warning = Assert.IsType<string>(HotkeyAdvice.Warning(
+            DictationHotkey.CapsLock,
+            KeyUsage.CapsLockToggle,
+            HotkeyAdvice.LinuxSettingsHint));
+
+        Assert.Contains("the caps lock toggle", warning, StringComparison.Ordinal);
+        Assert.EndsWith(HotkeyAdvice.LinuxSettingsHint, warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("Time & language", warning, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// No hint means no dangling sentence: the warning still says what is wrong and stops there,
+    /// rather than trailing off after "the key." with a space.
+    /// </summary>
+    [Fact]
+    public void AWarningWithoutAHintEndsCleanly()
+    {
+        string warning = Assert.IsType<string>(
+            HotkeyAdvice.Warning(DictationHotkey.RightAlt, KeyUsage.AltGraph, settingsHint: null));
+
+        Assert.Contains("AltGr character composition", warning, StringComparison.Ordinal);
+        Assert.EndsWith("swallow the key.", warning, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The F13 warning ignores the hint entirely: nothing has taken the key, so there is no
+    /// setting to send anybody to - the problem is that the keyboard cannot send it.
+    /// </summary>
+    [Fact]
+    public void TheHintOnlyReachesTheWarningThatNamesASystemAction()
+    {
+        Assert.Equal(
+            HotkeyAdvice.Warning(DictationHotkey.F13, KeyUsage.MissingOnManyKeyboards, WindowsHint),
+            HotkeyAdvice.Warning(DictationHotkey.F13, KeyUsage.MissingOnManyKeyboards, settingsHint: null));
     }
 }

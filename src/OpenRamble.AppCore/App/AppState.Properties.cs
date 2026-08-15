@@ -367,7 +367,7 @@ public sealed partial class AppState
 
     /// <summary>Warning about the selected key, if any.</summary>
     public string? HotkeyWarning =>
-        HotkeyAdvice.Warning(Hotkey, WindowsKeyUsageInfo.Of(Hotkey, layoutHasAltGraph()));
+        HotkeyAdvice.Warning(Hotkey, KeyUsageInfo.Of(Hotkey, layoutHasAltGraph()), hotkeySettingsHint);
 
     /// <summary>
     /// Can the dictionary be changed right now?

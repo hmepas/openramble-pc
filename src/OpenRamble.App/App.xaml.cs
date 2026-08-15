@@ -131,6 +131,7 @@ public partial class App : Application
             Clipboard = new HostOnlyClipboard(),
             Folders = new FolderOpening(),
             LayoutHasAltGraph = KeyboardLayoutFacts.HasAltGraph,
+            HotkeySettingsHint = HotkeyAdvice.WindowsSettingsHint,
         });
 
         state.OnInputLevel = level =>

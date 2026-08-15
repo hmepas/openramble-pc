@@ -637,6 +637,13 @@ public sealed class AppHarness : IDisposable
 
     public bool LayoutHasAltGraph { get; set; }
 
+    /// <summary>
+    /// The platform sentence appended to a hotkey warning. <c>null</c> by default, because the
+    /// fake environment is on no platform in particular and the shared half of the warning is
+    /// what nearly every test is about.
+    /// </summary>
+    public string? HotkeySettingsHint { get; set; }
+
     public AppState MakeState()
     {
         var state = new AppState(new AppEnvironment
@@ -669,6 +676,7 @@ public sealed class AppHarness : IDisposable
             Clipboard = Clipboard,
             Folders = Folders,
             LayoutHasAltGraph = () => LayoutHasAltGraph,
+            HotkeySettingsHint = HotkeySettingsHint,
         });
 
         built.Add(new WeakReference<AppState>(state));

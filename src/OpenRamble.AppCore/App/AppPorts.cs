@@ -82,10 +82,22 @@ public interface IHotkeyMonitoring
 /// Asking for the microphone and sending the person where they can grant it.
 /// </summary>
 /// <remarks>
+/// <para>
 /// macOS has an in-process consent prompt (<c>AVCaptureDevice.requestAccess</c>). A desktop
 /// Windows app has none: the answer is discovered by trying to open the device, and the only
 /// remedy is the Settings page. The shape stays the same so the flow - ask, then either come
-/// back to our window or hand over to Settings - is one piece of logic on both platforms.
+/// back to our window or hand over to Settings - is one piece of logic on every platform.
+/// </para>
+/// <para>
+/// <b>Linux has no consent store at all.</b> There is nothing to ask and nothing that remembers
+/// an answer: whether the microphone can be opened is decided by the PipeWire/PulseAudio session
+/// and by the <c>audio</c> group, and the only way to learn it is to open a device and see.
+/// <see cref="Request"/> there is a probe - open, read a moment of silence, close - and the
+/// honest result of a failed probe is a sentence naming the sound server, not a permission page.
+/// <see cref="OpenSettings"/> has no single page to open either; the same is already true of the
+/// hotkey advice, see <see cref="AppEnvironment.HotkeySettingsHint"/>. Documented here and not
+/// implemented here: this port is the shape, and the shape does not change.
+/// </para>
 /// </remarks>
 public interface IMicrophoneConsentFlow
 {
@@ -135,8 +147,11 @@ public interface ILaunchAtLoginService
 /// <summary>
 /// A clipboard write that stays on this machine.
 ///
-/// See <see cref="ClipboardRestrictions"/>: a plain write hands the dictation to Clipboard
-/// History and Cloud Clipboard, which outlive both the dictation and the application.
+/// What "stays" costs is the platform's business and is written down per platform: on Windows
+/// three registered formats, see <see cref="WindowsClipboardRestrictions"/>, without which the
+/// dictation goes to Clipboard History and Cloud Clipboard; on Linux there is no such marker to
+/// set, and the promise shrinks to what <see cref="LinuxClipboardRestrictions"/> can actually
+/// keep. The port is the same either way - one string in, nothing kept.
 /// </summary>
 public interface IHostOnlyClipboard
 {

@@ -681,6 +681,29 @@ public sealed class AppStateTests : IDisposable
         Assert.NotNull(state.HotkeyWarning);
     }
 
+    /// <summary>
+    /// The platform's own sentence reaches the warning, and only that sentence is the platform's.
+    ///
+    /// The warning is assembled inside AppCore, which is on no platform, so the one part of it
+    /// that names a Settings app has to be handed in - see
+    /// <see cref="AppEnvironment.HotkeySettingsHint"/>. A build that forgot to hand it in still
+    /// warns, correctly, and just stops short of saying where to go; that is the fallback this
+    /// pins alongside the wiring.
+    /// </summary>
+    [Fact]
+    public void TheHotkeyWarningCarriesThePlatformSettingsHint()
+    {
+        harness.HotkeySettingsHint = HotkeyAdvice.WindowsSettingsHint;
+        AppState state = harness.MakeState();
+
+        state.Hotkey = DictationHotkey.CapsLock;
+
+        Assert.EndsWith(
+            HotkeyAdvice.WindowsSettingsHint,
+            Assert.IsType<string>(state.HotkeyWarning),
+            StringComparison.Ordinal);
+    }
+
     /// <summary>Start at login is off until a person says otherwise.</summary>
     [Fact]
     public void LaunchAtLoginIsOffByDefaultAndReachesTheSystem()

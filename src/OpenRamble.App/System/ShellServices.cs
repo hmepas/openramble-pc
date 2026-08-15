@@ -52,7 +52,7 @@ public sealed class LaunchAtLogin : ILaunchAtLoginService
 /// </summary>
 /// <remarks>
 /// Delegates to <see cref="TextInserter"/> rather than repeating the Win32: the mandatory
-/// restriction formats (<see cref="ClipboardRestrictions"/>) must be identical on every write
+/// restriction formats (<see cref="WindowsClipboardRestrictions"/>) must be identical on every write
 /// this application makes, and two copies of that code are two chances for one of them to drift
 /// and leak a dictation into Clipboard History.
 /// </remarks>

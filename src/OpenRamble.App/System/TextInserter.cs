@@ -15,7 +15,7 @@ namespace OpenRamble.App;
 /// <c>SendInput</c> with <c>KEYEVENTF_UNICODE</c> does, so the common dictation never touches the
 /// clipboard at all: nothing to borrow, nothing to lose, nothing for a clipboard manager to see.
 /// The clipboard path stays for long text and carries the mandatory restrictions - see
-/// <see cref="ClipboardRestrictions"/>.
+/// <see cref="WindowsClipboardRestrictions"/>.
 ///
 /// <para>
 /// What macOS calls secure input, Windows calls UIPI: a window owned by a process at a higher
@@ -571,7 +571,7 @@ public sealed partial class TextInserter : ITextInserting
     ///
     /// Exposed for "Copy Last as Spoken" and the recent-dictation menu. It is the same code path
     /// on purpose: a second clipboard writer would be a second chance to forget
-    /// <see cref="ClipboardRestrictions"/> and leak a dictation into Clipboard History.
+    /// <see cref="WindowsClipboardRestrictions"/> and leak a dictation into Clipboard History.
     /// </summary>
     public static void CopyHostOnly(string text) => WriteDictationToClipboard(text);
 
@@ -592,9 +592,9 @@ public sealed partial class TextInserter : ITextInserting
             // The restrictions go on FIRST. A clipboard monitor watching the sequence number can
             // read the contents the moment the text lands, and a restriction registered after
             // that is a restriction registered too late.
-            foreach (string name in ClipboardRestrictions.RequiredFormats)
+            foreach (string name in WindowsClipboardRestrictions.RequiredFormats)
             {
-                PutBytes(RegisterClipboardFormatW(name), ClipboardRestrictions.PayloadFor(name));
+                PutBytes(RegisterClipboardFormatW(name), WindowsClipboardRestrictions.PayloadFor(name));
             }
 
             PutBytes(CfUnicodeText, System.Text.Encoding.Unicode.GetBytes(text + '\0'));

@@ -48,6 +48,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly IHostOnlyClipboard? clipboard;
     private readonly IFolderOpening? folders;
     private readonly Func<bool> layoutHasAltGraph;
+    private readonly string? hotkeySettingsHint;
     private readonly Func<DateTimeOffset> now;
     private readonly ReplacementsStore replacementsStore;
     private readonly EditLearningWatcher editWatcher;
@@ -80,6 +81,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         clipboard = environment.Clipboard;
         folders = environment.Folders;
         layoutHasAltGraph = environment.LayoutHasAltGraph ?? (static () => false);
+        hotkeySettingsHint = environment.HotkeySettingsHint;
         now = environment.Now ?? (static () => DateTimeOffset.Now);
         transcriber = environment.LocalTranscriber;
         editWatcher = new EditLearningWatcher(

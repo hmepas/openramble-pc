@@ -70,10 +70,23 @@ public sealed class AppEnvironment
     public IFolderOpening? Folders { get; init; }
 
     /// <summary>
-    /// Whether the active keyboard layout composes with Right Alt - the one fact
+    /// Whether the active keyboard layout composes with Right Alt - one of the two facts
     /// <see cref="HotkeyAdvice"/> cannot work out on its own.
     /// </summary>
     public Func<bool>? LayoutHasAltGraph { get; init; }
+
+    /// <summary>
+    /// The other one: the sentence that says where the system setting owning the key is changed.
+    /// <c>null</c> leaves the warning without it, which is what a platform with no single
+    /// settings page deserves.
+    /// </summary>
+    /// <remarks>
+    /// A string rather than a flag because the platform is the only thing that knows it, and it
+    /// is copy - <see cref="HotkeyAdvice.WindowsSettingsHint"/> and
+    /// <see cref="HotkeyAdvice.LinuxSettingsHint"/> are the two that ship. Every other word of
+    /// the warning is shared, because every other word is true on both.
+    /// </remarks>
+    public string? HotkeySettingsHint { get; init; }
 
     /// <summary>The clock. Injected so the residency and warm-up rules stay testable.</summary>
     public Func<DateTimeOffset>? Now { get; init; }

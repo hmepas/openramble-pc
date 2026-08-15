@@ -54,6 +54,73 @@ public sealed class AppPathsTests : IDisposable
         Assert.True(Directory.Exists(paths.AudioRecovery()));
     }
 
+    /// <summary>
+    /// The three folder names, spelled out.
+    ///
+    /// <see cref="Scenario001"/> checks that they sit under the support directory; this checks
+    /// what they are called, because the names are what a person's existing installation already
+    /// has on disk. Renaming one is not a refactor - it is a model nobody can find any more and a
+    /// recovered recording nobody is offered.
+    /// </summary>
+    [Fact]
+    public void TheThreeFoldersAreNamedExactly()
+    {
+        string support = Path.Combine(root, "OpenRamble");
+
+        Assert.Equal(support, paths.Support());
+        Assert.Equal(Path.Combine(support, "Models"), paths.Models());
+        Assert.Equal(Path.Combine(support, "Takes"), paths.Takes());
+        Assert.Equal(Path.Combine(support, "RecoveredAudio"), paths.AudioRecovery());
+    }
+
+    /// <summary>
+    /// On Linux the root is the XDG data directory: <c>~/.local/share/OpenRamble</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="AppPaths.Standard"/> asks for
+    /// <see cref="Environment.SpecialFolder.LocalApplicationData"/> and nothing else, which is the
+    /// whole reason the type needed no porting - but "it maps to the right place" is a claim about
+    /// the framework, not about this code, and an unchecked claim of that shape is how a build
+    /// ends up writing models into <c>~/.config</c>. So the mapping is pinned here, together with
+    /// the resulting paths in full.
+    /// </para>
+    /// <para>
+    /// The real profile is read and never written: <see cref="AppPaths.Standard"/> creates
+    /// nothing, and the paths below are composed rather than requested, so a test run leaves no
+    /// <c>OpenRamble</c> folder in the home directory of whoever ran it.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void OnLinuxTheStandardRootIsTheXdgDataDirectory()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        if (Environment.GetEnvironmentVariable("XDG_DATA_HOME") is { Length: > 0 } configured)
+        {
+            // A person who set the variable gets what they asked for; the default below is not
+            // something this machine can prove.
+            Assert.Equal(configured, local);
+        }
+        else
+        {
+            Assert.Equal($"{home}/.local/share", local);
+            // Spelled out rather than composed: these three strings are the promise, and a
+            // promise written as an expression over the code under test proves nothing.
+            Assert.Equal($"{home}/.local/share/OpenRamble/Models", Path.Combine(local, "OpenRamble", "Models"));
+            Assert.Equal($"{home}/.local/share/OpenRamble/Takes", Path.Combine(local, "OpenRamble", "Takes"));
+            Assert.Equal(
+                $"{home}/.local/share/OpenRamble/RecoveredAudio",
+                Path.Combine(local, "OpenRamble", "RecoveredAudio"));
+        }
+    }
+
     // MARK: - Backups
 
     /// <summary>

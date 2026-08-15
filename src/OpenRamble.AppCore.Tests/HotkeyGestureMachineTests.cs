@@ -8,7 +8,9 @@ namespace OpenRamble.AppCore.Tests;
 /// <remarks>
 /// The macOS test file starts with a table of modifier bit masks, because there the shared flag
 /// said "a key of this type is down" and a side bit said which one. Windows needs no such table:
-/// the code IS the side.
+/// the code IS the side. The gesture rules below are checked in these numbers because they were
+/// written in them; that they are the Windows numbers is <see cref="WindowsHotkeyKeymap"/>'s
+/// doing, and the same rules over the Linux numbers are checked in <c>HotkeyKeymapTests</c>.
 /// </remarks>
 file static class Vk
 {
@@ -27,17 +29,19 @@ public sealed class HotkeyGestureMachineTests
 {
     private static readonly DateTimeOffset Start = DateTimeOffset.UnixEpoch.AddSeconds(1_000_000);
 
+    private static readonly IHotkeyKeymap Keymap = WindowsHotkeyKeymap.Instance;
+
     private static HotkeyEvent Down(
         DictationHotkey hotkey,
         HotkeyModifiers held,
         double after = 0) =>
-        new(hotkey.VirtualKey, IsDown: true, held, Start.AddSeconds(after));
+        new(Keymap.CodeFor(hotkey), IsDown: true, held, Start.AddSeconds(after));
 
     private static HotkeyEvent Up(
         DictationHotkey hotkey,
         HotkeyModifiers held,
         double after = 0) =>
-        new(hotkey.VirtualKey, IsDown: false, held, Start.AddSeconds(after));
+        new(Keymap.CodeFor(hotkey), IsDown: false, held, Start.AddSeconds(after));
 
     private static HotkeyEvent Foreign(
         int virtualKey,
@@ -58,7 +62,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario001()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
 
         Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control)));
         Assert.Equal(
@@ -77,7 +81,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario002()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
 
         machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control));
         Assert.Equal(
@@ -98,7 +102,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario003()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
 
         Assert.Equal(
             HotkeyAction.None,
@@ -109,7 +113,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario004()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
 
         machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control));
         Assert.Equal(
@@ -127,7 +131,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario005()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl) { IsHandsFreeActive = true };
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap) { IsHandsFreeActive = true };
 
         Assert.Equal(HotkeyAction.None, machine.Handle(Foreign(Vk.LetterC, HotkeyModifiers.None)));
     }
@@ -137,7 +141,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario006()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
 
         Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control)));
         Assert.Equal(
@@ -148,7 +152,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario007()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
 
         Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control)));
         // Auto-repeat and other superfluous events: the gesture has already started, there is
@@ -167,7 +171,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario008()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
 
         Assert.Equal(HotkeyAction.None, machine.Handle(Foreign(Vk.LeftShift, HotkeyModifiers.Shift)));
         Assert.False(machine.IsHeld);
@@ -185,7 +189,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario009()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.F13);
+        var machine = new HotkeyGestureMachine(DictationHotkey.F13, Keymap);
 
         Assert.Equal(HotkeyAction.None, machine.Handle(Foreign(Vk.F12, HotkeyModifiers.None)));
         Assert.False(machine.IsHeld);
@@ -207,7 +211,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario010()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
 
         // The left Ctrl is already held: its events are filtered out by key code.
         Assert.Equal(HotkeyAction.None, machine.Handle(Foreign(Vk.LeftControl, HotkeyModifiers.Control)));
@@ -226,7 +230,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario011()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
 
         Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control)));
         Assert.Equal(
@@ -241,7 +245,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario012()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightAlt);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightAlt, Keymap);
 
         Assert.Equal(HotkeyAction.None, machine.Handle(Foreign(Vk.LeftMenu, HotkeyModifiers.Alt)));
         Assert.False(machine.IsHeld);
@@ -255,7 +259,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario013()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.CapsLock);
+        var machine = new HotkeyGestureMachine(DictationHotkey.CapsLock, Keymap);
 
         Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.CapsLock, HotkeyModifiers.None)));
         Assert.Equal(
@@ -263,7 +267,7 @@ public sealed class HotkeyGestureMachineTests
             machine.Handle(Up(DictationHotkey.CapsLock, HotkeyModifiers.None, after: 0.6)));
 
         // …and any modifier held alongside it means a shortcut, not dictation.
-        var chorded = new HotkeyGestureMachine(DictationHotkey.CapsLock);
+        var chorded = new HotkeyGestureMachine(DictationHotkey.CapsLock, Keymap);
         Assert.Equal(
             HotkeyAction.None,
             chorded.Handle(Down(DictationHotkey.CapsLock, HotkeyModifiers.Control)));
@@ -275,7 +279,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario014()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, TimeSpan.FromSeconds(0.35));
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap, TimeSpan.FromSeconds(0.35));
 
         Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control)));
         Assert.Equal(
@@ -289,7 +293,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario015()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, TimeSpan.FromSeconds(0.35));
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap, TimeSpan.FromSeconds(0.35));
 
         Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control)));
         Assert.Equal(
@@ -303,7 +307,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario016()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, TimeSpan.FromSeconds(0.35));
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap, TimeSpan.FromSeconds(0.35));
 
         Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control)));
         Assert.Equal(
@@ -326,7 +330,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario017()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl) { IsHandsFreeActive = true };
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap) { IsHandsFreeActive = true };
 
         Assert.Equal(
             HotkeyAction.StopHandsFree,
@@ -340,7 +344,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario018()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl) { IsHandsFreeActive = true };
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap) { IsHandsFreeActive = true };
 
         Assert.Equal(
             HotkeyAction.StopHandsFree,
@@ -363,7 +367,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario019()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
 
         Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control)));
         Assert.Equal(ReleaseAfter(0), machine.SetHotkey(DictationHotkey.CapsLock));
@@ -373,14 +377,14 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario020()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
         Assert.Equal(HotkeyAction.None, machine.SetHotkey(DictationHotkey.CapsLock));
     }
 
     [Fact]
     public void Scenario021()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl) { IsHandsFreeActive = true };
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap) { IsHandsFreeActive = true };
         machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control));
 
         // In this mode recording is stopped by a press, not by a release.
@@ -390,7 +394,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario022()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
         machine.SetHotkey(DictationHotkey.CapsLock);
 
         Assert.Equal(
@@ -404,7 +408,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void Scenario023()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl);
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
         machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control));
 
         machine.Reset();
@@ -422,13 +426,13 @@ public sealed class HotkeyGestureMachineTests
     public void Scenario024()
     {
         // The codes must differ: they are what filters out somebody else's events.
-        int[] codes = DictationHotkeyInfo.AllCases.Select(hotkey => hotkey.VirtualKey).ToArray();
+        int[] codes = DictationHotkeyInfo.AllCases.Select(Keymap.CodeFor).ToArray();
         Assert.Equal(codes.Length, codes.Distinct().Count());
 
-        Assert.Equal(Vk.RightControl, DictationHotkey.RightCtrl.VirtualKey);
-        Assert.Equal(Vk.RightMenu, DictationHotkey.RightAlt.VirtualKey);
-        Assert.Equal(Vk.Capital, DictationHotkey.CapsLock.VirtualKey);
-        Assert.Equal(Vk.F13, DictationHotkey.F13.VirtualKey);
+        Assert.Equal(Vk.RightControl, Keymap.CodeFor(DictationHotkey.RightCtrl));
+        Assert.Equal(Vk.RightMenu, Keymap.CodeFor(DictationHotkey.RightAlt));
+        Assert.Equal(Vk.Capital, Keymap.CodeFor(DictationHotkey.CapsLock));
+        Assert.Equal(Vk.F13, Keymap.CodeFor(DictationHotkey.F13));
 
         // A candidate must never be the LEFT twin of a modifier: the left keys carry the
         // shortcuts people actually type.
@@ -474,7 +478,7 @@ public sealed class HotkeyGestureMachineTests
     [Fact]
     public void TestPhantomInstantPressIsAShortHoldNotAHandsFreeToggle()
     {
-        var machine = new HotkeyGestureMachine(DictationHotkey.CapsLock);
+        var machine = new HotkeyGestureMachine(DictationHotkey.CapsLock, Keymap);
 
         Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.CapsLock, HotkeyModifiers.None)));
         Assert.Equal(

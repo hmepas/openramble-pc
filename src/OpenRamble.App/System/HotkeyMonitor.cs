@@ -15,7 +15,7 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
 {
     private readonly KeyboardHook hook = new();
     private readonly Lock gate = new();
-    private HotkeyGestureMachine machine = new(DictationHotkey.RightCtrl);
+    private HotkeyGestureMachine machine = new(DictationHotkey.RightCtrl, WindowsHotkeyKeymap.Instance);
     private CancellationTokenSource? pendingRelease;
 
     /// <summary>
@@ -123,7 +123,7 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
             configured = machine.Hotkey;
             // Auto-repeat resends the key-down for as long as it is held; only a change of side
             // is an edge.
-            if (keyboardEvent.VirtualKey == configured.VirtualKey
+            if (keyboardEvent.KeyCode == machine.Keymap.CodeFor(configured)
                 && keyboardEvent.IsDown != rawKeyDown)
             {
                 rawKeyDown = keyboardEvent.IsDown;

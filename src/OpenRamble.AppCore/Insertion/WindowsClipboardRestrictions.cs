@@ -1,7 +1,7 @@
 namespace OpenRamble.AppCore;
 
 /// <summary>
-/// What must accompany every clipboard write this application makes.
+/// What must accompany every clipboard write this application makes <b>on Windows</b>.
 ///
 /// The macOS original writes with <c>prepareForNewContents(with: .currentHostOnly)</c> plus the
 /// nspasteboard.org markers, because a plain <c>clearContents()</c> hands the dictation to the
@@ -16,10 +16,19 @@ namespace OpenRamble.AppCore;
 /// application. This is the Windows form of the mac rule, and it is not optional.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Only the names and the required payloads are here, because only they are policy. Registering
 /// the formats and pushing the bytes is <c>OpenRamble.App</c>'s job and needs Win32.
+/// </para>
+/// <para>
+/// Named for the platform, and it stays here in the neutral assembly for the same reason
+/// <see cref="WindowsHotkeyKeymap"/> does: a list of format names is data, and data that only
+/// Windows can compile is data nobody checks. The Linux half of the same question is
+/// <see cref="LinuxClipboardRestrictions"/>, and it is a different shape because Linux gives a
+/// different answer, not a smaller version of this one.
+/// </para>
 /// </remarks>
-public static class ClipboardRestrictions
+public static class WindowsClipboardRestrictions
 {
     /// <summary>
     /// Asks clipboard monitors and history providers not to process this entry at all. The

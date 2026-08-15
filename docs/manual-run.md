@@ -51,7 +51,7 @@ powershell -Command "Get-Content -Wait $env:USERPROFILE\Desktop\openramble-diag.
 ```
 
 For an installed copy there is `OpenRamble-diag.bat` (in `releases/`, next to
-`OpenRamble-win-Setup.exe`): it stops the running app and restarts it with the
+`OpenRamble-win-Setup-<version>.exe`): it stops the running app and restarts it with the
 log written next to the `.bat` itself - put both on a share, install from it,
 double-click the `.bat`, and read the log from any machine that sees the share.
 

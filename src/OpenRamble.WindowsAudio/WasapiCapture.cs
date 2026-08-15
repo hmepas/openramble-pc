@@ -421,7 +421,7 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
         {
             // Averaged, not picked: taking one channel of a stereo microphone throws away half
             // the voice, and on some laptops that half is the one facing the person.
-            samples = new StereoToMonoSampleProvider(samples) { LeftVolume = 0.5f, RightVolume = 0.5f };
+            samples = new AverageToMonoSampleProvider(samples);
         }
 
         IAudioSampleConverter? converter = MicrophoneCaptureFormat.Converter(
@@ -430,6 +430,53 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
             (_, target) => new WdlConverter(samples, (int)target.SampleRate));
 
         return converter is WdlConverter wdl ? wdl.Provider : samples;
+    }
+
+    /// <summary>
+    /// Any number of channels down to one, by averaging them.
+    /// </summary>
+    /// <remarks>
+    /// Not NAudio's <c>StereoToMonoSampleProvider</c>: that one insists on exactly two channels,
+    /// and a laptop's microphone array reports four in its shared-mode mix format. The first
+    /// machine outside the VM answered every dictation with "Source must be stereo" - the whole
+    /// product dead on a common laptop, for a check that only ever needed to be a division.
+    /// </remarks>
+    private sealed class AverageToMonoSampleProvider : ISampleProvider
+    {
+        private readonly ISampleProvider source;
+        private readonly int channels;
+        private float[] interleaved = [];
+
+        public AverageToMonoSampleProvider(ISampleProvider source)
+        {
+            this.source = source;
+            channels = source.WaveFormat.Channels;
+            WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(source.WaveFormat.SampleRate, 1);
+        }
+
+        public WaveFormat WaveFormat { get; }
+
+        public int Read(float[] buffer, int offset, int count)
+        {
+            int wanted = count * channels;
+            if (interleaved.Length < wanted) { interleaved = new float[wanted]; }
+
+            int read = source.Read(interleaved, 0, wanted);
+            int frames = read / channels;
+            for (int frame = 0; frame < frames; frame++)
+            {
+                float sum = 0;
+                int first = frame * channels;
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    sum += interleaved[first + channel];
+                }
+
+                buffer[offset + frame] = sum / channels;
+            }
+
+            return frames;
+        }
     }
 
     /// <summary>

@@ -16,6 +16,20 @@ public enum OnboardingStep
     TryIt = 2,
 }
 
+/// <summary>
+/// Which revision of the setup flow the app insists on.
+/// </summary>
+/// <remarks>
+/// A person who finished revision N is not shown the flow again by any later build - an update
+/// must never look like a first launch. Bump this number, and only this number, when a release
+/// genuinely needs returning users to walk through setup once more (a new required permission,
+/// a new model to fetch); the bump is the decision, made here, on purpose.
+/// </remarks>
+public static class OnboardingRevision
+{
+    public const int Current = 1;
+}
+
 public static class OnboardingStepInfo
 {
     public static IReadOnlyList<OnboardingStep> AllCases { get; } =

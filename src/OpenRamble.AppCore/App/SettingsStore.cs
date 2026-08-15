@@ -25,7 +25,12 @@ public sealed record AppSettings
     /// </summary>
     public bool LearnFromEdits { get; init; }
 
-    public bool OnboardingCompleted { get; init; }
+    /// <summary>
+    /// The revision of the setup flow the person has been through; <c>0</c> - never. Compared
+    /// against <see cref="OnboardingRevision.Current"/>, so an update shows the flow again only
+    /// when we decided it should - never merely because the version changed.
+    /// </summary>
+    public int OnboardingCompletedRevision { get; init; }
 }
 
 /// <summary>

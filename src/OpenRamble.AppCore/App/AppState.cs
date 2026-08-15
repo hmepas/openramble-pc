@@ -756,7 +756,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         {
             // A first launch already presents the setup window. A tray notice on top of it
             // duplicates the same work and competes for attention.
-            if (settings.OnboardingCompleted && !microphone)
+            if (OnboardingCompleted && !microphone)
             {
                 Notify(new DictationNotice(
                     DictationNoticeKind.Warning,

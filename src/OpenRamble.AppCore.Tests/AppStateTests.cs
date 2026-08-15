@@ -34,6 +34,26 @@ public sealed class AppStateTests : IDisposable
         Assert.DoesNotContain("disk space", message);
     }
 
+    // MARK: - Onboarding
+
+    /// <summary>
+    /// An update is not a first launch. The flow comes back only when this build asks for a newer
+    /// revision than the one the person finished - which is a decision made in code, on purpose.
+    /// </summary>
+    [Fact]
+    public void OnboardingReturnsOnlyWhenItsRevisionMovedOn()
+    {
+        harness.Settings.Write(new AppSettings { OnboardingCompletedRevision = OnboardingRevision.Current });
+        Assert.True(harness.MakeState().OnboardingCompleted);
+
+        harness.Settings.Write(new AppSettings { OnboardingCompletedRevision = OnboardingRevision.Current - 1 });
+        AppState state = harness.MakeState();
+        Assert.False(state.OnboardingCompleted);
+
+        state.OnboardingCompleted = true;
+        Assert.Equal(OnboardingRevision.Current, harness.Settings.Read().OnboardingCompletedRevision);
+    }
+
     // MARK: - Permissions
 
     [Fact]
@@ -50,7 +70,7 @@ public sealed class AppStateTests : IDisposable
     [Fact]
     public async Task ReturningUserSeesTheMissingPermissionNamed()
     {
-        harness.Settings.Write(new AppSettings { OnboardingCompleted = true });
+        harness.Settings.Write(new AppSettings { OnboardingCompletedRevision = OnboardingRevision.Current });
         harness.Permissions.MicrophoneGranted = false;
 
         _ = harness.MakeState();

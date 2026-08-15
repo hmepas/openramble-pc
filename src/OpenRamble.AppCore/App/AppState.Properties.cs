@@ -387,14 +387,20 @@ public sealed partial class AppState
     public bool CanCopyRawDictation =>
         CopyRawPolicy.CanCopyRaw(LastDictationValue?.Provenance.Raw, LastDictationValue?.InsertedText);
 
-    /// <summary>Has the person finished the first-launch flow?</summary>
+    /// <summary>
+    /// Has the person finished the setup flow - the revision this build asks for, not any older
+    /// one? See <see cref="OnboardingRevision"/>.
+    /// </summary>
     public bool OnboardingCompleted
     {
-        get { lock (gate) { return settings.OnboardingCompleted; } }
+        get { lock (gate) { return settings.OnboardingCompletedRevision >= OnboardingRevision.Current; } }
         set
         {
             if (OnboardingCompleted == value) { return; }
-            UpdateSettings(current => current with { OnboardingCompleted = value });
+            UpdateSettings(current => current with
+            {
+                OnboardingCompletedRevision = value ? OnboardingRevision.Current : 0,
+            });
             Raise();
         }
     }

@@ -268,11 +268,14 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
         string path = session.Writer.Close();
 
         bool released = await ReleaseDevice(session).ConfigureAwait(false);
+        (string peakDbfs, string rmsDbfs) = session.LevelsDbfs;
         DiagnosticLog.Emit(
             "capture.stop.end",
             ("session", session.Number),
             ("frames", session.Frames),
             ("samples", session.Samples),
+            ("peak_dbfs", peakDbfs),
+            ("rms_dbfs", rmsDbfs),
             ("audio_ms", duration),
             ("ms", Stopwatch.GetElapsedTime(began)),
             ("drained", drained),
@@ -670,6 +673,8 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
         private long frames;
         private long samples;
         private bool closed;
+        private float peak;
+        private double sumOfSquares;
 
         public Session(
             int number,
@@ -733,6 +738,24 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
         public long Frames => Interlocked.Read(ref frames);
 
         public long Samples => Interlocked.Read(ref samples);
+
+        /// <summary>
+        /// The take's level in dBFS - peak and RMS - as numbers for the log. Levels only: the
+        /// one thing that tells "the microphone is quiet" from "the person was quiet" from "the
+        /// device delivered zeros", and nothing from which a word could be rebuilt.
+        /// </summary>
+        public (string Peak, string Rms) LevelsDbfs
+        {
+            get
+            {
+                float p; double ss; long n;
+                lock (pullGate) { p = peak; ss = sumOfSquares; n = samples; }
+                return (Dbfs(p), n == 0 ? "-inf" : Dbfs(Math.Sqrt(ss / n)));
+            }
+        }
+
+        private static string Dbfs(double linear) =>
+            linear <= 0 ? "-inf" : Math.Round(20 * Math.Log10(linear)).ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         public bool IsClosed { get { lock (pullGate) { return closed; } } }
 
@@ -821,7 +844,10 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
 
                     var frame = new float[read];
                     Array.Copy(scratch, frame, read);
-                    peak = Math.Max(peak, Peak(frame));
+                    float framePeak = Peak(frame);
+                    peak = Math.Max(peak, framePeak);
+                    this.peak = Math.Max(this.peak, framePeak);
+                    foreach (float sample in frame) { sumOfSquares += (double)sample * sample; }
                     Deliver(frame);
                     Interlocked.Increment(ref frames);
                     Interlocked.Add(ref samples, read);

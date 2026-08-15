@@ -39,7 +39,7 @@ internal static class Program
             Environment variables:
               OPENRAMBLE_MODELS_ROOT     installation root (%LOCALAPPDATA%\OpenRambleData\Models default)
               OPENRAMBLE_MODEL_DIR       engine folder past the storage (for measurements)
-              OPENRAMBLE_ASR_PRECISION   int8 (default) | float32
+              OPENRAMBLE_ASR_PRECISION   int8 (default) | float32 | int4 (weight-only, see scripts/quantize-parakeet-int4.py)
               OPENRAMBLE_ASR_PROVIDER    cpu (default) | cuda | directml
               OPENRAMBLE_ASR_THREADS     intra-op threads (default: product value, 4)
               OPENRAMBLE_ASR_DECODING    greedy_search (default) | modified_beam_search
@@ -322,9 +322,12 @@ internal static class Program
             engineDirectory = layout.EngineDirectory;
         }
 
-        EncoderPrecision precision = Choice("OPENRAMBLE_ASR_PRECISION", "int8", "float32") == "float32"
-            ? EncoderPrecision.Float32
-            : EncoderPrecision.Int8;
+        EncoderPrecision precision = Choice("OPENRAMBLE_ASR_PRECISION", "int8", "float32", "int4") switch
+        {
+            "float32" => EncoderPrecision.Float32,
+            "int4" => EncoderPrecision.Int4WeightOnly,
+            _ => EncoderPrecision.Int8,
+        };
         string provider = Choice("OPENRAMBLE_ASR_PROVIDER", "cpu", "cuda", "directml") ?? "cpu";
         string decoding =
             Choice("OPENRAMBLE_ASR_DECODING", "greedy_search", "modified_beam_search")

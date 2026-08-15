@@ -23,6 +23,20 @@ public enum EncoderPrecision
 
     /// <summary>The unquantized export. Kept so the two can be measured against each other.</summary>
     Float32,
+
+    /// <summary>
+    /// Our own build: the fp32 export with the encoder's matrix weights in 4-bit blocks
+    /// (<c>MatMulNBits</c>), activations left in fp32. Made by
+    /// <c>scripts/quantize-parakeet-int4.py</c>.
+    /// </summary>
+    /// <remarks>
+    /// The int8 export is dynamically quantized - the activations, the convolutional front end
+    /// included, are cut to 8 bits at run time - and on a quiet laptop microphone it answered
+    /// Russian speech with nothing or with English filler while fp32 read the same take. This
+    /// keeps fp32's accuracy at int8's size and speed: on FLEURS ru dev, WER 5.5% against int8's
+    /// 7.3% and fp32's 5.4%.
+    /// </remarks>
+    Int4WeightOnly,
 }
 
 /// <summary>
@@ -180,10 +194,12 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
     /// the same directory. It is listed here because a directory holding <c>encoder.onnx</c>
     /// without it is exactly the half-installation this check exists to reject.
     /// </remarks>
-    internal static IReadOnlyList<string> RequiredFiles(EncoderPrecision precision) =>
-        precision == EncoderPrecision.Int8
-            ? ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"]
-            : ["encoder.onnx", "encoder.weights", "decoder.onnx", "joiner.onnx", "tokens.txt"];
+    internal static IReadOnlyList<string> RequiredFiles(EncoderPrecision precision) => precision switch
+    {
+        EncoderPrecision.Int8 => ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"],
+        EncoderPrecision.Int4WeightOnly => ["encoder.int4.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"],
+        _ => ["encoder.onnx", "encoder.weights", "decoder.onnx", "joiner.onnx", "tokens.txt"],
+    };
 
     /// <summary>
     /// Load the model from the prepared directory.
@@ -254,8 +270,12 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
     {
         bool quantized = precision == EncoderPrecision.Int8;
         var config = new OfflineRecognizerConfig();
-        config.ModelConfig.Transducer.Encoder =
-            Path.Combine(directory, quantized ? "encoder.int8.onnx" : "encoder.onnx");
+        config.ModelConfig.Transducer.Encoder = Path.Combine(directory, precision switch
+        {
+            EncoderPrecision.Int8 => "encoder.int8.onnx",
+            EncoderPrecision.Int4WeightOnly => "encoder.int4.onnx",
+            _ => "encoder.onnx",
+        });
         config.ModelConfig.Transducer.Decoder =
             Path.Combine(directory, quantized ? "decoder.int8.onnx" : "decoder.onnx");
         config.ModelConfig.Transducer.Joiner =

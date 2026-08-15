@@ -302,6 +302,9 @@ public sealed class LocalTranscriber
                 }
             }
 
+            // In place: the buffer is this dictation's and nobody reads it after the engine.
+            // See InputGain for the numbers behind it.
+            _ = InputGain.Normalize(samples);
             return await engine.Transcribe(samples, languageHint).ConfigureAwait(false);
         }
         finally

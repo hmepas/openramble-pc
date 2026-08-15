@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using DictationCore;
 using LocalASR;
@@ -63,6 +64,10 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private bool isRecoveryOperationActive;
     private DictationNotice? noticeAfterSession;
     private bool disposed;
+
+    /// <summary>The loudest sample of the running take, for <see cref="MicrophoneLevelHint"/>.</summary>
+    private float takePeak;
+    private bool microphoneLevelHintShown;
 
     public AppState(AppEnvironment environment)
     {
@@ -141,6 +146,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                         peak = Math.Max(peak, Math.Abs(sample));
                     }
 
+                    lock (gate) { takePeak = Math.Max(takePeak, peak); }
                     OnInputLevel?.Invoke(peak);
                 });
 
@@ -155,7 +161,41 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             Func<string?> languageHint = () => RecognitionLanguage;
             Func<float[], CancellationToken, Task<ASRResult>>? transcribeSamples = transcriber is null
                 ? null
-                : (samples, token) => transcriber.Transcribe(samples, languageHint(), token);
+                : async (samples, token) =>
+                {
+                    // The path every dictation actually takes: the file path in the composition
+                    // root logs its own transcribe.* events, and this one said nothing - which
+                    // left "Nothing was recognized" with no line about what the engine was
+                    // handed or how it answered. Counts and durations only, never the words.
+                    int session = DiagnosticLog.Session;
+                    long began = Stopwatch.GetTimestamp();
+                    DiagnosticLog.Emit(
+                        "transcribe.begin",
+                        ("session", session),
+                        ("language", languageHint() ?? "auto"),
+                        ("audio_ms", samples.Length / 16),
+                        ("peak_dbfs", MicrophoneLevelHint.Decibels(InputGain.Peak(samples))));
+                    try
+                    {
+                        ASRResult result = await transcriber.Transcribe(samples, languageHint(), token).ConfigureAwait(false);
+                        DiagnosticLog.Emit(
+                            "transcribe.end",
+                            ("session", session),
+                            ("ms", Stopwatch.GetElapsedTime(began)),
+                            ("chars", result.Text.Length),
+                            ("words", result.Words.Count));
+                        return result;
+                    }
+                    catch (Exception error)
+                    {
+                        DiagnosticLog.EmitException(
+                            "transcribe.failed",
+                            error,
+                            ("session", session),
+                            ("ms", Stopwatch.GetElapsedTime(began)));
+                        throw;
+                    }
+                };
 
             var built = new DictationController(
                 capture,
@@ -187,7 +227,13 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 // The person just pressed the key and is about to speak for seconds: if the
                 // engine sat idle long enough for the system to reclaim it, reload it now, under
                 // their voice, instead of after it.
-                if (state == DictationState.Preparing) { WarmEngineUnderVoiceIfCold(); }
+                if (state == DictationState.Preparing)
+                {
+                    lock (gate) { takePeak = 0f; }
+                    WarmEngineUnderVoiceIfCold();
+                }
+
+                if (state == DictationState.Transcribing) { JudgeMicrophoneLevel(); }
 
                 // A finished session is a residency event: the engine just became safely idle,
                 // and a deferred unload may now proceed.
@@ -207,8 +253,14 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 }
 
                 // The kernel explained itself. Our own explanation on top of its words would be
-                // worse than silence: a session has one reason for ending, not two.
-                lock (gate) { noticeAfterSession = null; }
+                // worse than silence: a session has one reason for ending, not two. The one
+                // exception is an Info - "Nothing was recognized" - when the explanation waiting
+                // is the microphone level: that IS the reason, and the person needs it more than
+                // the symptom.
+                if (notice.Kind != DictationNoticeKind.Info)
+                {
+                    lock (gate) { noticeAfterSession = null; }
+                }
             };
             built.OnHandsFreeChange = active =>
             {
@@ -650,6 +702,29 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         if (DictationStateValue != DictationState.Listening) { return; }
         controller?.PreserveActiveRecording(
             "The microphone or audio device was disconnected. Dictation stopped.");
+    }
+
+    /// <summary>
+    /// The take is closed - was it loud enough to work with? Judged once per run, at the moment
+    /// the microphone stops, and said after the session so it does not cover "Transcribing…".
+    /// </summary>
+    private void JudgeMicrophoneLevel()
+    {
+        float peak;
+        lock (gate)
+        {
+            peak = takePeak;
+            DiagnosticLog.Emit(
+                "capture.level",
+                ("session", DiagnosticLog.Session),
+                ("peak_dbfs", MicrophoneLevelHint.Decibels(peak)));
+            if (microphoneLevelHintShown || !MicrophoneLevelHint.IsTooQuiet(peak)) { return; }
+
+            microphoneLevelHintShown = true;
+            noticeAfterSession = new DictationNotice(
+                DictationNoticeKind.Warning,
+                MicrophoneLevelHint.Message(peak));
+        }
     }
 
     /// <summary>

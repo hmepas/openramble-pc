@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>OpenRamble.LinuxInput</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The Linux half of the two things the shell does to the rest of the desktop: watch the
+      dictation key everywhere, and put the recognized text into somebody else's window. Its peers
+      on the other platform are OpenRamble.App's KeyboardHook/HotkeyMonitor and TextInserter, which
+      cannot be a library because they are Win32; this one can, because everything it touches is a
+      device file or a subprocess. So it is one - and the whole wave is testable before the
+      Avalonia shell that will consume it exists.
+
+      The playbook puts these adapters in the future src/OpenRamble.App.Linux. This project is that
+      code, extracted, and the shell will reference it rather than re-implement it.
+    -->
+    <ProjectReference Include="../OpenRamble.AppCore/OpenRamble.AppCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The device seam and the subprocess seam are internal for the reason PipeWireCapture's
+      recorder is: they are this assembly's vocabulary for talking to the kernel and to
+      wl-clipboard, not a contract anyone else may build on. The tests drive both, which is the
+      only way the permission failure, the hotplug rescan and the clipboard restore can be checked
+      on a machine that is not the one the product runs on.
+    -->
+    <InternalsVisibleTo Include="OpenRamble.LinuxInput.Tests" />
+  </ItemGroup>
+
+</Project>

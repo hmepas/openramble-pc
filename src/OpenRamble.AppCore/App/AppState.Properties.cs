@@ -235,7 +235,8 @@ public sealed partial class AppState
     /// A hook the system refuses to install is the one failure with no symptom of its own: every
     /// callback simply stays quiet for the life of the process, which looks exactly like a person
     /// who is not pressing anything. The notice that announces it lives four seconds; this
-    /// outlives it, so the try-out step can say so for as long as it is true.
+    /// outlives it, so the try-out step can say so for as long as it is true - and no longer:
+    /// the first edge that does arrive, whatever road it took, clears it.
     /// </remarks>
     public string? HotkeyTrackingFailure
     {

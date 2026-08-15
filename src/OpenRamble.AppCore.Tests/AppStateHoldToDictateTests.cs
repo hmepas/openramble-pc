@@ -154,6 +154,27 @@ public sealed class AppStateHoldToDictateTests : IDisposable
     }
 
     /// <summary>
+    /// The first edge that arrives clears the kept failure.
+    ///
+    /// The failure is kept "for as long as it is true", and an edge is the one thing that makes
+    /// it false: however the key traveled - a hook that recovered, a rescan that finally opened
+    /// a device, a compositor keybind feeding the control socket - it demonstrably reaches
+    /// OpenRamble. On Linux without the `input` group this is the moment the try-out step stops
+    /// telling a person with working compositor binds that their dictation key does nothing.
+    /// </summary>
+    [Fact]
+    public void AnArrivingEdgeClearsTheKeptTrackingFailure()
+    {
+        AppState state = harness.MakeState();
+        Monitor.OnTrackingFailure!("OpenRamble couldn't start watching the dictation key.");
+        Assert.NotNull(state.HotkeyTrackingFailure);
+
+        Monitor.OnHotkeyDown!();
+
+        Assert.Null(state.HotkeyTrackingFailure);
+    }
+
+    /// <summary>
     /// Picking a key inside the first-launch flow arms it at once and survives a restart.
     ///
     /// The picker is on the try-out page precisely because that is where a key that does not

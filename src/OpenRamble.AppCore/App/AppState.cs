@@ -362,6 +362,11 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         {
             HotkeyPressCount += 1;
             IsHotkeyHeld = true;
+            // An edge is the one proof the kept failure lacks. However it traveled - a hook
+            // that recovered, a rescan that finally opened a device, a compositor keybind
+            // feeding the control socket - the key demonstrably reaches OpenRamble, and a
+            // message saying it does nothing has just stopped being true.
+            HotkeyTrackingFailure = null;
         };
         hotkeyMonitor.OnHotkeyUp = () => IsHotkeyHeld = false;
         hotkeyMonitor.OnTrackingFailure = reason =>

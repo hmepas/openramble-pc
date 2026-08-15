@@ -29,10 +29,11 @@ namespace OpenRamble.App.Linux;
 /// <b>There is no settings page, and <see cref="OpenSettings"/> says so by doing nothing.</b> The
 /// remedies for a failed probe are starting PipeWire, plugging a microphone in, or joining a
 /// group - none of which is a page any desktop agrees on the name of. This is the same shape of
-/// missing answer as <see cref="HotkeyAdvice.LinuxSettingsHint"/>, and it is a gap: the state
-/// machine in <see cref="AppState"/> moves to
-/// <see cref="MicrophoneConsentState.WaitingForSettings"/> after a refused request, whose copy
-/// promises a Settings window that will not have opened.
+/// missing answer as <see cref="HotkeyAdvice.LinuxSettingsHint"/>. The state machine in
+/// <see cref="AppState"/> still moves to
+/// <see cref="MicrophoneConsentState.WaitingForSettings"/> after a refused request - the state is
+/// "we asked and were told no", which is true here - and what the person is told there is
+/// <see cref="MicrophoneRemedy.Linux"/>: check the device, then try again.
 /// </para>
 /// </remarks>
 public sealed class LinuxMicrophoneAccess : IPermissionReading, IMicrophoneConsentFlow

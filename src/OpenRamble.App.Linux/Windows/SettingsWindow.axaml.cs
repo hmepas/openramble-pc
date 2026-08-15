@@ -115,7 +115,8 @@ public sealed partial class SettingsWindow : Window
             state.MicrophoneState,
             state.MicrophoneGranted
                 ? "OpenRamble can hear you. It listens only while you hold the dictation key."
-                : "Dictation cannot start without it. OpenRamble opens the microphone only while you hold the dictation key.");
+                : "Dictation cannot start without it. OpenRamble opens the microphone only while you hold the dictation key.",
+            state.MicrophoneRemedy);
 
         PermissionTitle.Text = $"{permission.Title} — {permission.AccessibilityValue}";
         PermissionDetail.Text = permission.Detail;

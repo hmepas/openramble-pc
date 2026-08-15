@@ -644,6 +644,13 @@ public sealed class AppHarness : IDisposable
     /// </summary>
     public string? HotkeySettingsHint { get; set; }
 
+    /// <summary>
+    /// The platform's microphone sentences. Windows by default, unlike the hotkey hint above: the
+    /// scenarios were ported against the Windows copy and go on pinning it, and a test about the
+    /// other platform says so by assigning this.
+    /// </summary>
+    public MicrophoneRemedy MicrophoneRemedy { get; set; } = MicrophoneRemedy.Windows;
+
     public AppState MakeState()
     {
         var state = new AppState(new AppEnvironment
@@ -677,6 +684,7 @@ public sealed class AppHarness : IDisposable
             Folders = Folders,
             LayoutHasAltGraph = () => LayoutHasAltGraph,
             HotkeySettingsHint = HotkeySettingsHint,
+            MicrophoneRemedy = MicrophoneRemedy,
         });
 
         built.Add(new WeakReference<AppState>(state));

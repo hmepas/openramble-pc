@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=OpenRamble
+GenericName=Dictation
+Comment=Hold a key, speak, let go
+# The name on PATH, not a path: a package puts a symlink there, and a tarball is unpacked
+# wherever its owner likes - an absolute path here would be wrong for one of the two.
+Exec=openramble
+TryExec=openramble
+Icon=openramble
+Terminal=false
+Categories=Utility;Accessibility;
+Keywords=dictation;speech;transcription;voice;
+# The application lives in the tray and shows no window on launch; a startup spinner waiting for
+# one would spin until it timed out.
+StartupNotify=false

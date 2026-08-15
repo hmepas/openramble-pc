@@ -365,6 +365,14 @@ public sealed partial class AppState
     public bool IsDictationReady =>
         MicrophoneGranted && ModelStateValue.IsReady && (IsEngineReady || HasEngineBeenReady);
 
+    /// <summary>
+    /// The platform's microphone sentences, for the two screens that draw the permission line.
+    ///
+    /// Handed on rather than re-read from the platform by each window: the composition root is
+    /// where a build says which platform it is, and it says it once.
+    /// </summary>
+    public MicrophoneRemedy MicrophoneRemedy => microphoneRemedy;
+
     /// <summary>Warning about the selected key, if any.</summary>
     public string? HotkeyWarning =>
         HotkeyAdvice.Warning(Hotkey, KeyUsageInfo.Of(Hotkey, layoutHasAltGraph()), hotkeySettingsHint);

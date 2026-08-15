@@ -27,11 +27,33 @@ public sealed class AppStateTests : IDisposable
     public void Scenario001()
     {
         string message = AppState.CaptureFailureMessage(
-            new AudioCaptureError.UnsupportedAudioFormat("48 kHz stereo couldn't be converted"));
+            new AudioCaptureError.UnsupportedAudioFormat("48 kHz stereo couldn't be converted"),
+            MicrophoneRemedy.Windows);
 
         Assert.Contains("audio format", message);
         Assert.Contains("48 kHz stereo", message);
         Assert.DoesNotContain("disk space", message);
+    }
+
+    /// <summary>
+    /// A refused microphone is the one capture failure whose remedy belongs to a platform.
+    ///
+    /// The Windows sentence is pinned here by its words, because it is what ships on Windows and
+    /// no test of ours runs there; the Linux one is checked for what it must not say - there is no
+    /// Settings page on that side to send anybody to. See <see cref="MicrophoneRemedy"/>.
+    /// </summary>
+    [Fact]
+    public void TheRefusalMessageIsThePlatformsOwn()
+    {
+        var refused = new AudioCaptureError.MicrophonePermissionDenied();
+
+        Assert.Equal(
+            "No microphone access. Open Windows Settings.",
+            AppState.CaptureFailureMessage(refused, MicrophoneRemedy.Windows));
+        Assert.DoesNotContain(
+            "Windows",
+            AppState.CaptureFailureMessage(refused, MicrophoneRemedy.Linux),
+            StringComparison.Ordinal);
     }
 
     // MARK: - Permissions
@@ -59,6 +81,27 @@ public sealed class AppStateTests : IDisposable
         Assert.Equal(
             "Dictation is off: grant Microphone access in Windows Settings.",
             Overlay.Notices[0].Message);
+    }
+
+    /// <summary>
+    /// The same notice on the other platform, in words that are true there.
+    ///
+    /// The sentence pinned above is Windows', and this is the whole extent of the difference:
+    /// nothing was granted on Linux, so nothing can be revoked and there is no page to be sent to.
+    /// Every other word of the permission story is shared.
+    /// </summary>
+    [Fact]
+    public async Task TheMissingPermissionNoticeIsThePlatformsOwn()
+    {
+        harness.MicrophoneRemedy = MicrophoneRemedy.Linux;
+        harness.Settings.Write(new AppSettings { OnboardingCompleted = true });
+        harness.Permissions.MicrophoneGranted = false;
+
+        _ = harness.MakeState();
+        await TestWait.For("the notice reached the panel", () => Overlay.Notices.Count > 0);
+
+        Assert.Equal(MicrophoneRemedy.Linux.DictationIsOff, Overlay.Notices[0].Message);
+        Assert.DoesNotContain("Windows", Overlay.Notices[0].Message, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -1,0 +1,42 @@
+# Two things about this application cannot be arranged by a package: a group membership and,
+# on some desktops, a second typing tool. Both are silent failures at the moment they matter -
+# a key that never arrives, a sentence that is never typed - so they are said here, once,
+# where a person is still looking at the terminal.
+
+post_install() {
+    cat <<'MESSAGE'
+
+OpenRamble reads the dictation key straight from /dev/input: no Wayland protocol
+reports a key being held, so there is nothing else to read it from. That needs
+the "input" group -
+
+    sudo gpasswd -a "$USER" input
+
+- and a fresh login for it to take effect. Without it the application starts,
+says so in the tray, and never sees the key.
+
+Typing into other people's windows goes through wtype, which needs the
+compositor's virtual-keyboard protocol: Sway, Hyprland, KDE and the wlroots
+desktops have it, GNOME and X11 sessions do not. There, install ydotool and let
+its daemon run:
+
+    sudo pacman -S ydotool
+    systemctl --user enable --now ydotool
+
+ydotool types through /dev/uinput. If its daemon cannot open that, the usual
+remedy is /etc/udev/rules.d/99-uinput.rules -
+
+    KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"
+
+- followed by: sudo udevadm control --reload && sudo modprobe uinput
+
+The recognition model (~670 MB) is not in this package. The application
+downloads it on first launch, and that download is the only network access it
+has: no audio and no text ever leaves the machine.
+
+MESSAGE
+}
+
+post_upgrade() {
+    post_install
+}

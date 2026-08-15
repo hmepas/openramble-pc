@@ -132,6 +132,7 @@ public partial class App : Application
             Folders = new FolderOpening(),
             LayoutHasAltGraph = KeyboardLayoutFacts.HasAltGraph,
             HotkeySettingsHint = HotkeyAdvice.WindowsSettingsHint,
+            MicrophoneRemedy = MicrophoneRemedy.Windows,
         });
 
         state.OnInputLevel = level =>

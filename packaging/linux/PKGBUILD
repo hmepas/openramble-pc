@@ -1,0 +1,64 @@
+# Maintainer: hmepas <hmepas@gmail.com>
+#
+# A binary package: it unpacks the release archive that scripts/package-linux.sh builds, and
+# compiles nothing. The application is a self-contained .NET publish - the runtime travels with
+# it - so what the dependencies below cover is the system libraries that publish still dlopens
+# and the desktop tools the product shells out to.
+#
+# Per release: bump pkgver to the version stamped by scripts/package-linux.sh (0.1.<commits>),
+# reset pkgrel to 1, and run `updpkgsums` once the archive is attached to the GitHub release.
+
+pkgname=openramble-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Private, local dictation: hold a key, speak, let go (Linux port of OpenRamble)"
+arch=('x86_64')
+url="https://github.com/hmepas/openramble-windows"
+license=('MIT')
+depends=(
+    # What the .NET runtime and Skia load at run time. The publish carries the runtime itself but
+    # not these: globalization is ICU, TLS is the system OpenSSL, and text is drawn through the
+    # system's fontconfig (which brings freetype, expat, brotli, libpng and bzip2 with it).
+    'glibc' 'gcc-libs' 'icu' 'openssl' 'zlib' 'fontconfig'
+    # Avalonia draws through X11 - directly, or through XWayland under a Wayland session.
+    'libx11' 'libxext' 'libxi' 'libxrandr' 'libxcursor' 'libxfixes'
+    # The three tools the product runs: pw-record to record, wl-copy/wl-paste for the clipboard,
+    # wtype to type into someone else's window.
+    'pipewire' 'wl-clipboard' 'wtype'
+    'hicolor-icon-theme'
+)
+optdepends=(
+    'ydotool: typing where the virtual-keyboard protocol is missing (GNOME, X11)'
+    'libcanberra: the attention sound'
+    'xdg-utils: the "Show recordings" menu item'
+)
+provides=('openramble')
+conflicts=('openramble')
+# Prebuilt binaries: stripping them is neither wanted nor safe, and there are no sources to
+# gather debug symbols from.
+options=('!strip' '!debug')
+install=openramble.install
+source=("$url/releases/download/v$pkgver/openramble-linux-x64-$pkgver.tar.zst")
+sha256sums=('SKIP')
+
+package() {
+    cd "$srcdir/openramble-linux-x64-$pkgver"
+
+    # /opt rather than /usr/lib: the publish is one indivisible tree of ~240 MB, most of it a
+    # private copy of the .NET runtime and the recognition engine's native libraries. It is copied
+    # whole and unthinned - a self-contained application loads its neighbours by name - including
+    # tools/asr-bench, which is a diagnostic for this install and not a command of its own.
+    install -dm755 "$pkgdir/opt/openramble"
+    cp -a --no-preserve=ownership ./* "$pkgdir/opt/openramble/"
+    # The two things in the archive that belong elsewhere on a packaged system.
+    rm -r "$pkgdir/opt/openramble/share" "$pkgdir/opt/openramble/LICENSE"
+
+    install -dm755 "$pkgdir/usr/bin"
+    ln -s /opt/openramble/OpenRamble.App.Linux "$pkgdir/usr/bin/openramble"
+
+    install -Dm644 share/applications/openramble.desktop \
+        "$pkgdir/usr/share/applications/openramble.desktop"
+    install -Dm644 share/icons/hicolor/256x256/apps/openramble.png \
+        "$pkgdir/usr/share/icons/hicolor/256x256/apps/openramble.png"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

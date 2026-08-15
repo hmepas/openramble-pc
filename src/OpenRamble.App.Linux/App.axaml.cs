@@ -173,6 +173,7 @@ public sealed partial class App : Application
             Folders = new FolderOpening(),
             LayoutHasAltGraph = KeyboardLayoutFacts.HasAltGraph,
             HotkeySettingsHint = HotkeyAdvice.LinuxSettingsHint,
+            MicrophoneRemedy = MicrophoneRemedy.Linux,
         });
 
         state = built;

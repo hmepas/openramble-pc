@@ -71,10 +71,62 @@ public sealed class PermissionStatusTests
     {
         PermissionStatus status = PermissionStatus.Microphone(
             MicrophoneConsentState.WaitingForSettings,
-            "To hear your speech.");
+            "To hear your speech.",
+            MicrophoneRemedy.Windows);
 
         Assert.Equal("Open Settings", status.ActionTitle);
         Assert.Equal("Waiting for permission in Settings", status.AccessibilityValue);
+    }
+
+    /// <summary>
+    /// The same state on Linux, where no window opened and none will.
+    ///
+    /// It is reached the same way - a refused request - but the request there is an attempt to
+    /// open the device itself, so the remedy is the device and the button asks again instead of
+    /// offering a page that does not exist.
+    /// </summary>
+    [Fact]
+    public void TheWaitingLineIsThePlatformsOwn()
+    {
+        PermissionStatus status = PermissionStatus.Microphone(
+            MicrophoneConsentState.WaitingForSettings,
+            "To hear your speech.",
+            MicrophoneRemedy.Linux);
+
+        Assert.Equal("Try again", status.ActionTitle);
+        Assert.Equal("Try again: Microphone", status.ActionAccessibilityLabel);
+        Assert.DoesNotContain("Settings", status.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("Settings", status.AccessibilityValue, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Not one word of the Linux copy may name Windows or a Settings page.
+    ///
+    /// The whole point of the seam is that these sentences are the platform's; a Linux build that
+    /// picked up a Windows sentence would send a person to a window that cannot exist, which is
+    /// exactly the bug this replaces.
+    /// </summary>
+    [Fact]
+    public void TheLinuxRemedyNamesNothingLinuxDoesNotHave()
+    {
+        string[] sentences =
+        [
+            MicrophoneRemedy.Linux.AccessRefused,
+            MicrophoneRemedy.Linux.DictationIsOff,
+            MicrophoneRemedy.Linux.LostWhileDictating,
+            MicrophoneRemedy.Linux.Lost,
+            MicrophoneRemedy.Linux.WaitingDetail,
+            MicrophoneRemedy.Linux.WaitingValue,
+            MicrophoneRemedy.Linux.WaitingAction,
+        ];
+
+        foreach (string sentence in sentences)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(sentence));
+            Assert.DoesNotContain("Windows", sentence, StringComparison.Ordinal);
+            Assert.DoesNotContain("Settings", sentence, StringComparison.Ordinal);
+            Assert.DoesNotContain("revoked", sentence, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>
@@ -86,7 +138,8 @@ public sealed class PermissionStatusTests
     {
         PermissionStatus status = PermissionStatus.Microphone(
             MicrophoneConsentState.BlockedForDevice,
-            "To hear your speech.");
+            "To hear your speech.",
+            MicrophoneRemedy.Windows);
 
         Assert.Equal("Open Settings", status.ActionTitle);
         Assert.Equal("Microphone access is off for the whole device", status.AccessibilityValue);
@@ -98,7 +151,8 @@ public sealed class PermissionStatusTests
     {
         PermissionStatus granted = PermissionStatus.Microphone(
             MicrophoneConsentState.Granted,
-            "To hear your speech.");
+            "To hear your speech.",
+            MicrophoneRemedy.Windows);
 
         Assert.True(granted.Granted);
         Assert.Null(granted.ActionTitle);
@@ -119,7 +173,10 @@ public sealed class PermissionStatusTests
 
         foreach (MicrophoneConsentState state in states)
         {
-            PermissionStatus status = PermissionStatus.Microphone(state, "To hear your speech.");
+            PermissionStatus status = PermissionStatus.Microphone(
+                state,
+                "To hear your speech.",
+                MicrophoneRemedy.Windows);
             Assert.False(string.IsNullOrWhiteSpace(status.AccessibilityValue));
             Assert.False(string.IsNullOrWhiteSpace(status.AccessibilityLabel));
             Assert.Equal(state == MicrophoneConsentState.Granted, status.ActionTitle is null);

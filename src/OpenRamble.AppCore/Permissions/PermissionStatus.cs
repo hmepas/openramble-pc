@@ -15,7 +15,12 @@ public enum MicrophoneConsentState
     /// <summary>This app is switched off in Settings → Privacy &amp; security → Microphone.</summary>
     Denied,
 
-    /// <summary>The Settings page was opened for the person; we are waiting for them to come back.</summary>
+    /// <summary>
+    /// The request was refused and the platform's remedy was offered: on Windows the Settings page
+    /// was opened and we are waiting for the person to come back, on Linux there is no page and
+    /// the offer is to try the device again. What the person is told in either case is
+    /// <see cref="MicrophoneRemedy"/>'s business.
+    /// </summary>
     WaitingForSettings,
 
     /// <summary>
@@ -71,7 +76,14 @@ public sealed record PermissionStatus
     /// <summary>The button is only available where there is still something to press.</summary>
     public string? ActionTitle { get; }
 
-    public static PermissionStatus Microphone(MicrophoneConsentState state, string detail) => state switch
+    /// <param name="remedy">
+    /// The platform's own answer to "what do I do about it" - see <see cref="MicrophoneRemedy"/>.
+    /// Only the waiting line needs it: every other state's words are true on both platforms.
+    /// </param>
+    public static PermissionStatus Microphone(
+        MicrophoneConsentState state,
+        string detail,
+        MicrophoneRemedy remedy) => state switch
     {
         MicrophoneConsentState.Denied => new PermissionStatus(
             "Microphone",
@@ -82,10 +94,10 @@ public sealed record PermissionStatus
 
         MicrophoneConsentState.WaitingForSettings => new PermissionStatus(
             "Microphone",
-            "Turn OpenRamble on in the Settings window that just opened, then come back here.",
+            remedy.WaitingDetail,
             granted: false,
-            value: "Waiting for permission in Settings",
-            actionTitle: "Open Settings"),
+            value: remedy.WaitingValue,
+            actionTitle: remedy.WaitingAction),
 
         MicrophoneConsentState.BlockedForDevice => new PermissionStatus(
             "Microphone",

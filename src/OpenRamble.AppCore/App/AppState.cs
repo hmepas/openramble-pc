@@ -49,6 +49,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly IFolderOpening? folders;
     private readonly Func<bool> layoutHasAltGraph;
     private readonly string? hotkeySettingsHint;
+    private readonly MicrophoneRemedy microphoneRemedy;
     private readonly Func<DateTimeOffset> now;
     private readonly ReplacementsStore replacementsStore;
     private readonly EditLearningWatcher editWatcher;
@@ -82,6 +83,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         folders = environment.Folders;
         layoutHasAltGraph = environment.LayoutHasAltGraph ?? (static () => false);
         hotkeySettingsHint = environment.HotkeySettingsHint;
+        microphoneRemedy = environment.MicrophoneRemedy;
         now = environment.Now ?? (static () => DateTimeOffset.Now);
         transcriber = environment.LocalTranscriber;
         editWatcher = new EditLearningWatcher(
@@ -132,7 +134,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                     // The audio stream is no longer usable in the middle of a sentence. Waiting
                     // for a stop is not an option: the person is speaking into emptiness and the
                     // reason has to be shown exactly.
-                    controller?.Interrupt(CaptureFailureMessage(error)),
+                    controller?.Interrupt(CaptureFailureMessage(error, microphoneRemedy)),
                 samples =>
                 {
                     // The peak is enough for the waveform; RMS would hide the short consonant
@@ -307,12 +309,15 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         }
     }
 
-    public static string CaptureFailureMessage(AudioCaptureError error) => error switch
+    /// <param name="remedy">
+    /// Where the platform sends a person whose microphone will not open - the one line of this
+    /// message that is not the same on both.
+    /// </param>
+    public static string CaptureFailureMessage(AudioCaptureError error, MicrophoneRemedy remedy) => error switch
     {
         AudioCaptureError.UnsupportedAudioFormat format =>
             $"Couldn't handle the selected microphone's audio format: {format.Reason}",
-        AudioCaptureError.MicrophonePermissionDenied =>
-            "No microphone access. Open Windows Settings.",
+        AudioCaptureError.MicrophonePermissionDenied => remedy.AccessRefused,
         AudioCaptureError.EngineUnavailable engine =>
             $"The microphone stopped responding: {engine.Reason}",
         AudioCaptureError.DiskFull => "Couldn't record audio: no free disk space.",
@@ -762,21 +767,20 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             {
                 Notify(new DictationNotice(
                     DictationNoticeKind.Warning,
-                    "Dictation is off: grant Microphone access in Windows Settings."));
+                    microphoneRemedy.DictationIsOff));
             }
         }
         else if (previous && !microphone)
         {
             if (DictationStateValue is DictationState.Preparing or DictationState.Listening)
             {
-                controller?.PreserveActiveRecording(
-                    "Microphone access was revoked. Dictation stopped; open Windows Settings.");
+                controller?.PreserveActiveRecording(microphoneRemedy.LostWhileDictating);
             }
             else
             {
                 Notify(new DictationNotice(
                     DictationNoticeKind.Failure,
-                    "Microphone access was revoked. Open Windows Settings."));
+                    microphoneRemedy.Lost));
             }
         }
 

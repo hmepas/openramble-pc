@@ -157,3 +157,78 @@ Apple Silicon compiling for the Neural Engine. The Windows reality is ONNX
 session initialization (reading ~670 MB of weights + one silent inference);
 the state machine is identical but the figure has not been re-measured on
 real Windows hardware yet.
+
+## What the Linux build does not do
+
+Everything above is about the port as a whole and holds on both platforms. This
+section is the second column: what the Linux build gives up that the Windows one
+has, and why. All of it comes from the same place — Wayland deliberately tells
+an application nothing about the rest of the desktop, and what is left is
+`/dev/input` below the compositor and command-line tools beside it.
+
+- **The dictation key is never swallowed.** The Windows hook returns 1 and the
+  keypress does not reach the application in front; the evdev equivalent is
+  `EVIOCGRAB`, which takes the whole keyboard away from the compositor for as
+  long as the key is held. Nothing here is worth risking a desktop with no
+  keyboard, so the key is read and passed through. In practice this shows on one
+  choice only: Caps Lock as the hotkey means the LED toggles with every
+  dictation, and the shouting it turns on is the person's to turn off.
+- **Reading the key needs the `input` group.** `/dev/input` is where a *held*
+  key can be seen — no Wayland protocol reports one — and a user who is not in
+  that group can list the keyboards and open none of them. The application says
+  so in the tray instead of going quiet, and the remedy is
+  `sudo gpasswd -a "$USER" input` plus a fresh login. On Windows a hook needs no
+  permission at all.
+- **The clipboard is cleared, not fenced off.** Windows carries three registered
+  formats on every write that ask clipboard history and cloud sync to skip the
+  dictation. Neither Wayland nor X11 has such a notion, so there is nothing to
+  ask: what the insertion path promises here is the clearing — the text is
+  offered, the paste consumes it, the previous contents go back a second later,
+  and stopping `wl-copy` withdraws the offer. A clipboard manager (Klipper,
+  GPaste, cliphist — installed by default on most desktops) that copied the text
+  while it was on the selection keeps its copy, and no protocol on this platform
+  can take it back. The one opt-out that exists is KDE's, and it is offered.
+- **There is no target window, so two behaviours are gone.** Wayland gives a
+  client no way to learn which surface has focus or what process owns it. The
+  Windows build raises the window it inserted into if focus wandered, and
+  refuses to insert when the target changed between the speaking and the
+  landing; here the insertion policy is still asked, in the same two places, but
+  the answer it gets can only be "the target is where it was". Change window
+  while the text is being recognized and the text lands in the new window. There
+  is also no secure-input flag: a password field looks like any other, and
+  synthetic keystrokes are accepted in it.
+- **Nothing is heard from the system.** Sleep, wake and audio-device changes are
+  window messages on Windows; on Linux they are a `login1` D-Bus subscription
+  and PipeWire graph events, and neither is wired yet. A dictation held across a
+  suspend stays in "listening" until Escape — the release that happened while
+  the machine was down reaches nobody — and a microphone unplugged mid-sentence
+  is discovered as an empty recognition rather than as a sentence saying so.
+  Memory pressure is missing with it, so the engine is released on its idle
+  timer only, never early.
+- **The panel is an ordinary window, drawn through XWayland.** A dictation panel
+  wants `zwlr_layer_shell_v1`: above every application, positioned by anchor,
+  never focusable by construction. That is deferred. What ships is a borderless
+  top-level window that asks not to be activated — weaker than the Windows trio
+  of extended styles, which also stops a click from activating it and lets the
+  click through to the document underneath. The panel is small, has nothing to
+  click and sits clear of where people type, so the exposure is a mis-aimed
+  click.
+- **Nothing is said out loud.** The Windows panel raises a UI Automation
+  notification, and Narrator reads it without the panel ever taking focus.
+  Avalonia exposes no counterpart on this platform — AT-SPI has `Announce`, the
+  toolkit does not surface it — and announcing by moving focus is exactly what
+  this window must never do. The panel still writes every one of those messages
+  on screen; it is the spoken copy that is missing, and the log records what a
+  screen reader was owed.
+- **"Does this layout use AltGr" is answered `true` without asking.** Windows
+  asks the layout, key by key. The layout belongs to the compositor here, no
+  protocol publishes it, and the X11 answer read through XWayland is stale on
+  some desktops. Right Alt composes on every layout but plain `us`, so the
+  decision is to warn: one warning too many on a screen a person visits twice
+  costs less than a person silently losing their `@` and their `€`.
+- **There is no microphone settings page to open.** Windows has one page that
+  owns the permission and a switch for this application in it. Here whether the
+  microphone opens is decided by the sound server, the device and the user's
+  groups, and the only way to learn it is to open the device and see — so the
+  app probes, and when the probe fails it says what to check and offers to try
+  again, instead of promising a window that would never have opened.

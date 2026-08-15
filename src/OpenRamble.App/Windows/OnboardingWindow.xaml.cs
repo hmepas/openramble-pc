@@ -133,7 +133,8 @@ public sealed partial class OnboardingWindow : Window
             state.MicrophoneState,
             state.MicrophoneGranted
                 ? "Granted. OpenRamble opens the microphone only while you hold the dictation key."
-                : "OpenRamble needs it to hear you. It opens the microphone only while you hold the dictation key.");
+                : "OpenRamble needs it to hear you. It opens the microphone only while you hold the dictation key.",
+            state.MicrophoneRemedy);
 
         PermissionDetail.Text = permission.Detail;
         PermissionButton.Content = permission.ActionTitle ?? string.Empty;

@@ -68,7 +68,7 @@ Dependency direction is law: App → LocalASR → DictationCore, never backwards
 
 ```bash
 export DOTNET_ROOT=$HOME/.dotnet PATH=$HOME/.dotnet:$PATH
-dotnet build openramble-windows.sln    # app project builds via EnableWindowsTargeting
+dotnet build openramble.sln            # the WPF app builds via EnableWindowsTargeting
 dotnet test src/DictationCore.Tests
 dotnet test src/LocalASR.Tests
 ```

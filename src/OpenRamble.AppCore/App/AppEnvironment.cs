@@ -88,6 +88,13 @@ public sealed class AppEnvironment
     /// </remarks>
     public string? HotkeySettingsHint { get; init; }
 
+    /// <summary>
+    /// The same kind of fact for the microphone: what to tell a person whose microphone will not
+    /// open. Required rather than nullable - unlike the hotkey hint, these sentences are the whole
+    /// message and not an optional tail, so there is nothing sensible to fall back to.
+    /// </summary>
+    public required MicrophoneRemedy MicrophoneRemedy { get; init; }
+
     /// <summary>The clock. Injected so the residency and warm-up rules stay testable.</summary>
     public Func<DateTimeOffset>? Now { get; init; }
 }

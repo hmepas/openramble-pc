@@ -1,13 +1,18 @@
-# OpenRamble for Windows
+# OpenRamble for Windows and Linux
 
-Windows port of [OpenRamble](https://github.com/mikwiseman/openramble) —
-private, local dictation. Hold a hotkey, speak, release it: the text appears
-at the cursor of the focused application.
+Windows and Linux port of
+[OpenRamble](https://github.com/mikwiseman/openramble) — private, local
+dictation. Hold a hotkey, speak, release it: the text appears at the cursor of
+the focused application.
+
+Both builds are one product: the dictation logic, the app policies and their
+tests are shared, and each platform brings its own edges — WASAPI, Win32 hooks
+and WPF on one side; PipeWire, `/dev/input`, `wtype` and Avalonia on the other.
 
 > **Provenance.** This is an unofficial, **AI-written port**: the Swift
 > codebase of the original macOS app by
 > [Mik Wiseman](https://github.com/mikwiseman) was rewritten in C# for
-> Windows by Claude (Anthropic), orchestrated by a human. It is not
+> Windows and Linux by Claude (Anthropic), orchestrated by a human. It is not
 > affiliated with or endorsed by the upstream project. The architecture, the
 > test suite (ported 1:1), the privacy rules, the app icon and the product
 > behavior all follow the original; deviations are documented in
@@ -24,15 +29,16 @@ for what this port does and does not carry over.
 
 ## Building (on Linux)
 
-Requires the .NET 10 SDK. The WPF app cross-compiles from Linux; it can only
-*run* on Windows.
+Requires the .NET 10 SDK. Both builds are produced on a Linux host: the WPF app
+cross-compiles from here and can only *run* on Windows.
 
 ```bash
-./scripts/build-win.sh            # runs all tests, then publishes
+./scripts/build-win.sh            # runs all tests, then publishes → dist/win-x64
+./scripts/build-linux.sh          # the same for Linux            → dist/linux-x64
 ```
 
-Output: `dist/win-x64/` — a self-contained folder (~200 MB, model not
-included). No installation required on Windows.
+Output: a self-contained folder, ~200 MB for Windows and ~240 MB for Linux
+(the model is not included in either). Neither one is installed.
 
 ## Running and testing
 
@@ -44,6 +50,31 @@ model (~670 MB).
 Full manual test checklist and model-transfer shortcut (avoid the in-VM
 download by importing the host's cached model): see
 [docs/manual-run.md](docs/manual-run.md).
+
+### On Linux
+
+Run `dist/linux-x64/OpenRamble.App.Linux`. Same product, same tray, same
+onboarding. What the machine has to provide:
+
+- **The `input` group.** The dictation key is read straight from `/dev/input`,
+  because no Wayland protocol reports a key being *held*:
+  `sudo gpasswd -a "$USER" input`, then log in again. Without it the app starts,
+  says so in the tray, and never sees the key.
+- **PipeWire** (`pw-record`) to record, **wl-clipboard** (`wl-copy`,
+  `wl-paste`) for the clipboard path, **wtype** to type into other windows.
+- **ydotool** where `wtype` cannot work — GNOME and X11 sessions do not offer
+  the virtual-keyboard protocol it speaks — with its daemon running.
+- Optional: `libcanberra` for the attention sound, `xdg-utils` for the
+  "Show recordings" menu item.
+
+`./scripts/package-linux.sh` produces
+`releases/openramble-linux-x64-<version>.tar.zst` for distribution by hand;
+`packaging/linux/PKGBUILD` is the AUR binary package that installs that same
+archive, with an `.install` note about the group above.
+
+What the Linux build does not do that the Windows one does is listed with the
+rest of the deviations in
+[docs/differences-from-macos.md](docs/differences-from-macos.md).
 
 ## Repository layout
 
@@ -66,6 +97,8 @@ download by importing the host's cached model): see
   (tray, overlay, XDG autostart); the peer of `src/OpenRamble.App`.
 - `src/AsrBench` — WER/CER measurement tool (`asr-bench`), and `asr-bench mic`
   to test microphone → capture → engine without the app (Windows and Linux).
+- `packaging/linux` — the desktop entry both Linux distributions share, the AUR
+  `PKGBUILD` and its post-install note.
 - `PORTING.md` — the Swift→C# conventions this port follows.
 
 `src/OpenRamble.App/Assets/OpenRamble.ico` — the executable, window and tray
@@ -86,4 +119,6 @@ The macOS original is expected as a sibling checkout at `../openramble`
   [k2-fsa ONNX export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8).
 - [NAudio](https://github.com/naudio/NAudio) (MIT) — WASAPI capture.
 - [Velopack](https://github.com/velopack/velopack) (MIT) — installer and
-  in-place upgrades.
+  in-place upgrades on Windows.
+- [Avalonia](https://github.com/AvaloniaUI/Avalonia) (MIT) — the Linux shell's
+  interface toolkit.

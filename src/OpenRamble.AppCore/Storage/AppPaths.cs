@@ -10,7 +10,15 @@ namespace OpenRamble.AppCore;
 /// <para>
 /// The macOS layout is <c>~/Library/Application Support/OpenRamble/{Models,Takes,RecoveredAudio}</c>.
 /// The Windows layout keeps the three subfolders and moves the root to
-/// <c>%LOCALAPPDATA%\OpenRamble</c>.
+/// <c>%LOCALAPPDATA%\OpenRambleData</c>.
+/// </para>
+/// <para>
+/// <b>Not <c>%LOCALAPPDATA%\OpenRamble</c>, and the difference is the point.</b> That folder is
+/// where the Velopack installer puts the application itself (<c>%LOCALAPPDATA%\{packId}</c>),
+/// and it treats the whole folder as its own: running Setup.exe over an existing install
+/// renames the root away and deletes it once the new copy is in place, and an uninstall removes
+/// it outright. The first packaged builds kept the model there and lost it - 670 MB downloaded
+/// again - on every reinstall. Data lives one folder over, where no installer step ever looks.
 /// </para>
 /// <para>
 /// <b>Local, not roaming, and that is the whole backup story.</b> The macOS original marks
@@ -49,7 +57,7 @@ public sealed class AppPaths
     /// <summary>Application data root.</summary>
     public string Support()
     {
-        string directory = Path.Combine(root, "OpenRamble");
+        string directory = Path.Combine(root, "OpenRambleData");
         Directory.CreateDirectory(directory);
         return directory;
     }

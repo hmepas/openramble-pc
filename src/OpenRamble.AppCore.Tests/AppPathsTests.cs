@@ -33,7 +33,8 @@ public sealed class AppPathsTests : IDisposable
     {
         string support = paths.Support();
 
-        Assert.Equal("OpenRamble", Path.GetFileName(support));
+        // Not "OpenRamble": that is the installer's own folder, and it deletes it on reinstall.
+        Assert.Equal("OpenRambleData", Path.GetFileName(support));
         Assert.StartsWith(support, paths.Takes(), StringComparison.Ordinal);
         Assert.StartsWith(support, paths.AudioRecovery(), StringComparison.Ordinal);
         Assert.StartsWith(support, paths.Models(), StringComparison.Ordinal);

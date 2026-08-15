@@ -37,7 +37,7 @@ internal static class Program
               --no-transcribe       record and report only, skip recognition
 
             Environment variables:
-              OPENRAMBLE_MODELS_ROOT     installation root (%LOCALAPPDATA%\OpenRamble\Models default)
+              OPENRAMBLE_MODELS_ROOT     installation root (%LOCALAPPDATA%\OpenRambleData\Models default)
               OPENRAMBLE_MODEL_DIR       engine folder past the storage (for measurements)
               OPENRAMBLE_ASR_PRECISION   int8 (default) | float32
               OPENRAMBLE_ASR_PROVIDER    cpu (default) | cuda | directml

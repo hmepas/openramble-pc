@@ -13,7 +13,7 @@ notification area. First launch opens onboarding.
 ## Model
 
 Onboarding downloads Parakeet TDT 0.6b v3 int8 (~670 MB) from Hugging Face
-into `%LOCALAPPDATA%\OpenRamble`. To skip the in-VM download, copy a cached
+into `%LOCALAPPDATA%\OpenRambleData` (the installer owns `%LOCALAPPDATA%\OpenRamble` and wipes it on reinstall, so data lives next door). To skip the in-VM download, copy a cached
 model from the host (`~/.cache/openramble-win/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/`)
 into the VM and import it:
 

@@ -130,7 +130,27 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
                 throw new AudioCaptureError.EngineUnavailable("already recording");
             }
 
-            session = BuildSession();
+            try
+            {
+                session = BuildSession();
+            }
+            catch (Exception error)
+            {
+                // Everything between "which microphone" and "start it" - the activation of the
+                // audio client, its mix format, the take file, the resampler. The activation is
+                // where Windows says no (E_ACCESSDENIED for a privacy switch, a device error for
+                // a driver), and without this line that answer never reached the log.
+                DiagnosticLog.EmitException(
+                    "capture.start",
+                    error,
+                    ("session", DiagnosticLog.Session),
+                    ("ok", false),
+                    ("stage", "build"),
+                    ("hresult", $"0x{error.HResult:X8}"));
+                if (error is AudioCaptureError) { throw; }
+                throw new AudioCaptureError.EngineUnavailable(error.Message);
+            }
+
             current = session;
             latest = session;
         }
@@ -156,7 +176,9 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
                 "capture.start",
                 error,
                 ("session", session.Number),
-                ("ok", false));
+                ("ok", false),
+                ("stage", "start"),
+                ("hresult", $"0x{error.HResult:X8}"));
             throw new AudioCaptureError.EngineUnavailable(error.Message);
         }
 
@@ -315,12 +337,6 @@ public sealed class WasapiCapture : IAudioCapturing, IDisposable
         {
             // No microphone, or the audio service is down. Both are "the engine is not
             // available", and neither may be reported as an empty recording.
-            DiagnosticLog.EmitException(
-                "capture.start",
-                error,
-                ("session", DiagnosticLog.Session),
-                ("ok", false),
-                ("stage", "device-lookup"));
             throw new AudioCaptureError.EngineUnavailable(error.Message);
         }
 

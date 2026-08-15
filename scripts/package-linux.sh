@@ -25,6 +25,11 @@ cp LICENSE "$STAGE/"
 # else's machine, and a build directory's umask is no business of theirs.
 chmod -R a+rX,u+w,go-w "$STAGE"
 install -Dm644 packaging/linux/openramble.desktop "$STAGE/share/applications/openramble.desktop"
+# The compositor-keybind sample travels with the build: it is the alternative to the input group,
+# and a person who cannot join that group is exactly the person who has only the unpacked archive
+# in front of them. See the "Hotkey without the input group" section of the README.
+install -Dm644 packaging/linux/hyprland-example.conf \
+    "$STAGE/share/openramble/hyprland-example.conf"
 
 # The icon is extracted rather than kept as a second file in the tree: the .ico is the one copy of
 # the art (the Windows executable's icon, the tray picture, the Avalonia resource), and its

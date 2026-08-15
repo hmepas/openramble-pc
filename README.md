@@ -59,13 +59,68 @@ onboarding. What the machine has to provide:
 - **The `input` group.** The dictation key is read straight from `/dev/input`,
   because no Wayland protocol reports a key being *held*:
   `sudo gpasswd -a "$USER" input`, then log in again. Without it the app starts,
-  says so in the tray, and never sees the key.
+  says so in the tray, and never sees the key — unless the compositor drives it
+  instead, see [below](#hotkey-without-the-input-group).
 - **PipeWire** (`pw-record`) to record, **wl-clipboard** (`wl-copy`,
   `wl-paste`) for the clipboard path, **wtype** to type into other windows.
 - **ydotool** where `wtype` cannot work — GNOME and X11 sessions do not offer
   the virtual-keyboard protocol it speaks — with its daemon running.
 - Optional: `libcanberra` for the attention sound, `xdg-utils` for the
   "Show recordings" menu item.
+
+#### Hotkey without the `input` group
+
+Joining `input` is the answer that gives the whole product, and it is the one to
+take if it is on offer. Where it is not — a managed laptop, a policy, a
+preference — the compositor already sees every key and can be told to run a
+command on its edges. The app listens on a Unix socket for exactly those:
+
+```
+$XDG_RUNTIME_DIR/openramble/ctl.sock        # owner-only; falls back to /tmp/openramble-<uid>/
+```
+
+One command per line, one reply line back:
+
+| line | reply | what it does |
+| --- | --- | --- |
+| `hotkey press` | `ok down` | the configured key goes down — dictation starts |
+| `hotkey release` | `ok up` | it comes up — dictation stops and the text is inserted |
+| `hotkey toggle` | `ok down` / `ok up` | whichever edge the key was not already at |
+| `status` | `ok state=Idle key=RightCtrl down=false` | is it running, and is the key stuck down |
+
+The edges go into the same gesture machine the keyboard feeds, so hold
+semantics, the overlay, insertion and the diagnostic log are identical; the
+`hotkey.edge` line in the log carries `source=ctl` instead of `source=evdev`.
+The socket is always on and needs no setting.
+
+```bash
+echo status | socat -t1 - UNIX-CONNECT:$XDG_RUNTIME_DIR/openramble/ctl.sock
+echo 'hotkey toggle' | nc -U -N $XDG_RUNTIME_DIR/openramble/ctl.sock   # OpenBSD nc; -N matters
+OpenRamble.App.Linux ctl hotkey press    # the built-in client: exit 0 ok, 1 refused, 3 no socket
+```
+
+**Which client.** `socat` and `nc -U -N` cost about **1 ms** per call. The built-in
+`ctl` verb costs about **20 ms** warm — a whole .NET process start for one line —
+measured on the machine this was written on. That is comfortably fast enough for
+a press or a toggle, and it is 20 ms added to the gap between letting the key go
+and seeing the text on a release. Use `ctl` to try the thing out and to script
+around it; put `socat` in the keybind.
+
+Two bind styles, both commented line by line in
+[`packaging/linux/hyprland-example.conf`](packaging/linux/hyprland-example.conf):
+**hold** needs a press bind and a release bind (`bindn` + `bindrn`, non-consuming
+so applications still see the key), **toggle** needs one release bind. Binding a
+*bare modifier* like Right Ctrl is the awkward part: the Hyprland wiki documents
+only the release form and requires the target modmask for it
+(`bindr = CTRL, Control_R, …`), and says nothing about press-edge modifier binds —
+so the sample marks the press half as untested and offers toggle as the style
+that is documented to work. The sample carries both the hyprlang and the Lua
+spellings (Hyprland ≥ 0.55 deprecates hyprlang).
+
+Both sources are live at once. On a machine that *can* read `/dev/input`, do not
+bind the same key in the compositor as well: they move one shared key state, so a
+dictation ends at whichever edge arrives first. Nothing hangs — it is two hands on
+one switch.
 
 `./scripts/package-linux.sh` produces
 `releases/openramble-linux-x64-<version>.tar.zst` for distribution by hand;
@@ -98,7 +153,8 @@ rest of the deviations in
 - `src/AsrBench` — WER/CER measurement tool (`asr-bench`), and `asr-bench mic`
   to test microphone → capture → engine without the app (Windows and Linux).
 - `packaging/linux` — the desktop entry both Linux distributions share, the AUR
-  `PKGBUILD` and its post-install note.
+  `PKGBUILD` and its post-install note, and the commented `hyprland-example.conf`
+  for driving the hotkey from the compositor.
 - `PORTING.md` — the Swift→C# conventions this port follows.
 
 `src/OpenRamble.App/Assets/OpenRamble.ico` — the executable, window and tray

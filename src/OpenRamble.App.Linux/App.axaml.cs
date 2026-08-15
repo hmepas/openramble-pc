@@ -42,6 +42,7 @@ public sealed partial class App : Application
     private TrayIcon? tray;
     private LinuxSystemEventSource? systemEvents;
     private EvdevKeyboardMonitor? hotkeys;
+    private ControlSocketServer? control;
     private OverlayWindow? overlay;
     private PipeWireCapture? capture;
     private AppState? state;
@@ -197,6 +198,14 @@ public sealed partial class App : Application
             }
         };
 
+        // The second way to the same key, always on. It costs a socket in the runtime directory and
+        // buys the whole product back on a machine where /dev/input cannot be read - see
+        // ControlSocket for the protocol and EvdevKeyboardMonitor.IsHotkeyDown for what happens
+        // when both sources move the key. Failing to listen is not fatal and is not shown: the
+        // keyboard is the product, this is the alternative, and it says so in the log.
+        control = new ControlSocketServer(monitor, () => state?.DictationStateValue.ToString() ?? "starting");
+        control.Start();
+
         RefreshTray();
 
         if (!built.OnboardingCompleted)
@@ -209,6 +218,10 @@ public sealed partial class App : Application
     {
         DiagnosticLog.Emit("app.exit", ("code", code));
         state?.Dispose();
+        // Before the monitor it drives, and explicitly rather than at process exit: the socket file
+        // outlives an unlinked process, and the next run would have to prove it stale.
+        control?.Dispose();
+        control = null;
         hotkeys?.Dispose();
         capture?.Dispose();
         if (tray is not null)

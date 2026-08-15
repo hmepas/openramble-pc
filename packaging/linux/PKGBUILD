@@ -31,6 +31,11 @@ optdepends=(
     'ydotool: typing where the virtual-keyboard protocol is missing (GNOME, X11)'
     'libcanberra: the attention sound'
     'xdg-utils: the "Show recordings" menu item'
+    # For the compositor-keybind alternative to the input group. The application ships a client
+    # of its own, but it is a .NET process start (~20 ms) per keypress against socat's ~1 ms, and
+    # the difference lands on the release edge - the wait between letting the key go and seeing
+    # the text. Optional because it is only needed by the people who take that path.
+    'socat: driving the dictation key from a compositor keybind without the input group'
 )
 provides=('openramble')
 conflicts=('openramble')
@@ -60,5 +65,9 @@ package() {
         "$pkgdir/usr/share/applications/openramble.desktop"
     install -Dm644 share/icons/hicolor/256x256/apps/openramble.png \
         "$pkgdir/usr/share/icons/hicolor/256x256/apps/openramble.png"
+    # The compositor-keybind sample, next to the licence rather than inside /opt: it is something
+    # a person reads and copies out of, and the post-install message points at this path.
+    install -Dm644 share/openramble/hyprland-example.conf \
+        "$pkgdir/usr/share/openramble/hyprland-example.conf"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

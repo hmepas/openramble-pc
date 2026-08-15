@@ -40,14 +40,29 @@ namespace OpenRamble.LinuxInput;
 /// to risk for it.
 /// </para>
 /// <para>
-/// <b>Nothing is remembered.</b> Every key on the machine passes through <see cref="Handle"/>,
+/// <b>Nothing is remembered.</b> Every key on the machine passes through <see cref="Deliver"/>,
 /// which compares one code and drops the rest without storing, counting or timing it. The single
 /// key that reaches the diagnostic log is the configured hotkey, which the person chose - the same
 /// rule, and the same twenty lines, as the Windows hook.
 /// </para>
+/// <para>
+/// <b>There is a second way in, and it is the same way.</b> A person who cannot join the
+/// <c>input</c> group can have their compositor run a command on the key instead, and that command
+/// arrives here through <see cref="IHotkeyControl"/> - see <see cref="ControlSocketServer"/>. It is
+/// not a parallel implementation: an injected edge goes through <see cref="Deliver"/> with
+/// everything else, so the hold semantics, the chord bookkeeping, the overlay and the diagnostics
+/// cannot drift between the two. The one field that tells them apart is <c>source</c> on
+/// <c>hotkey.edge</c>.
+/// </para>
 /// </remarks>
-public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IDisposable
+public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IHotkeyControl, IDisposable
 {
+    /// <summary>What put an edge on the wire, for the <c>hotkey.edge</c> diagnostic.</summary>
+    private const string FromKeyboard = "evdev";
+
+    /// <summary>The other one: a command on the control socket.</summary>
+    private const string FromControlSocket = "ctl";
+
     /// <summary><c>KEY_ESC</c>. Cancels a running dictation and is never swallowed.</summary>
     private const int KeyEscape = 1;
 
@@ -170,6 +185,41 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IDisposable
     public bool IsRunning
     {
         get { lock (gate) { return running && watching.Count > 0; } }
+    }
+
+    /// <inheritdoc/>
+    public DictationHotkey Hotkey
+    {
+        get { lock (gate) { return machine.Hotkey; } }
+    }
+
+    /// <summary>
+    /// Whether the configured key is down, from whichever source put it down.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is <c>rawKeyDown</c> - the raw-edge view - and not the gesture machine's
+    /// <c>IsHeld</c>, on purpose. The machine refuses a press that arrives inside a chord and
+    /// leaves <c>IsHeld</c> false while the key is genuinely down; a <c>hotkey toggle</c> that
+    /// believed it would then inject a second press, which is deduplicated into nothing, and the
+    /// key would be stuck down with no toggle able to lift it. The raw edge is the one variable
+    /// both sources move and both sources are deduplicated against, so it is the only answer that
+    /// cannot disagree with itself.
+    /// </para>
+    /// <para>
+    /// <b>What happens when both sources touch the same key.</b> Nothing wedges, because there is
+    /// one variable. A key held on the keyboard and then released over the socket ends the
+    /// dictation there and then; the physical release that follows finds the state already up,
+    /// raises no edge and does nothing. A hold started over the socket is ended by a physical tap
+    /// of the same key for the mirror-image reason. What a person gets for binding the same key in
+    /// their compositor <i>and</i> holding it on a keyboard this process can read is therefore not
+    /// a hang - it is a dictation that ends at whichever of the two edges arrives first, which is
+    /// confusing enough to be worth the warning in the documentation.
+    /// </para>
+    /// </remarks>
+    public bool IsHotkeyDown
+    {
+        get { lock (gate) { return rawKeyDown; } }
     }
 
     public bool IsHandsFreeActive
@@ -426,14 +476,25 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IDisposable
 
     /// <summary>What the person is told when there is nothing to read the hotkey from.</summary>
     /// <remarks>
+    /// <para>
     /// Two different failures with two different remedies, and telling them apart is the entire
     /// value of the message. "Add yourself to the input group" said on a machine with no keyboard
     /// wastes an evening; "no keyboard found" said to somebody who has three is worse.
+    /// </para>
+    /// <para>
+    /// The permission message now carries a second remedy, in one sentence and no more. Joining the
+    /// group is still the answer that gives the whole product; the compositor keybind is the answer
+    /// for a machine where joining it is not on offer - a locked-down laptop, a policy, a person
+    /// who would rather not. A notice that named only the remedy the reader cannot use would send
+    /// them away believing the application does not work here.
+    /// </para>
     /// </remarks>
     private static string FailureMessage(Scan scan) => scan.Denied > 0
         ? "OpenRamble couldn't read the keyboard: the devices under /dev/input belong to the "
             + "`input` group and this account isn't in it, so the dictation key does nothing. "
-            + "Run `sudo gpasswd -a $USER input`, then log out and back in."
+            + "Run `sudo gpasswd -a $USER input`, then log out and back in. If joining that group "
+            + "isn't an option, your compositor can drive the key instead - see \"Hotkey without "
+            + "the input group\" in the README, and the hyprland-example.conf that ships with it."
         : "OpenRamble couldn't find a keyboard to watch under /dev/input, so the dictation key "
             + "does nothing. Plugging a keyboard in is enough - it is picked up without a restart.";
 
@@ -504,11 +565,42 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IDisposable
     {
         if (raw.Type != EvdevEvent.TypeKey) { return; }
 
-        int code = raw.Code;
         // A repeat is a key-down as far as everything downstream is concerned - it is what Windows
         // delivers for a held key too, and the gesture machine already answers it with nothing.
-        bool down = !raw.IsRelease;
+        Deliver(raw.Code, !raw.IsRelease, FromKeyboard, watch);
+    }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The configured key and no other: <paramref name="down"/> is the whole of what a caller may
+    /// say. See <see cref="IHotkeyControl"/> for why this is not a way to inject keys.
+    /// </remarks>
+    public bool InjectHotkeyEdge(bool down) => Deliver(code: null, down, FromControlSocket, watch: null);
+
+    /// <summary>
+    /// One key event, from wherever it came, to a gesture.
+    /// </summary>
+    /// <param name="code">
+    /// The evdev keycode, or <c>null</c> for "the configured key, whatever it is" - which is what
+    /// an injected edge means and which has to be resolved under the gate, because the person may
+    /// be changing the key at this instant.
+    /// </param>
+    /// <param name="down">Whether the key went down. Auto-repeat counts as down.</param>
+    /// <param name="source">Which of the two ways in this arrived by, for the diagnostics.</param>
+    /// <param name="watch">
+    /// The device it was read from, or <c>null</c> for an injected edge, which belongs to no
+    /// device and so cannot belong to a stale generation either.
+    /// </param>
+    /// <returns>Whether tracking was running and the event was taken.</returns>
+    /// <remarks>
+    /// For a keyboard event this runs on that device's reader thread, synchronously, and the order
+    /// it imposes is the product: a release that overtook its own press would leave the microphone
+    /// live with nothing to close it. Cheap for the same reason the Windows callback is - a lock, a
+    /// comparison and a delegate call - although nothing here is removed by the system if it gets
+    /// slow; what happens instead is that this keyboard's events queue in the kernel's buffer.
+    /// </remarks>
+    private bool Deliver(int? code, bool down, string source, Watch? watch)
+    {
         HotkeyAction action;
         bool? edge = null;
         bool escaped = false;
@@ -516,17 +608,19 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IDisposable
         HotkeyModifiers held;
         lock (gate)
         {
-            if (!running || generation != watch.Generation) { return; }
+            if (!running) { return false; }
+            if (watch is not null && generation != watch.Generation) { return false; }
 
-            held = Track(code, down);
             configured = machine.Hotkey;
+            int key = code ?? machine.Keymap.CodeFor(configured);
+            held = Track(key, down);
 
-            if (code == KeyEscape)
+            if (key == KeyEscape)
             {
                 // Escape never reaches the gesture machine, exactly as it never reaches the
                 // Windows one: it is a cancel, not a key held during a dictation, and whether
                 // there is anything to cancel is decided upstream.
-                if (!down) { return; }
+                if (!down) { return true; }
 
                 escaped = true;
                 action = HotkeyAction.None;
@@ -534,14 +628,15 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IDisposable
             else
             {
                 // Auto-repeat resends the key-down for as long as it is held; only a change of side
-                // is an edge.
-                if (code == machine.Keymap.CodeFor(configured) && down != rawKeyDown)
+                // is an edge. The same test deduplicates the two sources against each other, which
+                // is what makes a socket release of a physically held key safe - see IsHotkeyDown.
+                if (key == machine.Keymap.CodeFor(configured) && down != rawKeyDown)
                 {
                     rawKeyDown = down;
                     edge = down;
                 }
 
-                action = machine.Handle(new HotkeyEvent(code, down, held, DateTimeOffset.UtcNow));
+                action = machine.Handle(new HotkeyEvent(key, down, held, DateTimeOffset.UtcNow));
             }
         }
 
@@ -551,7 +646,7 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IDisposable
         if (escaped)
         {
             OnEscape?.Invoke();
-            return;
+            return true;
         }
 
         // Before the gesture, deliberately. The raw edge is what says "the key arrived", and it
@@ -561,11 +656,16 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IDisposable
             // An edge only ever exists for the configured key, so this is the one key name the log
             // can carry. Every other key on the machine is compared and dropped, which is the whole
             // design of the device reader and is not undone by a log.
-            DiagnosticLog.Emit("hotkey.edge", ("key", configured), ("down", wentDown));
+            DiagnosticLog.Emit(
+                "hotkey.edge",
+                ("key", configured),
+                ("down", wentDown),
+                ("source", source));
             (wentDown ? OnHotkeyDown : OnHotkeyUp)?.Invoke();
         }
 
         Dispatch(action);
+        return true;
     }
 
     /// <summary>

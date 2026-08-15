@@ -1,4 +1,5 @@
 using Avalonia;
+using OpenRamble.LinuxInput;
 
 namespace OpenRamble.App.Linux;
 
@@ -17,11 +18,26 @@ namespace OpenRamble.App.Linux;
 /// port ships no Linux updater, and a bootstrap for a mechanism that does not exist would be a
 /// promise that the app installs its own new versions.
 /// </para>
+/// <para>
+/// The one exception to "nothing else" is the <c>ctl</c> verb, and it is an exception in the same
+/// way <c>--diag</c> is: it is answered before Avalonia is asked for anything, because it is not
+/// this application running - it is a two-line client that talks to the copy that already is. See
+/// <see cref="ControlSocketClient"/>. It lives on this binary rather than beside it so that a
+/// compositor keybind can name the one path a person already has.
+/// </para>
 /// </remarks>
 public static class Program
 {
-    public static void Main(string[] arguments) =>
+    public static int Main(string[] arguments)
+    {
+        if (arguments is [ControlSocketClient.Verb, .. string[] command])
+        {
+            return ControlSocketClient.Run(command, Console.Out, Console.Error);
+        }
+
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(arguments);
+        return 0;
+    }
 
     /// <summary>The builder, by the name Avalonia's own tooling expects to find it under.</summary>
     public static AppBuilder BuildAvaloniaApp() =>

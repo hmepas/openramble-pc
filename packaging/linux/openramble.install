@@ -15,6 +15,18 @@ the "input" group -
 - and a fresh login for it to take effect. Without it the application starts,
 says so in the tray, and never sees the key.
 
+If joining that group is not an option, your compositor can drive the key
+instead: it runs a command on the key's press and release, and that command talks
+to a socket the application always listens on -
+
+    echo status | socat -t1 - UNIX-CONNECT:$XDG_RUNTIME_DIR/openramble/ctl.sock
+
+Install socat for it (it is ~1 ms per keypress against ~20 ms for the built-in
+"openramble ctl hotkey press" client, and that difference lands on the release
+edge). Ready-made, commented binds for both hold and toggle:
+
+    /usr/share/openramble/hyprland-example.conf
+
 Typing into other people's windows goes through wtype, which needs the
 compositor's virtual-keyboard protocol: Sway, Hyprland, KDE and the wlroots
 desktops have it, GNOME and X11 sessions do not. There, install ydotool and let

@@ -172,13 +172,47 @@ an application nothing about the rest of the desktop, and what is left is
   long as the key is held. Nothing here is worth risking a desktop with no
   keyboard, so the key is read and passed through. In practice this shows on one
   choice only: Caps Lock as the hotkey means the LED toggles with every
-  dictation, and the shouting it turns on is the person's to turn off.
+  dictation, and the shouting it turns on is the person's to turn off — the
+  compositor can be asked to do it for them, see the Caps Lock note below.
 - **Reading the key needs the `input` group.** `/dev/input` is where a *held*
   key can be seen — no Wayland protocol reports one — and a user who is not in
   that group can list the keyboards and open none of them. The application says
   so in the tray instead of going quiet, and the remedy is
   `sudo gpasswd -a "$USER" input` plus a fresh login. On Windows a hook needs no
   permission at all.
+
+  There is a second remedy for the machine where the first one is not on offer,
+  and the notice names it: the compositor already sees every key, so it can be
+  bound to run a command on the key's press and release. Those commands reach a
+  Unix socket at `$XDG_RUNTIME_DIR/openramble/ctl.sock` and are injected into the
+  same gesture machine the keyboard feeds — same hold semantics, same overlay,
+  same insertion, distinguishable in the log only by `source=ctl` on the
+  `hotkey.edge` line. See the README and
+  [`packaging/linux/hyprland-example.conf`](../packaging/linux/hyprland-example.conf).
+  It is an alternative and not a replacement: the compositor delivers a keypress
+  it has already decided to tell us about, which is a promise `/dev/input` does
+  not need anybody to make.
+
+- **Both key sources are live at once, and that is a warning.** The socket does
+  not switch the evdev path off — there is no setting, and nothing to
+  misconfigure. On a machine where `/dev/input` cannot be read only one of the two
+  can deliver anything, so the overlap costs nothing. On a machine where it can,
+  binding the same key in the compositor *and* holding it on the keyboard means
+  two sources moving one shared key state: the dictation ends at whichever edge
+  arrives first, and the second edge finds the key already where it was asked to
+  put it and does nothing. Nothing hangs and nothing is lost — a hold ends under
+  your finger instead of when you lift it, which is confusing enough to be worth
+  not doing on purpose.
+
+- **The compositor path *can* silence Caps Lock, but not with a bind.** Worth
+  writing down because the obvious guess is wrong. A Hyprland bind consumes the
+  key by default — the application in front never sees it — but the lock state and
+  the LED are updated by the compositor's xkb layer before and independently of
+  any bind decision, so Caps Lock still shouts with every dictation. What does
+  stop it is the layout: `input { kb_options = caps:none }`, which is a thing only
+  a compositor can do and the thing `/dev/input` fundamentally cannot — reading a
+  device cannot unshout a key. (Read from Hyprland's source rather than its wiki,
+  which says nothing about the interaction; untested here.)
 - **The clipboard is cleared, not fenced off.** Windows carries three registered
   formats on every write that ask clipboard history and cloud sync to skip the
   dictation. Neither Wayland nor X11 has such a notion, so there is nothing to

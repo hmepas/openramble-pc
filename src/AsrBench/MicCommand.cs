@@ -1,9 +1,8 @@
-#if WINDOWS
 using System.Diagnostics;
 using System.Globalization;
 using DictationCore;
 using LocalASR;
-using OpenRamble.WindowsAudio;
+using OpenRamble.AppCore.Audio;
 
 namespace AsrBench;
 
@@ -18,10 +17,12 @@ namespace AsrBench;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>It has to be the product's capture, not a second one.</b> <c>WasapiCapture</c> lives in a
-/// library of its own for exactly this: a bench command with its own recording code would confirm
-/// that some path to the microphone works, which is not the question. Every number below - the
-/// frame count, the peak, the stop duration - is the number the dictation panel is standing on.
+/// <b>It has to be the product's capture, not a second one.</b> <c>WasapiCapture</c> and
+/// <c>PipeWireCapture</c> live in libraries of their own for exactly this: a bench command with
+/// its own recording code would confirm that some path to the microphone works, which is not the
+/// question. Every number below - the frame count, the peak, the stop duration - is the number the
+/// dictation panel is standing on. Which of the two it drives is the caller's business; everything
+/// this command does is <see cref="IMicrophoneDevice"/> and nothing below it.
 /// </para>
 /// <para>
 /// <b>It prints the recognized text,</b> which nothing else in this repository does. That is not a
@@ -33,7 +34,13 @@ internal static class MicCommand
 {
     private const int DefaultSeconds = 5;
 
-    public static async Task<int> Run(string[] operands)
+    /// <param name="operands">What followed <c>mic</c> on the command line.</param>
+    /// <param name="capture">
+    /// The platform's microphone, already built and owned by the caller. Built before the options
+    /// are parsed and opened only below: constructing one costs nothing and touches no device, so
+    /// a mistyped flag still returns without ever having asked for the microphone.
+    /// </param>
+    public static async Task<int> Run(string[] operands, IMicrophoneDevice capture)
     {
         int seconds = DefaultSeconds;
         string output = "take.wav";
@@ -68,9 +75,6 @@ internal static class MicCommand
                     return 64;
             }
         }
-
-        string takes = Path.Combine(Path.GetTempPath(), "openramble-bench-takes");
-        using var capture = new WasapiCapture(takes);
 
         AudioCaptureError? failure = null;
         capture.Failed = error => failure ??= error;
@@ -187,4 +191,3 @@ internal static class MicCommand
         _ => error.Message,
     };
 }
-#endif

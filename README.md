@@ -57,8 +57,10 @@ download by importing the host's cached model): see
   text insertion, tray).
 - `src/OpenRamble.WindowsAudio` — the WASAPI capture, in a library of its own
   so the bench tool records through exactly the code the app records with.
+- `src/OpenRamble.LinuxAudio` — the same capture against PipeWire, recording
+  through a `pw-record` subprocess; the peer of the WASAPI one, same contract.
 - `src/AsrBench` — WER/CER measurement tool (`asr-bench`), and `asr-bench mic`
-  to test microphone → capture → engine without the app.
+  to test microphone → capture → engine without the app (Windows and Linux).
 - `PORTING.md` — the Swift→C# conventions this port follows.
 
 `src/OpenRamble.App/Assets/OpenRamble.ico` — the executable, window and tray

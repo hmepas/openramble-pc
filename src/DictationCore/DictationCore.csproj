@@ -16,6 +16,8 @@
       assembly so the bench tool can record through the very same code the product records with.
     -->
     <InternalsVisibleTo Include="OpenRamble.WindowsAudio" />
+    <!-- The Linux capture is the same driver half against PipeWire, and reuses the same two. -->
+    <InternalsVisibleTo Include="OpenRamble.LinuxAudio" />
   </ItemGroup>
 
 </Project>

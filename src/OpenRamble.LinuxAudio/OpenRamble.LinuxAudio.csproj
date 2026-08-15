@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>OpenRamble.LinuxAudio</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The peer of OpenRamble.WindowsAudio, and a library for the same reason: the capture is the
+      only piece of the app that both the shell and the bench tool need, and `asr-bench mic` has
+      to record through exactly the code the product records with or it measures something else.
+      Nothing here is Linux-only to the compiler - the recorder is a subprocess, not a P/Invoke -
+      so the assembly builds and its logic is tested on any host.
+    -->
+    <ProjectReference Include="../OpenRamble.AppCore/OpenRamble.AppCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The recorder subprocess sits behind an interface so the framing, the failure paths and the
+      stop deadline can be checked without an audio server. Both are internal: they are this
+      assembly's own vocabulary, not a contract anyone else may build on.
+    -->
+    <InternalsVisibleTo Include="OpenRamble.LinuxAudio.Tests" />
+  </ItemGroup>
+
+</Project>

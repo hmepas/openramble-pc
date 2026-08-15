@@ -5,6 +5,7 @@ using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using OpenRamble.AppCore;
+using OpenRamble.AppCore.Audio;
 
 namespace OpenRamble.WindowsAudio;
 
@@ -53,7 +54,7 @@ namespace OpenRamble.WindowsAudio;
 /// refuses them, instead of to whichever recording started next.
 /// </para>
 /// </remarks>
-public sealed class WasapiCapture : IAudioCapturing, IDisposable
+public sealed class WasapiCapture : IMicrophoneDevice
 {
     /// <summary>What recognition waits for. Fixed by the model, not by the device.</summary>
     private static readonly AudioStreamFormat RecordingFormat = new(16_000, 1);

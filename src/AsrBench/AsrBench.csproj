@@ -3,10 +3,10 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <!--
-      Two targets, one command more. `mic` records through the shipping WASAPI capture, which is
-      Windows and nothing else; every other command is portable and is run on the Linux host that
-      builds this repository. Multi-targeting keeps both true: the Windows build gets the
-      microphone, the portable build stays buildable and testable where there is no WASAPI.
+      Two targets, one command that differs. `mic` records through the shipping capture, and which
+      capture that is depends on the platform: WASAPI on Windows, `pw-record` everywhere else.
+      Multi-targeting keeps both honest - each build references exactly the capture it can run,
+      and neither has to pretend the other's audio stack exists.
     -->
     <TargetFrameworks>net10.0;net10.0-windows</TargetFrameworks>
     <!-- Allows the Windows target to be built (not run) on a non-Windows host. -->
@@ -22,6 +22,16 @@
 
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
     <ProjectReference Include="../OpenRamble.WindowsAudio/OpenRamble.WindowsAudio.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <!--
+      Unconditionally in the portable target rather than behind an OS check: the library is
+      ordinary managed code that builds anywhere, and the command it serves refuses at run time on
+      a host with no PipeWire. A reference that came and went with the build machine would make
+      this project build differently on two machines, which is worse than one unused assembly.
+    -->
+    <ProjectReference Include="../OpenRamble.LinuxAudio/OpenRamble.LinuxAudio.csproj" />
   </ItemGroup>
 
   <ItemGroup>

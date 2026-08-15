@@ -2,6 +2,12 @@ using System.Diagnostics;
 using System.Globalization;
 using DictationCore;
 using LocalASR;
+using OpenRamble.AppCore.Audio;
+#if WINDOWS
+using OpenRamble.WindowsAudio;
+#else
+using OpenRamble.LinuxAudio;
+#endif
 
 namespace AsrBench;
 
@@ -29,7 +35,7 @@ internal static class Program
               bench <file>...       recognize and measure speed and memory
               timings <file>...     recognize and print word timings
               eval <manifest.json>  run a corpus and compute WER/CER
-              mic [options]         record from the microphone, then recognize (Windows only)
+              mic [options]         record from the microphone, then recognize (Windows, Linux)
 
             mic options:
               --seconds <n>         how long to record (default 5)
@@ -91,19 +97,35 @@ internal static class Program
     /// Record from the microphone. Present only where there is one this tool can open.
     /// </summary>
     /// <remarks>
-    /// The capture is WASAPI and lives in a Windows-only library; the portable build of this tool
-    /// says so rather than pretending the command does not exist, because the person reading the
-    /// usage text on the wrong machine deserves the reason.
+    /// <para>
+    /// The only line of this tool that knows which platform it is on. The Windows build records
+    /// through WASAPI and the portable build through <c>pw-record</c>; both are the very library
+    /// the shipping application records with, which is the whole point of the command. A build
+    /// that has neither says so rather than pretending the command does not exist, because the
+    /// person reading the usage text on the wrong machine deserves the reason.
+    /// </para>
+    /// <para>
+    /// The capture is built before the operands are parsed, which is safe because building one
+    /// opens nothing: both implementations take a directory and touch the device only at
+    /// <c>StartRecording</c>.
+    /// </para>
     /// </remarks>
-    private static Task<int> Mic(string[] operands)
+    private static async Task<int> Mic(string[] operands)
     {
+        string takes = Path.Combine(Path.GetTempPath(), "openramble-bench-takes");
 #if WINDOWS
-        return MicCommand.Run(operands);
+        using IMicrophoneDevice capture = new WasapiCapture(takes);
 #else
-        _ = operands;
-        Console.WriteLine("mic: the microphone commands exist only in the Windows build of asr-bench.");
-        return Task.FromResult(69);
+        if (!OperatingSystem.IsLinux())
+        {
+            Console.WriteLine(
+                "mic: the microphone commands exist in the Windows and Linux builds of asr-bench.");
+            return 69;
+        }
+
+        using IMicrophoneDevice capture = new PipeWireCapture(takes);
 #endif
+        return await MicCommand.Run(operands, capture).ConfigureAwait(false);
     }
 
     // MARK: - Storage

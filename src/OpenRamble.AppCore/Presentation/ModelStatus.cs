@@ -14,11 +14,11 @@ public sealed record ModelStatus
     /// <summary>
     /// The full download, in megabytes as the file manager counts them.
     ///
-    /// 670, not the original's 586: this port installs one model, not two, and it is the ONNX
-    /// export rather than the Core ML bundle. The number is the bundled manifest's own total, so
-    /// it moves with the manifest instead of being remembered here.
+    /// 720, not the original's 586: this port installs one model, not two, and it is our
+    /// weight-only int4 ONNX build rather than the Core ML bundle. The number is the bundled
+    /// manifest's own total, so it moves with the manifest instead of being remembered here.
     /// </summary>
-    public const int FullDownloadMegabytes = 670;
+    public const int FullDownloadMegabytes = 720;
 
     public enum Tone
     {

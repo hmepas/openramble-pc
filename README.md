@@ -31,19 +31,19 @@ Requires the .NET 10 SDK. The WPF app cross-compiles from Linux; it can only
 ./scripts/build-win.sh            # runs all tests, then publishes
 ```
 
-Output: `dist/win-x64/` — a self-contained folder (~900 MB, recognition
-model included). No installation required on Windows. The build needs the
-model bundle at `~/.cache/openramble-win/parakeet-int4`; make it once with
-`scripts/quantize-parakeet-int4.py`.
+Output: `dist/win-x64/` — a self-contained folder (~200 MB, model not
+included). No installation required on Windows.
 
 ## Running and testing
 
 Copy `dist/win-x64/` into a Windows machine or VM and run
 `OpenRamble.App.exe`. The app lives in the notification area (tray); first
-launch installs the bundled model in place (no download) and opens
-onboarding, which asks for microphone consent.
+launch opens onboarding, which asks for microphone consent and downloads the
+model (~720 MB).
 
-Full manual test checklist: see [docs/manual-run.md](docs/manual-run.md).
+Full manual test checklist and model-transfer shortcut (avoid the in-VM
+download by importing the host's cached model): see
+[docs/manual-run.md](docs/manual-run.md).
 
 ## Repository layout
 
@@ -75,10 +75,11 @@ The macOS original is expected as a sibling checkout at `../openramble`
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) —
   offline speech recognition runtime.
 - [NVIDIA Parakeet TDT 0.6b v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-  (CC-BY-4.0) — the recognition model, bundled with the installer as our own
-  weight-only int4 build of the
-  [k2-fsa ONNX export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3)
-  (`scripts/quantize-parakeet-int4.py`).
+  (CC-BY-4.0) — the recognition model, downloaded on first run as our own
+  weight-only int4 build
+  ([hmepas/parakeet-tdt-0.6b-v3-int4](https://huggingface.co/hmepas/parakeet-tdt-0.6b-v3-int4),
+  made by `scripts/quantize-parakeet-int4.py` from the
+  [k2-fsa ONNX export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3)).
 - [NAudio](https://github.com/naudio/NAudio) (MIT) — WASAPI capture.
 - [Velopack](https://github.com/velopack/velopack) (MIT) — installer and
   in-place upgrades.

@@ -17,8 +17,8 @@ public class BundledManifestTests
         ModelManifest manifest = ModelManifest.Bundled();
 
         Assert.Equal("parakeet-tdt-0.6b-v3", manifest.ModelID);
-        Assert.Equal("openramble-windows/parakeet-tdt-0.6b-v3-int4", manifest.Repository);
-        Assert.Equal("4800d725f71e94b5e2447cd9056ad6b890b56154", manifest.Revision);
+        Assert.Equal("hmepas/parakeet-tdt-0.6b-v3-int4", manifest.Repository);
+        Assert.Equal("07b96facdcefe49b48403fd372d79b79bbcf6be9", manifest.Revision);
         Assert.Equal("1.13.5", manifest.FluidAudioVersion);
         Assert.Equal("CC-BY-4.0", manifest.License);
     }

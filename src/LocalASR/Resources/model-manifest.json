@@ -1,9 +1,9 @@
 {
   "modelID": "parakeet-tdt-0.6b-v3",
-  "repository": "openramble-windows/parakeet-tdt-0.6b-v3-int4",
-  "revision": "4800d725f71e94b5e2447cd9056ad6b890b56154",
+  "repository": "hmepas/parakeet-tdt-0.6b-v3-int4",
+  "revision": "07b96facdcefe49b48403fd372d79b79bbcf6be9",
   "fluidAudioVersion": "1.13.5",
-  "quantization": "encoder MatMulNBits 4-bit, symmetric, blocks of 64, weights only (activations fp32); decoder and joiner fp32. Built by scripts/quantize-parakeet-int4.py from csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3; the revision is the encoder's SHA-256 prefix. Ships inside the installer (model/ next to the app), which is where it is installed from; the repository above is where it would be published, not where it is.",
+  "quantization": "encoder MatMulNBits 4-bit, symmetric, blocks of 64, weights only (activations fp32); decoder and joiner fp32. Built by scripts/quantize-parakeet-int4.py from csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3.",
   "license": "CC-BY-4.0",
   "files": [
     {

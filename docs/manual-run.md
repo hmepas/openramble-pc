@@ -3,7 +3,7 @@
 Build on the Linux host:
 
 ```bash
-./scripts/build-win.sh            # → dist/win-x64 (~900 MB, model included)
+./scripts/build-win.sh            # → dist/win-x64 (~200 MB, model not included)
 ```
 
 Copy `dist/win-x64/` into the Windows VM (virtiofs/samba share or plain copy)
@@ -12,14 +12,21 @@ notification area. First launch opens onboarding.
 
 ## Model
 
-The build carries the recognition model in `model/` next to the executable (Parakeet TDT
-0.6b v3, our own weight-only int4 build - see `scripts/quantize-parakeet-int4.py` for why
-not the stock int8). On first launch the app copies and verifies it into
-`%LOCALAPPDATA%\OpenRambleData\Models` by itself; nothing is downloaded. `build-win.sh`
-expects the bundle at `~/.cache/openramble-win/parakeet-int4` (or `$OPENRAMBLE_MODEL_BUNDLE`)
-and refuses to build without it.
+Onboarding downloads Parakeet TDT 0.6b v3 - our weight-only int4 build,
+[hmepas/parakeet-tdt-0.6b-v3-int4](https://huggingface.co/hmepas/parakeet-tdt-0.6b-v3-int4)
+(~720 MB; see `scripts/quantize-parakeet-int4.py` for why not the stock int8) - into
+`%LOCALAPPDATA%\OpenRambleData\Models` (the installer owns `%LOCALAPPDATA%\OpenRamble` and
+wipes it on reinstall, so data lives next door). To skip the in-VM download, copy the four
+files (`~/.cache/openramble-win/parakeet-int4/` on the host) into the VM and either import
+them:
 
-`tools\asr-bench.exe import <folder>` still works for a copy in an unusual place.
+```
+tools\asr-bench.exe import <path-to-copied-folder>
+```
+
+or drop them into a `model\` folder next to `OpenRamble.App.exe` - the app installs from
+there by itself on the next start, no network involved (both paths end in the same verified
+install).
 
 ## Diagnostic log
 

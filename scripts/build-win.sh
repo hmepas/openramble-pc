@@ -11,6 +11,10 @@ OUT="${1:-dist/win-x64}"
 # version=` in a diagnostic log names the build the log came from.
 VERSION="${VERSION:-0.1.$(git rev-list --count HEAD)}"
 
+# publish does not clean its output folder; a model/ left there by an older build (or dropped
+# in for an offline VM run) would ride into the installer unnoticed - 600 MB of it.
+rm -rf "$OUT/model"
+
 dotnet test --nologo -v q
 dotnet publish src/OpenRamble.App -c Release -r win-x64 --self-contained -o "$OUT" -p:Version="$VERSION"
 # The framework has to be named: asr-bench multi-targets, and only its Windows target carries

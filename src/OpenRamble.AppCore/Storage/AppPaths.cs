@@ -10,12 +10,22 @@ namespace OpenRamble.AppCore;
 /// <para>
 /// The macOS layout is <c>~/Library/Application Support/OpenRamble/{Models,Takes,RecoveredAudio}</c>.
 /// The Windows layout keeps the three subfolders and moves the root to
-/// <c>%LOCALAPPDATA%\OpenRamble</c>. On Linux the same three subfolders land under
+/// <c>%LOCALAPPDATA%\OpenRambleData</c>. On Linux the same three subfolders land under
 /// <c>$XDG_DATA_HOME/OpenRamble</c>, which is <c>~/.local/share/OpenRamble</c> unless the person
 /// set the variable - <see cref="Environment.SpecialFolder.LocalApplicationData"/> resolves to
 /// the XDG data directory there, so the code is unchanged and only the answer differs. The
 /// spelled-out paths are pinned by <c>AppPathsTests</c>, because "it maps correctly" is the kind
 /// of claim that stays true only while somebody checks it.
+/// </para>
+/// <para>
+/// <b>On Windows it is not <c>%LOCALAPPDATA%\OpenRamble</c>, and the difference is the point.</b>
+/// That folder is where the Velopack installer puts the application itself
+/// (<c>%LOCALAPPDATA%\{packId}</c>), and it treats the whole folder as its own: running Setup.exe
+/// over an existing install renames the root away and deletes it once the new copy is in place,
+/// and an uninstall removes it outright. The first packaged builds kept the model there and lost
+/// it - 670 MB downloaded again - on every reinstall. Data lives one folder over, where no
+/// installer step ever looks. Linux has no such installer, and the plain name stays: it is what
+/// the desktop file, the package scripts and the documentation already say.
 /// </para>
 /// <para>
 /// <b>Local, not roaming, and that is the whole backup story.</b> The macOS original marks
@@ -55,10 +65,16 @@ public sealed class AppPaths
     public static AppPaths Standard() =>
         new(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
 
+    /// <summary>
+    /// The folder name under the root: <c>OpenRambleData</c> on Windows, where the installer owns
+    /// <c>OpenRamble</c>; <c>OpenRamble</c> everywhere else. See the type remarks.
+    /// </summary>
+    public static string FolderName => OperatingSystem.IsWindows() ? "OpenRambleData" : "OpenRamble";
+
     /// <summary>Application data root.</summary>
     public string Support()
     {
-        string directory = Path.Combine(root, "OpenRamble");
+        string directory = Path.Combine(root, FolderName);
         Directory.CreateDirectory(directory);
         return directory;
     }

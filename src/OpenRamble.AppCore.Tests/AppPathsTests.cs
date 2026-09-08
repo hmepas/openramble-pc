@@ -33,7 +33,9 @@ public sealed class AppPathsTests : IDisposable
     {
         string support = paths.Support();
 
-        Assert.Equal("OpenRamble", Path.GetFileName(support));
+        // On Windows not "OpenRamble": that is the installer's own folder, and it deletes it on
+        // reinstall. On Linux there is no installer and the plain name is the documented one.
+        Assert.Equal(OperatingSystem.IsWindows() ? "OpenRambleData" : "OpenRamble", Path.GetFileName(support));
         Assert.StartsWith(support, paths.Takes(), StringComparison.Ordinal);
         Assert.StartsWith(support, paths.AudioRecovery(), StringComparison.Ordinal);
         Assert.StartsWith(support, paths.Models(), StringComparison.Ordinal);
@@ -65,7 +67,7 @@ public sealed class AppPathsTests : IDisposable
     [Fact]
     public void TheThreeFoldersAreNamedExactly()
     {
-        string support = Path.Combine(root, "OpenRamble");
+        string support = Path.Combine(root, AppPaths.FolderName);
 
         Assert.Equal(support, paths.Support());
         Assert.Equal(Path.Combine(support, "Models"), paths.Models());

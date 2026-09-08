@@ -12,16 +12,21 @@ notification area. First launch opens onboarding.
 
 ## Model
 
-Onboarding downloads Parakeet TDT 0.6b v3 int8 (~670 MB) from Hugging Face
-into `%LOCALAPPDATA%\OpenRamble`. To skip the in-VM download, copy a cached
-model from the host (`~/.cache/openramble-win/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/`)
-into the VM and import it:
+Onboarding downloads Parakeet TDT 0.6b v3 - our weight-only int4 build,
+[hmepas/parakeet-tdt-0.6b-v3-int4](https://huggingface.co/hmepas/parakeet-tdt-0.6b-v3-int4)
+(~720 MB; see `scripts/quantize-parakeet-int4.py` for why not the stock int8) - into
+`%LOCALAPPDATA%\OpenRambleData\Models` (the installer owns `%LOCALAPPDATA%\OpenRamble` and
+wipes it on reinstall, so data lives next door). To skip the in-VM download, copy the four
+files (`~/.cache/openramble-win/parakeet-int4/` on the host) into the VM and either import
+them:
 
 ```
 tools\asr-bench.exe import <path-to-copied-folder>
 ```
 
-(or let onboarding download; both paths end in the same verified install).
+or drop them into a `model\` folder next to `OpenRamble.App.exe` - the app installs from
+there by itself on the next start, no network involved (both paths end in the same verified
+install).
 
 ## Diagnostic log
 
@@ -49,6 +54,11 @@ another window while the hang it is recording is still going on:
 ```
 powershell -Command "Get-Content -Wait $env:USERPROFILE\Desktop\openramble-diag.txt"
 ```
+
+For an installed copy there is `OpenRamble-diag.bat` (in `releases/`, next to
+`OpenRamble-win-Setup-<version>.exe`): it stops the running app and restarts it with the
+log written next to the `.bat` itself - put both on a share, install from it,
+double-click the `.bat`, and read the log from any machine that sees the share.
 
 One line per event: an instant, an event name, then `key=value`. Everything one
 dictation does carries the same `session=` — the recording, the recognition and

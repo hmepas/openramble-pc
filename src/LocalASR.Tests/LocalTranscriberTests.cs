@@ -396,7 +396,9 @@ public class LocalTranscriberTests : IDisposable
         // 12.0 s of speech and 0.2 s at the very end. The previous cutting cut exactly at the
         // twelve-second threshold and did not give a remainder shorter than 0.35 s to the
         // engine at all - a "yes" at the end of a phrase vanished without a trace.
-        const float TailMarker = 0.42f;
+        // At the gain target on purpose: the level rule in front of the engine leaves a take
+        // that already peaks there untouched, so the marker arrives with its own value.
+        const float TailMarker = InputGain.TargetPeak;
         float[] samples =
         [
             .. Enumerable.Range(0, (int)(12.0 * 16_000))

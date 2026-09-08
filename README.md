@@ -45,7 +45,7 @@ Output: a self-contained folder, ~200 MB for Windows and ~240 MB for Linux
 Copy `dist/win-x64/` into a Windows machine or VM and run
 `OpenRamble.App.exe`. The app lives in the notification area (tray); first
 launch opens onboarding, which asks for microphone consent and downloads the
-model (~670 MB).
+model (~720 MB).
 
 Full manual test checklist and model-transfer shortcut (avoid the in-VM
 download by importing the host's cached model): see
@@ -171,8 +171,11 @@ The macOS original is expected as a sibling checkout at `../openramble`
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) —
   offline speech recognition runtime.
 - [NVIDIA Parakeet TDT 0.6b v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
-  (CC-BY-4.0) — the recognition model, downloaded on first run from the
-  [k2-fsa ONNX export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8).
+  (CC-BY-4.0) — the recognition model, downloaded on first run as our own
+  weight-only int4 build
+  ([hmepas/parakeet-tdt-0.6b-v3-int4](https://huggingface.co/hmepas/parakeet-tdt-0.6b-v3-int4),
+  made by `scripts/quantize-parakeet-int4.py` from the
+  [k2-fsa ONNX export](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3)).
 - [NAudio](https://github.com/naudio/NAudio) (MIT) — WASAPI capture.
 - [Velopack](https://github.com/velopack/velopack) (MIT) — installer and
   in-place upgrades on Windows.

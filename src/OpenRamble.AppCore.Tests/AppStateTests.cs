@@ -56,6 +56,66 @@ public sealed class AppStateTests : IDisposable
             StringComparison.Ordinal);
     }
 
+    // MARK: - Microphone level
+
+    /// <summary>
+    /// A take that peaks far below any healthy microphone earns one hint, after the session,
+    /// and only once per run - the second quiet take says nothing new about the hardware.
+    /// </summary>
+    [Fact]
+    public async Task AVeryQuietTakeIsExplainedOnce()
+    {
+        AppState state = await ReadyState();
+
+        await DictateOnceAtLevel(state, peak: 0.005f);
+        Assert.Contains(Overlay.Notices, notice => notice.Message.Contains("very quiet", StringComparison.Ordinal));
+        Assert.Contains("-46 dB", Overlay.Notices.Last(n => n.Message.Contains("very quiet", StringComparison.Ordinal)).Message, StringComparison.Ordinal);
+
+        int hints = Overlay.Notices.Count(notice => notice.Message.Contains("very quiet", StringComparison.Ordinal));
+        await DictateOnceAtLevel(state, peak: 0.005f);
+        Assert.Equal(hints, Overlay.Notices.Count(notice => notice.Message.Contains("very quiet", StringComparison.Ordinal)));
+    }
+
+    /// <summary>The first field laptop peaked at −25 dBFS and must pass in silence.</summary>
+    [Fact]
+    public async Task AnOrdinaryTakeEarnsNoLevelHint()
+    {
+        AppState state = await ReadyState();
+
+        await DictateOnceAtLevel(state, peak: 0.059f);
+
+        Assert.DoesNotContain(Overlay.Notices, notice => notice.Message.Contains("very quiet", StringComparison.Ordinal));
+    }
+
+    private async Task DictateOnceAtLevel(AppState state, float peak)
+    {
+        Monitor.OnPress!();
+        await TestWait.For("recording has started", () => state.DictationStateValue == DictationState.Listening);
+        harness.OnSamples!([peak]);
+        Monitor.OnRelease!();
+        await TestWait.For("dictation ended", () => state.DictationStateValue == DictationState.Idle);
+    }
+
+    // MARK: - Onboarding
+
+    /// <summary>
+    /// An update is not a first launch. The flow comes back only when this build asks for a newer
+    /// revision than the one the person finished - which is a decision made in code, on purpose.
+    /// </summary>
+    [Fact]
+    public void OnboardingReturnsOnlyWhenItsRevisionMovedOn()
+    {
+        harness.Settings.Write(new AppSettings { OnboardingCompletedRevision = OnboardingRevision.Current });
+        Assert.True(harness.MakeState().OnboardingCompleted);
+
+        harness.Settings.Write(new AppSettings { OnboardingCompletedRevision = OnboardingRevision.Current - 1 });
+        AppState state = harness.MakeState();
+        Assert.False(state.OnboardingCompleted);
+
+        state.OnboardingCompleted = true;
+        Assert.Equal(OnboardingRevision.Current, harness.Settings.Read().OnboardingCompletedRevision);
+    }
+
     // MARK: - Permissions
 
     [Fact]
@@ -72,7 +132,7 @@ public sealed class AppStateTests : IDisposable
     [Fact]
     public async Task ReturningUserSeesTheMissingPermissionNamed()
     {
-        harness.Settings.Write(new AppSettings { OnboardingCompleted = true });
+        harness.Settings.Write(new AppSettings { OnboardingCompletedRevision = OnboardingRevision.Current });
         harness.Permissions.MicrophoneGranted = false;
 
         _ = harness.MakeState();
@@ -94,7 +154,7 @@ public sealed class AppStateTests : IDisposable
     public async Task TheMissingPermissionNoticeIsThePlatformsOwn()
     {
         harness.MicrophoneRemedy = MicrophoneRemedy.Linux;
-        harness.Settings.Write(new AppSettings { OnboardingCompleted = true });
+        harness.Settings.Write(new AppSettings { OnboardingCompletedRevision = OnboardingRevision.Current });
         harness.Permissions.MicrophoneGranted = false;
 
         _ = harness.MakeState();

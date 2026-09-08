@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using DictationCore;
@@ -608,6 +609,18 @@ public sealed class AppHarness : IDisposable
 
     public FakeCapture Capture { get; } = new();
 
+    /// <summary>
+    /// The live-level callback the state handed to the capture; a test feeds it. Kept alive
+    /// exactly as long as the state that owns it, and no longer: the callback closes over the
+    /// state, and a harness that rooted it would fail the "everything is released after Dispose"
+    /// test on the harness rather than on the code.
+    /// </summary>
+    public Action<float[]>? OnSamples =>
+        onSamples is { } weak && weak.TryGetTarget(out Action<float[]>? callback) ? callback : null;
+
+    private WeakReference<Action<float[]>>? onSamples;
+    private readonly ConditionalWeakTable<object, Action<float[]>> onSamplesLifetime = new();
+
     public FakeInserter Inserter { get; } = new();
 
     public FakeSystemEvents SystemEvents { get; } = new();
@@ -662,7 +675,12 @@ public sealed class AppHarness : IDisposable
             Inserter = Inserter,
             Overlay = Overlay,
             Sounds = Sounds,
-            MakeCapture = (_, _, _) => Capture,
+            MakeCapture = (_, _, samples) =>
+            {
+                onSamples = new WeakReference<Action<float[]>>(samples);
+                if (samples.Target is { } owner) { onSamplesLifetime.AddOrUpdate(owner, samples); }
+                return Capture;
+            },
             Transcribe = (_, _) => async (_, token) =>
             {
                 if (Transcription.Delay is TimeSpan delay)

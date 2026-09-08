@@ -42,7 +42,7 @@ remedy is /etc/udev/rules.d/99-uinput.rules -
 
 - followed by: sudo udevadm control --reload && sudo modprobe uinput
 
-The recognition model (~670 MB) is not in this package. The application
+The recognition model (~720 MB) is not in this package. The application
 downloads it on first launch, and that download is the only network access it
 has: no audio and no text ever leaves the machine.
 

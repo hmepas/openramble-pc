@@ -500,6 +500,44 @@ public sealed class ModelStore
     /// from the interface and easily lands in the middle of a download - otherwise it would
     /// delete the folder the installation writes into, and that would fall over mid-process.
     /// </summary>
+    /// <summary>
+    /// After a new revision is in place, the previous ones are only disk: a model folder holds
+    /// one revision at a time by design, and a change of manifest that left 640 MB of the old
+    /// export beside the new one for every person who updated is exactly the kind of quiet
+    /// cost nobody would ever find. Only after a successful promotion, and only the siblings -
+    /// the staging and backup names have their own sweeps and their own rules.
+    /// </summary>
+    private void SweepOtherRevisions()
+    {
+        string[] entries;
+        try
+        {
+            entries = Directory.GetDirectories(layout.ModelDirectory);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        foreach (string entry in entries)
+        {
+            string name = Path.GetFileName(entry);
+            if (name.StartsWith('.') || string.Equals(name, layout.Revision, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            try
+            {
+                Directory.Delete(entry, recursive: true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // Left behind, not hidden: the next successful install tries again.
+            }
+        }
+    }
+
     private void SweepStaleStaging()
     {
         lock (gate)
@@ -625,10 +663,15 @@ public sealed class ModelStore
     /// <see cref="ModelInstallLayout.EngineDirectory"/> gives on a machine where the model is
     /// already installed.
     /// </summary>
-    public async Task ImportModel(string directory)
+    /// <param name="directory">The folder holding the manifest's files.</param>
+    /// <param name="force">
+    /// Import even over a copy the store believes ready - the import counterpart of
+    /// <see cref="Repair"/>, for a bundled model that the engine has just rejected.
+    /// </param>
+    public async Task ImportModel(string directory, bool force = false)
     {
         await RunExclusively(
-            skipWhenReady: true,
+            skipWhenReady: !force,
             token => RunInstall(
                 staging =>
                 {
@@ -706,6 +749,7 @@ public sealed class ModelStore
 
             ExcludeFromBackup(layout.ModelDirectory);
             SetState(new ModelState.Ready(layout.InstalledDirectory));
+            SweepOtherRevisions();
         }
         catch (OperationCanceledException)
         {

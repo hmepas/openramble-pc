@@ -26,8 +26,8 @@ public class ModelStatusTests
 
         Assert.Equal("Model not installed", status.Title);
         Assert.Equal([ModelStatus.Action.Install], status.Actions);
-        // One model, one button: the bundled manifest's own 670 MB.
-        Assert.Contains("670 MB", status.Detail);
+        // One model, one button: the bundled manifest's own 720 MB.
+        Assert.Contains("720 MB", status.Detail);
         Assert.Null(status.Progress);
     }
 
@@ -108,7 +108,7 @@ public class ModelStatusTests
 
         Assert.Equal("Model needs repair", status.Title);
         Assert.Equal([ModelStatus.Action.Repair], status.Actions);
-        Assert.Equal("Redownload Model — 670 MB", status.TitleFor(ModelStatus.Action.Repair));
+        Assert.Equal("Redownload Model — 720 MB", status.TitleFor(ModelStatus.Action.Repair));
         // A top-up after an update names only the remainder, not the full amount.
         Assert.Equal(
             "Redownload Model — 103 MB",

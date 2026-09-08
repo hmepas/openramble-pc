@@ -20,8 +20,12 @@ namespace OpenRamble.App;
 /// <item><description><b>HKLM</b> - "Microphone access" for the whole device. While it is off,
 /// the per-app switch is greyed out, so pointing the person at their app row would send them
 /// somewhere that cannot help.</description></item>
-/// <item><description><b>HKCU</b> - "Let desktop apps access your microphone". Desktop apps are
-/// not listed individually there; one switch governs them all.</description></item>
+/// <item><description><b>HKCU</b> - "Let apps access your microphone" on the key itself, and
+/// "Let desktop apps access your microphone" on its <c>NonPackaged</c> subkey. Desktop apps are
+/// not listed individually under the latter; one switch governs them all. Both are read: the
+/// first packaged builds read only the parent, called a denied desktop switch "granted", and
+/// went on to open the device - which answered with an access-denied that the person saw as
+/// "Couldn't record audio" instead of the Settings hint.</description></item>
 /// </list>
 /// <para>
 /// A missing value means allowed: a machine that never had the page opened has no value written,
@@ -37,7 +41,8 @@ public sealed class MicrophonePermissions : IPermissionReading
 
     public static bool DeviceAllowsMicrophone => Reads(Registry.LocalMachine);
 
-    public static bool UserAllowsDesktopApps => Reads(Registry.CurrentUser);
+    public static bool UserAllowsDesktopApps =>
+        Reads(Registry.CurrentUser) && Reads(Registry.CurrentUser, ConsentPath + @"\NonPackaged");
 
     /// <summary>
     /// The consent state as the interface names it - which needs one distinction the boolean does
@@ -49,11 +54,11 @@ public sealed class MicrophonePermissions : IPermissionReading
         return UserAllowsDesktopApps ? MicrophoneConsentState.Granted : MicrophoneConsentState.Denied;
     }
 
-    private static bool Reads(RegistryKey root)
+    private static bool Reads(RegistryKey root, string path = ConsentPath)
     {
         try
         {
-            using RegistryKey? key = root.OpenSubKey(ConsentPath);
+            using RegistryKey? key = root.OpenSubKey(path);
             return key?.GetValue("Value") as string is not "Deny";
         }
         catch (Exception error) when (error is UnauthorizedAccessException or IOException)

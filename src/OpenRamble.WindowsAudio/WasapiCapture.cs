@@ -131,7 +131,27 @@ public sealed class WasapiCapture : IMicrophoneDevice
                 throw new AudioCaptureError.EngineUnavailable("already recording");
             }
 
-            session = BuildSession();
+            try
+            {
+                session = BuildSession();
+            }
+            catch (Exception error)
+            {
+                // Everything between "which microphone" and "start it" - the activation of the
+                // audio client, its mix format, the take file, the resampler. The activation is
+                // where Windows says no (E_ACCESSDENIED for a privacy switch, a device error for
+                // a driver), and without this line that answer never reached the log.
+                DiagnosticLog.EmitException(
+                    "capture.start",
+                    error,
+                    ("session", DiagnosticLog.Session),
+                    ("ok", false),
+                    ("stage", "build"),
+                    ("hresult", $"0x{error.HResult:X8}"));
+                if (error is AudioCaptureError) { throw; }
+                throw new AudioCaptureError.EngineUnavailable(error.Message);
+            }
+
             current = session;
             latest = session;
         }
@@ -157,7 +177,9 @@ public sealed class WasapiCapture : IMicrophoneDevice
                 "capture.start",
                 error,
                 ("session", session.Number),
-                ("ok", false));
+                ("ok", false),
+                ("stage", "start"),
+                ("hresult", $"0x{error.HResult:X8}"));
             throw new AudioCaptureError.EngineUnavailable(error.Message);
         }
 
@@ -247,11 +269,14 @@ public sealed class WasapiCapture : IMicrophoneDevice
         string path = session.Writer.Close();
 
         bool released = await ReleaseDevice(session).ConfigureAwait(false);
+        (string peakDbfs, string rmsDbfs) = session.LevelsDbfs;
         DiagnosticLog.Emit(
             "capture.stop.end",
             ("session", session.Number),
             ("frames", session.Frames),
             ("samples", session.Samples),
+            ("peak_dbfs", peakDbfs),
+            ("rms_dbfs", rmsDbfs),
             ("audio_ms", duration),
             ("ms", Stopwatch.GetElapsedTime(began)),
             ("drained", drained),
@@ -316,12 +341,6 @@ public sealed class WasapiCapture : IMicrophoneDevice
         {
             // No microphone, or the audio service is down. Both are "the engine is not
             // available", and neither may be reported as an empty recording.
-            DiagnosticLog.EmitException(
-                "capture.start",
-                error,
-                ("session", DiagnosticLog.Session),
-                ("ok", false),
-                ("stage", "device-lookup"));
             throw new AudioCaptureError.EngineUnavailable(error.Message);
         }
 
@@ -406,7 +425,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
         {
             // Averaged, not picked: taking one channel of a stereo microphone throws away half
             // the voice, and on some laptops that half is the one facing the person.
-            samples = new StereoToMonoSampleProvider(samples) { LeftVolume = 0.5f, RightVolume = 0.5f };
+            samples = new AverageToMonoSampleProvider(samples);
         }
 
         IAudioSampleConverter? converter = MicrophoneCaptureFormat.Converter(
@@ -415,6 +434,53 @@ public sealed class WasapiCapture : IMicrophoneDevice
             (_, target) => new WdlConverter(samples, (int)target.SampleRate));
 
         return converter is WdlConverter wdl ? wdl.Provider : samples;
+    }
+
+    /// <summary>
+    /// Any number of channels down to one, by averaging them.
+    /// </summary>
+    /// <remarks>
+    /// Not NAudio's <c>StereoToMonoSampleProvider</c>: that one insists on exactly two channels,
+    /// and a laptop's microphone array reports four in its shared-mode mix format. The first
+    /// machine outside the VM answered every dictation with "Source must be stereo" - the whole
+    /// product dead on a common laptop, for a check that only ever needed to be a division.
+    /// </remarks>
+    private sealed class AverageToMonoSampleProvider : ISampleProvider
+    {
+        private readonly ISampleProvider source;
+        private readonly int channels;
+        private float[] interleaved = [];
+
+        public AverageToMonoSampleProvider(ISampleProvider source)
+        {
+            this.source = source;
+            channels = source.WaveFormat.Channels;
+            WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(source.WaveFormat.SampleRate, 1);
+        }
+
+        public WaveFormat WaveFormat { get; }
+
+        public int Read(float[] buffer, int offset, int count)
+        {
+            int wanted = count * channels;
+            if (interleaved.Length < wanted) { interleaved = new float[wanted]; }
+
+            int read = source.Read(interleaved, 0, wanted);
+            int frames = read / channels;
+            for (int frame = 0; frame < frames; frame++)
+            {
+                float sum = 0;
+                int first = frame * channels;
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    sum += interleaved[first + channel];
+                }
+
+                buffer[offset + frame] = sum / channels;
+            }
+
+            return frames;
+        }
     }
 
     /// <summary>
@@ -608,6 +674,8 @@ public sealed class WasapiCapture : IMicrophoneDevice
         private long frames;
         private long samples;
         private bool closed;
+        private float peak;
+        private double sumOfSquares;
 
         public Session(
             int number,
@@ -671,6 +739,24 @@ public sealed class WasapiCapture : IMicrophoneDevice
         public long Frames => Interlocked.Read(ref frames);
 
         public long Samples => Interlocked.Read(ref samples);
+
+        /// <summary>
+        /// The take's level in dBFS - peak and RMS - as numbers for the log. Levels only: the
+        /// one thing that tells "the microphone is quiet" from "the person was quiet" from "the
+        /// device delivered zeros", and nothing from which a word could be rebuilt.
+        /// </summary>
+        public (string Peak, string Rms) LevelsDbfs
+        {
+            get
+            {
+                float p; double ss; long n;
+                lock (pullGate) { p = peak; ss = sumOfSquares; n = samples; }
+                return (Dbfs(p), n == 0 ? "-inf" : Dbfs(Math.Sqrt(ss / n)));
+            }
+        }
+
+        private static string Dbfs(double linear) =>
+            linear <= 0 ? "-inf" : Math.Round(20 * Math.Log10(linear)).ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         public bool IsClosed { get { lock (pullGate) { return closed; } } }
 
@@ -759,7 +845,10 @@ public sealed class WasapiCapture : IMicrophoneDevice
 
                     var frame = new float[read];
                     Array.Copy(scratch, frame, read);
-                    peak = Math.Max(peak, Peak(frame));
+                    float framePeak = Peak(frame);
+                    peak = Math.Max(peak, framePeak);
+                    this.peak = Math.Max(this.peak, framePeak);
+                    foreach (float sample in frame) { sumOfSquares += (double)sample * sample; }
                     Deliver(frame);
                     Interlocked.Increment(ref frames);
                     Interlocked.Add(ref samples, read);

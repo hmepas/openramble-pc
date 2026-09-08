@@ -35,7 +35,7 @@ public sealed class SettingsStoreTests : IDisposable
             SoundsEnabled = false,
             RecognitionLanguage = "ru",
             LearnFromEdits = true,
-            OnboardingCompleted = true,
+            OnboardingCompletedRevision = OnboardingRevision.Current,
         };
 
         store.Write(settings);
@@ -82,7 +82,7 @@ public sealed class SettingsStoreTests : IDisposable
 
         Assert.Null(read.Hotkey);
         Assert.True(read.SoundsEnabled);
-        Assert.False(read.OnboardingCompleted);
+        Assert.Equal(0, read.OnboardingCompletedRevision);
         // Still on disk, byte for byte: nothing about a failed read licences a write.
         Assert.Equal(whole.Length / 2, new FileInfo(Path_).Length);
     }
@@ -94,6 +94,6 @@ public sealed class SettingsStoreTests : IDisposable
         AppSettings read = new SettingsStore(Path.Combine(root, "nowhere", "settings.json")).Read();
 
         Assert.Null(read.Hotkey);
-        Assert.False(read.OnboardingCompleted);
+        Assert.Equal(0, read.OnboardingCompletedRevision);
     }
 }

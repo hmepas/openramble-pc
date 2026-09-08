@@ -17,8 +17,8 @@ public class BundledManifestTests
         ModelManifest manifest = ModelManifest.Bundled();
 
         Assert.Equal("parakeet-tdt-0.6b-v3", manifest.ModelID);
-        Assert.Equal("csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8", manifest.Repository);
-        Assert.Equal("2bda32ec70b097a55adaa07d9a7173915b43cc78", manifest.Revision);
+        Assert.Equal("hmepas/parakeet-tdt-0.6b-v3-int4", manifest.Repository);
+        Assert.Equal("07b96facdcefe49b48403fd372d79b79bbcf6be9", manifest.Revision);
         Assert.Equal("1.13.5", manifest.FluidAudioVersion);
         Assert.Equal("CC-BY-4.0", manifest.License);
     }
@@ -32,9 +32,9 @@ public class BundledManifestTests
         Assert.Equal(
             new HashSet<string>(StringComparer.Ordinal)
             {
-                "encoder.int8.onnx",
-                "decoder.int8.onnx",
-                "joiner.int8.onnx",
+                "encoder.int4.onnx",
+                "decoder.onnx",
+                "joiner.onnx",
                 "tokens.txt",
             },
             paths);
@@ -51,7 +51,7 @@ public class BundledManifestTests
         ModelManifest manifest = ModelManifest.Bundled();
 
         Assert.Equal(
-            SherpaOnnxAdapter.RequiredFiles(EncoderPrecision.Int8).ToHashSet(StringComparer.Ordinal),
+            SherpaOnnxAdapter.RequiredFiles(EncoderPrecision.Int4WeightOnly).ToHashSet(StringComparer.Ordinal),
             manifest.Files.Select(file => file.Path).ToHashSet(StringComparer.Ordinal));
     }
 
@@ -61,8 +61,8 @@ public class BundledManifestTests
         ModelManifest manifest = ModelManifest.Bundled();
         double megabytes = manifest.TotalByteCount / 1_000_000.0;
 
-        // The user is promised "about 670 MB". A sharp jump means a file leaked into the set
-        // that recognition does not need - the unquantized encoder alone weighs 2.4 GB.
+        // The set weighs about 720 MB. A sharp jump means a file leaked into it that recognition
+        // does not need - the unquantized encoder alone weighs 2.4 GB.
         Assert.True(megabytes > 600, $"the set is suspiciously light: {megabytes} MB");
         Assert.True(megabytes < 800, $"the set is suspiciously heavy: {megabytes} MB");
     }

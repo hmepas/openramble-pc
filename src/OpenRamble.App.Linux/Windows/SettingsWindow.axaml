@@ -2,91 +2,269 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
         xmlns:core="clr-namespace:DictationCore;assembly=DictationCore"
+        xmlns:local="clr-namespace:OpenRamble.App.Linux"
         x:Class="OpenRamble.App.Linux.SettingsWindow"
         Title="OpenRamble Settings"
-        Width="620"
-        Height="560"
+        Width="720"
+        Height="600"
         WindowStartupLocation="CenterScreen">
-  <TabControl Margin="12">
+
+  <!--
+    Five panes behind a list on the left, the way the macOS window is a sidebar. Avalonia's
+    TabControl draws a strip; placing it on the left with a vertical header list gives the
+    same "one column of panes" reading without a second control to keep in step.
+  -->
+  <Window.Styles>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="Foreground" Value="Gray" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+    <Style Selector="TextBlock.section">
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Margin" Value="0,18,0,8" />
+    </Style>
+    <Style Selector="TextBlock.row">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="Grid.row">
+      <Setter Property="Margin" Value="0,4" />
+    </Style>
+    <!--
+      The small arrow that puts one setting back the way it came. Kept in the layout rather
+      than removed when inactive, so no row jumps as settings change - it is faded out instead.
+      See RevertToDefault.swift for why it is per setting and never "reset everything".
+    -->
+    <Style Selector="Button.revert">
+      <Setter Property="Content" Value="↺" />
+      <Setter Property="Padding" Value="6,2" />
+      <Setter Property="Margin" Value="8,0,0,0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="ToolTip.Tip" Value="Reset to default" />
+      <Setter Property="automation:AutomationProperties.Name" Value="Reset to default" />
+    </Style>
+    <Style Selector="ToggleSwitch">
+      <Setter Property="OnContent" Value="" />
+      <Setter Property="OffContent" Value="" />
+      <Setter Property="MinWidth" Value="0" />
+    </Style>
+  </Window.Styles>
+
+  <TabControl Margin="12" TabStripPlacement="Left">
 
     <TabItem Header="General">
-      <StackPanel Margin="16">
-        <TextBlock Text="Dictation key" FontWeight="SemiBold" />
-        <TextBlock Text="Hold it and speak. Press it twice to keep recording without holding."
-                   Foreground="Gray" TextWrapping="Wrap" Margin="0,2,0,6" />
-        <ComboBox x:Name="HotkeyPicker" Width="220" HorizontalAlignment="Left"
-                  automation:AutomationProperties.Name="Dictation key" />
-        <TextBlock x:Name="HotkeyWarning" TextWrapping="Wrap" Margin="0,8,0,0"
-                   IsVisible="False" />
+      <ScrollViewer>
+        <StackPanel Margin="16,8,16,16">
+          <TextBlock Classes="section" Margin="0,0,0,8" Text="Shortcut" />
 
-        <Separator Margin="0,18" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Dictation key" />
+            <ComboBox Grid.Column="1" x:Name="HotkeyPicker" Width="200"
+                      automation:AutomationProperties.Name="Dictation key"
+                      automation:AutomationProperties.HelpText="The key you hold down while dictating" />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertHotkey" Click="OnRevertHotkey" />
+          </Grid>
+          <TextBlock x:Name="HotkeyWarning" TextWrapping="Wrap" Margin="0,4,0,0" IsVisible="False" />
 
-        <CheckBox x:Name="SoundsToggle" Content="Play a sound when something needs attention" />
-        <TextBlock Text="Only when the words did not reach the field. Silence means it worked."
-                   Foreground="Gray" TextWrapping="Wrap" Margin="24,2,0,0" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Copy last dictation" />
+            <local:ShortcutRecorderButton Grid.Column="1" x:Name="CopyShortcutRecorder"
+                                          automation:AutomationProperties.HelpText="Press this shortcut to put the last dictation back on the clipboard" />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertCopyShortcut" Click="OnRevertCopyShortcut" />
+          </Grid>
+          <TextBlock x:Name="CopyShortcutProblem" Classes="hint" HorizontalAlignment="Right"
+                     IsVisible="False" />
+          <TextBlock Classes="hint" Margin="0,6,0,0"
+                     Text="Hold to talk, or double-press for hands-free dictation. Press once more to finish. The copy shortcut is off until you choose one, so it never collides with a key you already use." />
 
-        <CheckBox x:Name="LaunchToggle" Content="Start OpenRamble when I sign in" Margin="0,14,0,0" />
+          <TextBlock Classes="section" Text="Behavior" />
 
-        <Separator Margin="0,18" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Launch at login" />
+            <ToggleSwitch Grid.Column="1" x:Name="LaunchToggle"
+                          automation:AutomationProperties.Name="Launch at login"
+                          automation:AutomationProperties.HelpText="Starts OpenRamble automatically when you sign in" />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertLaunch" Click="OnRevertLaunch" />
+          </Grid>
 
-        <TextBlock Text="Permissions" FontWeight="SemiBold" />
-        <TextBlock x:Name="PermissionTitle" Margin="0,6,0,0" />
-        <TextBlock x:Name="PermissionDetail" Foreground="Gray" TextWrapping="Wrap" Margin="0,2,0,6" />
-        <Button x:Name="PermissionButton" HorizontalAlignment="Left" Padding="12,4"
-                Click="OnPermissionAction" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Also copy dictations to the clipboard" />
+            <ToggleSwitch Grid.Column="1" x:Name="ClipboardToggle"
+                          automation:AutomationProperties.Name="Also copy dictations to the clipboard"
+                          automation:AutomationProperties.HelpText="Leaves each finished dictation on the clipboard of this PC. Off by default — the clipboard is shared with everything else running here." />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertClipboard" Click="OnRevertClipboard" />
+          </Grid>
+
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Add a space after each dictation" />
+            <ToggleSwitch Grid.Column="1" x:Name="TrailingSpaceToggle"
+                          automation:AutomationProperties.Name="Add a space after each dictation"
+                          automation:AutomationProperties.HelpText="For dictating in runs, so the next phrase does not arrive welded to the last word." />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertTrailingSpace" Click="OnRevertTrailingSpace" />
+          </Grid>
+
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Play a sound when something needs you" />
+            <ToggleSwitch Grid.Column="1" x:Name="SoundsToggle"
+                          automation:AutomationProperties.Name="Play a sound when something needs you"
+                          automation:AutomationProperties.HelpText="A quiet tone when the text didn't reach the field or nothing was recognized. A dictation that works stays silent." />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertSounds" Click="OnRevertSounds" />
+          </Grid>
+
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Microphone" />
+            <ComboBox Grid.Column="1" x:Name="DevicePicker" Width="200"
+                      automation:AutomationProperties.Name="Microphone"
+                      automation:AutomationProperties.HelpText="Which input to record through. The system default follows whatever your desktop is using." />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertDevice" Click="OnRevertDevice" />
+          </Grid>
+          <!-- Said out loud rather than swapped silently: someone who chose a headset and quietly
+               got the laptop lid would only find out from the transcript. -->
+          <TextBlock x:Name="DeviceNotice" TextWrapping="Wrap" Margin="0,4,0,0" IsVisible="False" />
+
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Finish hands-free dictation on silence" />
+            <ToggleSwitch Grid.Column="1" x:Name="SilenceToggle"
+                          automation:AutomationProperties.Name="Finish hands-free dictation on silence"
+                          automation:AutomationProperties.HelpText="Only in hands-free mode. While you hold the key, a pause is never treated as the end." />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertSilence" Click="OnRevertSilence" />
+          </Grid>
+
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Dictation panel" />
+            <ComboBox Grid.Column="1" x:Name="PlacementPicker" Width="200"
+                      automation:AutomationProperties.Name="Dictation panel"
+                      automation:AutomationProperties.HelpText="Places dictation feedback at the top or bottom of the active screen" />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertPlacement" Click="OnRevertPlacement" />
+          </Grid>
+
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Unload model" />
+            <ComboBox Grid.Column="1" x:Name="UnloadPicker" Width="200"
+                      automation:AutomationProperties.Name="Unload model"
+                      automation:AutomationProperties.HelpText="Frees the speech model's memory after this much idle time. It reloads under your voice at the next dictation." />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertUnload" Click="OnRevertUnload" />
+          </Grid>
+
+          <TextBlock Classes="section" Text="Permissions" />
+          <TextBlock x:Name="PermissionTitle" />
+          <TextBlock x:Name="PermissionDetail" Classes="hint" Margin="0,2,0,6" />
+          <Button x:Name="PermissionButton" HorizontalAlignment="Left" Padding="12,4"
+                  Click="OnPermissionAction" />
+          <TextBlock Classes="hint" Margin="0,8,0,0"
+                     Text="Finished text is pasted through the clipboard; its previous contents are restored shortly afterward." />
+        </StackPanel>
+      </ScrollViewer>
+    </TabItem>
+
+    <TabItem Header="Recognition">
+      <StackPanel Margin="16,8,16,16">
+        <TextBlock Classes="section" Margin="0,0,0,8" Text="Speech model" />
+        <TextBlock x:Name="ModelTitle" FontWeight="SemiBold" />
+        <TextBlock x:Name="ModelDetail" Classes="hint" Margin="0,4,0,0" />
+        <ProgressBar x:Name="ModelProgress" Height="6" Margin="0,10,0,0" IsVisible="False"
+                     Minimum="0" Maximum="1" />
+        <TextBlock x:Name="ModelProgressLabel" Classes="hint" Margin="0,4,0,0" IsVisible="False" />
+        <StackPanel x:Name="ModelActions" Orientation="Horizontal" Margin="0,12,0,0" />
+        <TextBlock Classes="hint" Margin="0,16,0,0"
+                   Text="Parakeet TDT 0.6B v3 runs entirely on this PC, through sherpa-onnx on the processor. Once downloaded and verified, recognition works offline — audio is never uploaded. The model picks the language from the sound itself, including mid-sentence switches, so there is nothing to choose here. Audio is retained only after a disclosed technical failure or interrupted process, then pruned within seven days; those takes are listed under Dictation History." />
       </StackPanel>
     </TabItem>
 
-    <TabItem Header="Model">
-      <StackPanel Margin="16">
-        <TextBlock Text="Recognition language" FontWeight="SemiBold" />
-        <TextBlock Text="Automatic detects the language from the sound. Pick one only if detection keeps guessing wrong — mixed speech is better left automatic."
-                   Foreground="Gray" TextWrapping="Wrap" Margin="0,2,0,6" />
-        <ComboBox x:Name="LanguagePicker" Width="260" HorizontalAlignment="Left"
-                  automation:AutomationProperties.Name="Recognition language" />
+    <TabItem Header="Dictation History">
+      <DockPanel Margin="16,8,16,16">
+        <!-- Dictations that never became text, kept as audio so nothing was lost. They belong
+             here, with the other recordings, not under the speech model. -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+          <StackPanel>
+            <TextBlock Text="Dictations that didn't finish" FontWeight="SemiBold" />
+            <TextBlock Classes="hint"
+                       Text="Their audio was kept so nothing was lost. It is deleted within seven days." />
+          </StackPanel>
+          <Button Grid.Column="1" Content="Show in folder" Padding="12,4" VerticalAlignment="Center"
+                  Click="OnOpenRecordings"
+                  automation:AutomationProperties.HelpText="Opens the folder holding the kept audio" />
+        </Grid>
+        <Separator DockPanel.Dock="Top" />
 
-        <Separator Margin="0,18" />
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+          <Separator Margin="0,0,0,10" />
+          <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+            <TextBlock Text="Keep" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <ComboBox Grid.Column="1" x:Name="HistoryLimitPicker" Width="120"
+                      automation:AutomationProperties.Name="Keep"
+                      automation:AutomationProperties.HelpText="How many dictations to keep, with their audio" />
+            <Button Grid.Column="3" x:Name="ShowHistoryButton" Content="Show in folder" Padding="12,4"
+                    Click="OnRevealHistory"
+                    automation:AutomationProperties.HelpText="Opens the folder holding the audio kept with these dictations" />
+            <Button Grid.Column="4" x:Name="ClearHistoryButton" Content="Delete All" Padding="12,4"
+                    Margin="8,0,0,0" Click="OnClearHistory" />
+          </Grid>
+          <TextBlock Classes="hint" Margin="0,8,0,0"
+                     Text="The last dictations are kept on this PC with the audio that produced them, so you can hear what was actually said when the text is wrong. A starred one stays: it does not count against the limit and is not deleted when newer dictations push past it. Nothing here ever leaves this PC." />
+        </StackPanel>
 
-        <TextBlock x:Name="ModelTitle" FontWeight="SemiBold" />
-        <TextBlock x:Name="ModelDetail" Foreground="Gray" TextWrapping="Wrap" Margin="0,4,0,0" />
-        <ProgressBar x:Name="ModelProgress" Height="6" Margin="0,10,0,0" IsVisible="False"
-                     Minimum="0" Maximum="1" />
-        <TextBlock x:Name="ModelProgressLabel" Foreground="Gray" Margin="0,4,0,0"
-                   IsVisible="False" />
-        <StackPanel x:Name="ModelActions" Orientation="Horizontal" Margin="0,12,0,0" />
-      </StackPanel>
+        <TextBlock x:Name="HistoryEmpty" TextAlignment="Center" VerticalAlignment="Center"
+                   TextWrapping="Wrap" Foreground="Gray"
+                   Text="No dictations yet&#10;Finished dictations appear here with their audio." />
+        <ScrollViewer x:Name="HistoryScroller">
+          <StackPanel x:Name="HistoryList"
+                      automation:AutomationProperties.Name="Dictation history" />
+        </ScrollViewer>
+      </DockPanel>
     </TabItem>
 
     <TabItem Header="Dictionary">
-      <DockPanel Margin="16">
-        <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Foreground="Gray"
-                   Text="Words the recognizer hears one way and you write another. Speak the phrase on the left; OpenRamble writes the text on the right." />
+      <DockPanel Margin="16,8,16,16">
+        <TextBlock DockPanel.Dock="Top" Classes="hint"
+                   Text="Common technical terms are handled automatically. Add personal names or phrases the model hears differently: what the model hears on the left, what should be written on the right." />
         <TextBlock x:Name="DictionaryProblem" DockPanel.Dock="Top" TextWrapping="Wrap"
                    Margin="0,8,0,0" IsVisible="False" />
 
+        <!-- The only place where the application reads the content of someone else's window.
+             Off by default, and the caption says exactly what is read - otherwise the choice is
+             not conscious. It lives here because what it produces is dictionary entries. -->
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+          <Separator Margin="0,0,0,10" />
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Classes="row" Text="Learn from your edits" />
+            <ToggleSwitch Grid.Column="1" x:Name="LearnToggle"
+                          automation:AutomationProperties.Name="Learn from your edits"
+                          automation:AutomationProperties.HelpText="Reads back the field it pasted into, to learn words you fix by hand" />
+          </Grid>
+          <TextBlock Classes="hint"
+                     Text="Off by default. After a paste, OpenRamble can re-read only that field at 8 and 25 seconds to learn a correction. The content stays on this PC. On this desktop nothing can read another window's text yet, so the switch changes nothing until it can." />
+        </StackPanel>
+
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
-          <TextBox x:Name="SpokenBox" Width="180" automation:AutomationProperties.Name="Heard phrase" />
+          <TextBox x:Name="SpokenBox" Width="180" Watermark="Spoken phrase"
+                   automation:AutomationProperties.Name="Heard as" />
           <TextBlock Text="→" Margin="8,4" />
-          <TextBox x:Name="WrittenBox" Width="180" automation:AutomationProperties.Name="Written text" />
-          <Button Content="Add" Margin="8,0,0,0" Padding="12,2" Click="OnAddReplacement" />
+          <TextBox x:Name="WrittenBox" Width="180" Watermark="Final spelling"
+                   automation:AutomationProperties.Name="Write as" />
+          <Button Content="Add" Margin="8,0,0,0" Padding="12,2" Click="OnAddReplacement"
+                  automation:AutomationProperties.Name="Add replacement" />
           <Button Content="Remove selected" Margin="8,0,0,0" Padding="12,2" Click="OnRemoveReplacement" />
         </StackPanel>
 
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,10,0,0">
-          <Button Content="Import…" Padding="12,2" Click="OnImportDictionary" />
-          <Button Content="Export…" Margin="8,0,0,0" Padding="12,2" Click="OnExportDictionary" />
+          <Button Content="Import…" Padding="12,2" Click="OnImportDictionary"
+                  automation:AutomationProperties.HelpText="Adds phrases from an OpenRamble dictionary file" />
+          <Button x:Name="ExportButton" Content="Export…" Margin="8,0,0,0" Padding="12,2" Click="OnExportDictionary"
+                  automation:AutomationProperties.HelpText="Saves all phrases to a file" />
         </StackPanel>
 
-        <!--
-          A ListBox with a two-column template where WPF has a ListView with a GridView. Avalonia
-          ships neither; the grid control that could do the header for us lives in a separate
-          package, and two columns of text is not worth a dependency. The header is the row of
-          labels below, kept in step with the template's own column widths by hand.
-        -->
         <Grid DockPanel.Dock="Top" ColumnDefinitions="240,*" Margin="4,12,0,4">
           <TextBlock Grid.Column="0" Text="Heard" FontWeight="SemiBold" />
           <TextBlock Grid.Column="1" Text="Written" FontWeight="SemiBold" />
         </Grid>
+
+        <!-- An empty dictionary is common for a new person, and it used to be just a
+             half-window gap without a single word. -->
+        <TextBlock x:Name="DictionaryEmpty" DockPanel.Dock="Top" Classes="hint" Margin="4,8"
+                   Text="No personal replacements yet. Add a pair below: what the model hears on the left, what should be written on the right."
+                   IsVisible="False" />
 
         <ListBox x:Name="ReplacementList"
                  automation:AutomationProperties.Name="Replacement dictionary">
@@ -102,25 +280,50 @@
       </DockPanel>
     </TabItem>
 
-    <TabItem Header="Privacy">
-      <StackPanel Margin="16">
-        <TextBlock FontWeight="SemiBold" Text="Everything happens on this PC." />
-        <TextBlock TextWrapping="Wrap" Margin="0,6,0,0"
-                   Text="Speech is recognized by a model that lives on this machine. No audio and no text is ever sent anywhere. The application makes exactly one kind of network request in its life: downloading the recognition model, when you ask it to." />
-        <TextBlock TextWrapping="Wrap" Margin="0,10,0,0"
-                   Text="There is no telemetry, no analytics and no crash reporting. Dictated words are never written to a log." />
-        <TextBlock TextWrapping="Wrap" Margin="0,10,0,0"
-                   Text="A recording is deleted the moment its text is inserted. Only a recording that failed — a crash, a disconnected microphone, a recognition error — is kept, on this PC, for a few days, so that words are never lost silently." />
-        <Button Content="Open recordings folder" HorizontalAlignment="Left" Padding="12,4"
-                Margin="0,12,0,0" Click="OnOpenRecordings" />
+    <TabItem Header="About">
+      <ScrollViewer>
+        <StackPanel Margin="16,8,16,16">
+          <TextBlock Text="OpenRamble" FontSize="20" FontWeight="SemiBold" />
+          <TextBlock Text="Private dictation for your PC" Foreground="Gray" />
+          <TextBlock x:Name="VersionText" Classes="hint" Margin="0,2,0,0" />
 
-        <Separator Margin="0,18" />
+          <TextBlock Classes="section" Text="Appearance" />
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Theme" />
+            <ComboBox Grid.Column="1" x:Name="ThemePicker" Width="200"
+                      automation:AutomationProperties.Name="Theme"
+                      automation:AutomationProperties.HelpText="Follow the desktop, or keep this app light or dark on its own" />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertTheme" Click="OnRevertTheme" />
+          </Grid>
 
-        <TextBlock FontWeight="SemiBold" Text="Learning from your edits" />
-        <TextBlock TextWrapping="Wrap" Foreground="Gray" Margin="0,6,0,6"
-                   Text="When this is on, OpenRamble re-reads the field it just inserted into — for half a minute, in that field only — and turns your corrections of terms into dictionary entries. It is off unless you switch it on, because it is the only feature that looks at the contents of another window." />
-        <CheckBox x:Name="LearnToggle" Content="Learn terms from my corrections" />
-      </StackPanel>
+          <TextBlock Classes="section" Text="Privacy" />
+          <TextBlock FontWeight="SemiBold" Text="Speech stays on this PC" />
+          <TextBlock Classes="hint" Margin="0,4,0,0"
+                     Text="Speech is recognized by a model that lives on this machine. No audio and no text is ever sent anywhere. There is no account, no analytics and no crash reporting; dictated words are never written to a log. The one network request in the app's life is downloading the recognition model, when you ask it to." />
+
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto" Margin="0,10,0,0">
+            <TextBlock Classes="row" Text="Keep detailed logs" />
+            <ToggleSwitch Grid.Column="1" x:Name="LoggingToggle"
+                          automation:AutomationProperties.Name="Keep detailed logs"
+                          automation:AutomationProperties.HelpText="Writes a plain text file you can open and send. Off by default, and nothing is written while it is off. Nothing you say is ever recorded — timings and reasons only." />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertLogging" Click="OnRevertLogging" />
+          </Grid>
+          <TextBlock Classes="hint"
+                     Text="Writes a plain text file you can open and send, one per day. Off by default, and nothing is written while it is off. Nothing you say is ever recorded — timings and reasons only." />
+
+          <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+            <Button Content="Open Logs" Padding="12,4" Click="OnOpenLogs"
+                    automation:AutomationProperties.Name="Open log folder" />
+            <Button Content="Open recordings folder" Padding="12,4" Margin="8,0,0,0" Click="OnOpenRecordings"
+                    automation:AutomationProperties.HelpText="Opens the folder with any recordings kept after a failure" />
+          </StackPanel>
+
+          <TextBlock Classes="section" Text="Credits" />
+          <TextBlock Classes="hint"
+                     Text="Parakeet TDT 0.6B v3 © NVIDIA, licensed under CC BY 4.0. Recognition runs through sherpa-onnx (Apache 2.0). The interface is built with Avalonia (MIT). This is an unofficial port of OpenRamble by Mik Wiseman (MIT)." />
+          <Button Content="View source on GitHub" Margin="0,8,0,0" Padding="12,4" Click="OnOpenSource" />
+        </StackPanel>
+      </ScrollViewer>
     </TabItem>
   </TabControl>
 </Window>

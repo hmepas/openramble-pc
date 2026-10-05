@@ -41,6 +41,12 @@ public sealed class OverlayModel
     private DictationState state = DictationState.Idle;
     private DictationNotice? notice;
     private EnginePreparationState? enginePreparation;
+    private bool isWaitingForEngine;
+    /// <summary>
+    /// A session dismissal that arrived under a notice. The notice owns the panel until its
+    /// timer decides; then the dismissal is honoured rather than the finished session revived.
+    /// </summary>
+    private bool dismissalDeferred;
     private bool isVisible;
     private TimeSpan frozenElapsed;
     private MonotonicInstant? startedAt;
@@ -135,8 +141,33 @@ public sealed class OverlayModel
         {
             lock (gate)
             {
-                return OverlayContent.Make(state, notice, ElapsedLocked(), enginePreparation);
+                return OverlayContent.Make(state, notice, ElapsedLocked(), enginePreparation, isWaitingForEngine);
             }
+        }
+    }
+
+    /// <summary>Whether the panel is currently telling someone that the model is still loading.</summary>
+    public bool IsWaitingForEngine
+    {
+        get
+        {
+            lock (gate)
+            {
+                return isWaitingForEngine;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The take is finished and the model is not resident yet. <c>true</c> opens the wait,
+    /// <c>false</c> closes it; the kernel calls the second on every exit, and a dismissal closes
+    /// it too.
+    /// </summary>
+    public void SetWaitingForEngine(bool waiting)
+    {
+        lock (gate)
+        {
+            isWaitingForEngine = waiting;
         }
     }
 
@@ -171,6 +202,10 @@ public sealed class OverlayModel
             CancelAutoHideLocked();
             state = newState;
             notice = null;
+            // A new take supersedes a dismissal deferred from the previous notice, and a new
+            // take is not waiting for anything yet.
+            dismissalDeferred = false;
+            if (newState != DictationState.Transcribing) { isWaitingForEngine = false; }
 
             // Once text is recognized, the destination application is the only useful feedback
             // surface. Do not cover it with a redundant insertion HUD.
@@ -252,16 +287,23 @@ public sealed class OverlayModel
 
     private bool? HideLocked()
     {
-        SetElapsedLocked(ElapsedLocked(), ticking: false);
-        // The session that owned the HUD is over. Without this line a notice shown by a failing
-        // start would expire into the dead session's "Turning on the microphone…" - a panel
-        // nothing is ever going to remove.
-        state = DictationState.Idle;
         if (notice is not null)
         {
+            // The notice owns the panel until its timer decides whether to return to the
+            // underlying session or honour this dismissal. Erasing the live state now would
+            // resurrect nothing correctly: a notice over a running take must come back to
+            // that take, and a notice over a finished one must not revive it.
+            dismissalDeferred = true;
             return null;
         }
 
+        SetElapsedLocked(ElapsedLocked(), ticking: false);
+        // The session that owned the HUD is over. Without this line a notice shown later would
+        // expire into the dead session's "Turning on the microphone…" - a panel nothing is
+        // ever going to remove. A dismissed panel that stayed in Transcribing kept describing
+        // live animated work after the window was gone.
+        state = DictationState.Idle;
+        isWaitingForEngine = false;
         CancelAutoHideLocked();
         bool? change = SetVisibleLocked(false);
         // The next dictation must announce itself again, even if the state matches the
@@ -298,22 +340,36 @@ public sealed class OverlayModel
             // for repeated updates within one impression.
             lastAnnouncement = null;
 
-            switch (state)
+            if (dismissalDeferred)
             {
-                case DictationState.Preparing:
-                case DictationState.Listening:
-                case DictationState.Transcribing:
-                    // An unrelated menu action can show a notice while the microphone keeps
-                    // running. Return to the underlying session instead of silently removing
-                    // its HUD and elapsed timer.
-                    SetElapsedLocked(ElapsedLocked(), ticking: state == DictationState.Listening);
-                    visibilityChange = SetVisibleLocked(true);
-                    toAnnounce = TakeAnnouncementLocked();
-                    break;
+                // Cleanup followed the failure notice immediately. The person has had the
+                // notice's whole lifetime to read it; now honour the dismissal instead of
+                // resurrecting the completed transcription underneath it.
+                dismissalDeferred = false;
+                state = DictationState.Idle;
+                isWaitingForEngine = false;
+                SetElapsedLocked(ElapsedLocked(), ticking: false);
+                visibilityChange = SetVisibleLocked(false);
+            }
+            else
+            {
+                switch (state)
+                {
+                    case DictationState.Preparing:
+                    case DictationState.Listening:
+                    case DictationState.Transcribing:
+                        // An unrelated menu action can show a notice while the microphone keeps
+                        // running. Return to the underlying session instead of silently
+                        // removing its HUD and elapsed timer.
+                        SetElapsedLocked(ElapsedLocked(), ticking: state == DictationState.Listening);
+                        visibilityChange = SetVisibleLocked(true);
+                        toAnnounce = TakeAnnouncementLocked();
+                        break;
 
-                default:
-                    visibilityChange = SetVisibleLocked(false);
-                    break;
+                    default:
+                        visibilityChange = SetVisibleLocked(false);
+                        break;
+                }
             }
         }
 
@@ -361,7 +417,7 @@ public sealed class OverlayModel
 
     private OverlayContent? TakeAnnouncementLocked()
     {
-        OverlayContent content = OverlayContent.Make(state, notice, ElapsedLocked(), enginePreparation);
+        OverlayContent content = OverlayContent.Make(state, notice, ElapsedLocked(), enginePreparation, isWaitingForEngine);
         if (content.Announcement is not string announcement || announcement == lastAnnouncement)
         {
             return null;

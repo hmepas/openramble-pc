@@ -19,6 +19,65 @@ public sealed class OverlayContentTests
 
     // MARK: - States
 
+    // MARK: - Waiting is not working
+
+    /// <summary>
+    /// A take that has to wait for the model spends that wait in the transcribing state. Calling
+    /// it transcription is a lie that grows with the wait, and the wait can reach the preparation
+    /// deadline.
+    /// </summary>
+    [Fact]
+    public void WaitingForTheModelIsNotCalledTranscribing()
+    {
+        OverlayContent waiting = OverlayContent.Make(DictationState.Transcribing, null, TimeSpan.Zero, isWaitingForEngine: true);
+        OverlayContent working = OverlayContent.Make(DictationState.Transcribing, null, TimeSpan.Zero);
+
+        Assert.Equal("Waking the model…", waiting.Title);
+        Assert.NotEqual(working.Title, waiting.Title);
+        // Still work, still not a failure: the words are safe either way.
+        Assert.Equal(OverlayTone.Working, waiting.Tone);
+        Assert.NotNull(waiting.Subtitle);
+        Assert.NotEqual(working.AccessibilityLabel, waiting.AccessibilityLabel);
+    }
+
+    /// <summary>
+    /// The flag belongs to the transcribing panel alone. A stray <c>true</c> must not rewrite a
+    /// state that has nothing to do with a model load.
+    /// </summary>
+    [Fact]
+    public void TheModelWaitDoesNotLeakIntoOtherStates()
+    {
+        foreach (DictationState state in new[] { DictationState.Idle, DictationState.Preparing, DictationState.Listening, DictationState.Inserting })
+        {
+            Assert.Equal(
+                OverlayContent.Make(state, null, TimeSpan.Zero).Title,
+                OverlayContent.Make(state, null, TimeSpan.Zero, isWaitingForEngine: true).Title);
+        }
+    }
+
+    /// <summary>A failure has one explanation, not two. A notice still wins.</summary>
+    [Fact]
+    public void ANoticeStillOutranksTheModelWait()
+    {
+        var notice = new DictationNotice(DictationNoticeKind.Failure, "Something went wrong.");
+        Assert.Equal(
+            "Something went wrong.",
+            OverlayContent.Make(DictationState.Transcribing, notice, TimeSpan.Zero, isWaitingForEngine: true).Title);
+    }
+
+    /// <summary>The preparation's own seconds ride along under the wait: a moving counter reads as work.</summary>
+    [Fact]
+    public void TheWaitLetsThePreparationSecondsThrough()
+    {
+        EnginePreparationState loading = EnginePreparationState.Make(
+            EnginePreparationState.Phase.LoadingRecognizer, TimeSpan.FromSeconds(12));
+
+        OverlayContent content = OverlayContent.Make(DictationState.Transcribing, null, TimeSpan.Zero, loading, isWaitingForEngine: true);
+
+        Assert.Equal("Waking the model…", content.Title);
+        Assert.Contains("12", content.Subtitle, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Scenario001()
     {

@@ -22,28 +22,50 @@ public sealed partial class AppState
     private bool isRecyclingEngine;
 
     /// <summary>
-    /// When the engine last did real work. Decides whether a keypress warms it in parallel with
-    /// the recording (see <see cref="EngineWarming"/>).
+    /// True while an engine that was deliberately given back should stay cold.
+    ///
+    /// An idle unload is a decision, not a failure: the comeback belongs to the next key press.
+    /// The standing preparation rule must respect that, or the app would immediately reload
+    /// what it just released. Setup never sets this, because during setup the person is waiting
+    /// for the engine rather than resting from it.
     /// </summary>
-    private DateTimeOffset? lastEngineActivity;
+    private bool shouldStayUnloadedUntilUse;
 
-    /// <summary>Consecutive warning-tier pressure events; one blip does nothing.</summary>
-    private int consecutiveWarnings;
+    private IdleUnloadPolicy modelUnloadTimeout;
 
-    /// <summary>When the last engine load completed — feeds the anti-thrash hold.</summary>
-    private DateTimeOffset? lastLoadCompletedAt;
+    /// <summary>Test-only idle-unload countdown override (see <see cref="AppEnvironment"/>).</summary>
+    private readonly TimeSpan? idleUnloadDelayOverride;
 
-    /// <summary>The most recent tier the OS reported; rules between events use it.</summary>
-    private MemoryPressureTier lastPressureTier = MemoryPressureTier.Normal;
+    /// <summary>One pending idle-unload timer at most; any dictation activity replaces it.</summary>
+    private Timer? idleUnloadTimer;
 
     /// <summary>
-    /// One-shot: armed only while a residency rule waits on a time boundary. At rest — normal
-    /// pressure, or nothing pending — no timer exists.
+    /// Model preparation is single-flight at this boundary as well as inside the transcriber.
+    /// This keeps UI state and recovery decisions causal when startup, wake and a key press
+    /// arrive together.
     /// </summary>
-    private Timer? residencyTimer;
+    private Task<EngineWarmupOutcome>? engineWarmupTask;
+    private int engineWarmupTaskRevision;
+
+    /// <summary>
+    /// At most one retry loop may exist. A transient engine failure never becomes a model
+    /// redownload request.
+    /// </summary>
+    private Task? engineWarmupRetryTask;
+    private CancellationTokenSource? engineWarmupRetryCancellation;
+    private int engineWarmupRetryRevision;
+    private readonly TimeSpan? engineWarmupRetryDelayOverride;
 
     private Timer? preparationTimer;
     private DateTimeOffset? preparationStartedAt;
+
+    private enum EngineWarmupOutcome
+    {
+        Ready,
+        Skipped,
+        Retryable,
+        RepairRequired,
+    }
 
     // MARK: - Model
 
@@ -63,26 +85,45 @@ public sealed partial class AppState
         ApplyModelState(main);
     }
 
+    /// <summary>
+    /// Publish what the disk holds, and let readiness start what readiness starts.
+    /// </summary>
     /// <remarks>
+    /// <para>
     /// The macOS build combines two stores here through <see cref="ModelPairState"/>. This port
     /// installs one model - the acoustic term hinter has no ONNX export - so the main store's
-    /// state IS the state. Running it through the pair combiner with an absent second store would
-    /// answer "not installed" forever.
+    /// state IS the state.
+    /// </para>
+    /// <para>
+    /// A disk inspection cannot see an engine failure: the files are intact, but the model did
+    /// not come up. Until the person explicitly asks for a repair the refusal stays on screen -
+    /// otherwise the repair button disappears and dictation still does not work. Decided before
+    /// publishing, not after: readiness is what starts a preparation, so a "ready" the app is
+    /// about to take back would start one that instantly finds nothing to do.
+    /// </para>
+    /// <para>
+    /// Every route by which the files become usable starts preparation. Readiness arrives from
+    /// more places than the two events that used to start a warm-up: a finished install, yes,
+    /// but also a plain look at the disk - the Settings window refreshes on open, and a run that
+    /// begins before the download re-reads the result afterwards. Readiness discovered that way
+    /// used to start nothing, and the app sat on a ready model with a cold engine that had never
+    /// once been loaded, which is the one cold engine a key press cannot warm. Hanging the rule
+    /// on the fact itself, rather than on the events that happen to produce it, is what makes it
+    /// standing.
+    /// </para>
     /// </remarks>
     private void ApplyModelState(ModelState main)
     {
-        ModelStateValue = main;
-        RemainingDownloadMegabytes = (int)((main.IsReady ? 0 : mainModelBytes) + 500_000) / 1_000_000;
-
-        // A disk inspection cannot see an engine failure: the files are intact, but the model did
-        // not come up. Until the person explicitly asks for a repair the refusal stays on screen -
-        // otherwise the repair button disappears and dictation still does not work.
+        ModelState refreshed = main;
         string? failure;
         lock (gate) { failure = engineLoadFailure; }
-        if (failure is not null && ModelStateValue.IsReady)
+        if (failure is not null && refreshed.IsReady)
         {
-            ModelStateValue = new ModelState.RepairRequired(failure);
+            refreshed = new ModelState.RepairRequired(failure);
         }
+
+        ModelStateValue = refreshed;
+        PublishRemainingDownload(main);
 
         if (transcriber is null)
         {
@@ -92,7 +133,37 @@ public sealed partial class AppState
         {
             IsEngineReady = false;
         }
+
+        if (ModelStateValue.IsReady) { PrepareEngineIfIdleAndCold(); }
     }
+
+    /// <summary>
+    /// Publish what the download button would fetch if it were pressed now.
+    ///
+    /// Recomputed wherever the answer can have changed, and from one place, so the two facts it
+    /// depends on - what the disk holds and whether the engine has rejected an intact copy -
+    /// cannot be consulted by half the screens.
+    /// </summary>
+    private void PublishRemainingDownload(ModelState main)
+    {
+        bool rejected;
+        lock (gate) { rejected = engineLoadFailure is not null; }
+        // Anything but a ready model on disk means the whole model is still to fetch; an engine
+        // that rejected verified files means fetching it again.
+        long bytes = !main.IsReady || rejected ? mainModelBytes : 0;
+        RemainingDownloadMegabytes = (int)((bytes + 500_000) / 1_000_000);
+    }
+
+    /// <summary>
+    /// What a fresh start costs: the model, from nothing.
+    ///
+    /// The delete confirmation asks a different question from the download button - not "what
+    /// is missing now" but "what will you pay to get this back". Asking
+    /// <see cref="RemainingDownloadMegabytes"/> there gives 0, which is why that sentence used
+    /// to carry a hardcoded number that no manifest change would ever reach. Read from the
+    /// bundled manifest instead.
+    /// </summary>
+    public int FullModelDownloadMegabytes => (int)((mainModelBytes + 500_000) / 1_000_000);
 
     /// <summary>Did a model ship inside this installation?</summary>
     public bool HasBundledModel =>
@@ -163,9 +234,17 @@ public sealed partial class AppState
             ApplyModelState(store.CurrentState());
             lock (gate) { isInstalling = false; }
 
-            // The first load reads the weights and plans the run, and that takes seconds. Do it
-            // now so the person does not wait at the moment of their first dictation.
+            // The first load reads the weights and plans the run, and that takes seconds. It
+            // starts here so that nobody pays for it under their first dictation.
+            //
+            // Launch gave up its explicit warm-up because readiness alone starts one; an install
+            // cannot, because the standing rule stands down while isInstalling holds - the
+            // readiness published a few lines above therefore started nothing. It has just been
+            // cleared, so this is the first instant the rule can speak, and it speaks in both
+            // forms: the load itself, and then the rule, for the case where that load only
+            // joined an attempt already in flight and so scheduled no retry ladder of its own.
             if (ModelStateValue.IsReady) { await WarmUpEngine().ConfigureAwait(false); }
+            PrepareEngineIfIdleAndCold();
         });
     }
 
@@ -179,6 +258,19 @@ public sealed partial class AppState
         store?.CancelInstall();
     }
 
+    /// <summary>
+    /// Delete the model, and revoke everything that was preparing it.
+    /// </summary>
+    /// <remarks>
+    /// Deletion is an ownership boundary, not another model lifecycle event. Every preparation
+    /// task is revoked before the transcriber is asked to unload, so a cancellation-deaf load
+    /// cannot publish Ready or queue a retry after the files have gone away. A revoked
+    /// preparation has nobody left to put its indicator down: the ladder lowers it when it
+    /// finishes, but only for the revision it still owns, and the bump here takes that revision
+    /// away - so a ladder cancelled mid-wait woke up belonging to nobody and left the app saying
+    /// it was preparing a model that no longer existed. Deletion is where the revoking happens,
+    /// so deletion is where it is undone.
+    /// </remarks>
     public void DeleteModel()
     {
         // A dictation is running - the model is at work. Taking it away means losing what has
@@ -196,10 +288,22 @@ public sealed partial class AppState
 
         if (store is null) { return; }
 
+        ModelStateValue = new ModelState.Deleting();
+        IsEngineReady = false;
+        lock (gate)
+        {
+            engineLoadFailure = null;
+            engineWarmupTaskRevision += 1;
+            engineWarmupTask = null;
+            RevokeRetryLocked();
+        }
+
+        IsPreparingEngine = false;
+        EndPreparationCountdown();
+        CancelIdleUnload();
+
         _ = Task.Run(async () =>
         {
-            IsEngineReady = false;
-            lock (gate) { engineLoadFailure = null; }
             if (transcriber is not null) { await transcriber.Unload().ConfigureAwait(false); }
             await store.Delete().ConfigureAwait(false);
             await RefreshModelState().ConfigureAwait(false);
@@ -208,14 +312,192 @@ public sealed partial class AppState
 
     // MARK: - Engine
 
-    private async Task WarmUpEngine()
+    /// <summary>Does the app currently want a ready engine?</summary>
+    /// <remarks>
+    /// The files are usable, the recognizer is not loaded, and nobody gave the memory back on
+    /// purpose. This is the "desired state" half of the rule that keeps setup from stalling; it
+    /// is deliberately not about events.
+    /// </remarks>
+    private bool WantsEngineReady
     {
-        if (transcriber is null || store is null || engineDirectory is null) { return; }
-        if (store.CurrentState() is not ModelState.Ready) { return; }
+        get
+        {
+            lock (gate)
+            {
+                return modelState.IsReady && !isEngineReady && !shouldStayUnloadedUntilUse;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Leave the "downloaded but cold" state without waiting for an event.
+    /// </summary>
+    /// <remarks>
+    /// Preparation used to be started only by events: launch, a finished install, a key press.
+    /// Any missed event left the model ready on disk, the engine cold, nothing running, and a
+    /// setup screen claiming to prepare. This is the standing rule instead of those events: if
+    /// the files are ready and the engine is not, and no attempt is alive, start one. Safe to
+    /// call from anywhere - <see cref="WarmUpEngine"/> single-flights.
+    /// </remarks>
+    public void PrepareEngineIfIdleAndCold()
+    {
+        if (transcriber is null) { return; }
+        lock (gate)
+        {
+            if (!modelState.IsReady
+                || isEngineReady
+                || isPreparingEngine
+                || engineWarmupTask is not null
+                || engineWarmupRetryTask is not null
+                || isRecyclingEngine
+                || isInstalling
+                // A deliberate idle unload owns its own comeback: that engine is meant to stay
+                // cold until the next key press.
+                || shouldStayUnloadedUntilUse)
+            {
+                return;
+            }
+        }
+
+        DiagnosticLog.Emit("engine.prepare.resumed", ("reason", "ready model, cold engine, nothing running"));
+        _ = Task.Run(() => WarmUpEngine());
+    }
+
+    /// <summary>What woke the engine back up.</summary>
+    public enum RewarmTrigger
+    {
+        KeyDown,
+        AppActivation,
+    }
+
+    /// <summary>
+    /// The earliest reload triggers: they fire before any readiness guard can swallow the press.
+    /// Single-flight through <see cref="WarmUpEngine"/>'s shared task; calling on every press is
+    /// safe and free when warm.
+    /// </summary>
+    /// <remarks>
+    /// There used to be a memory-pressure tier in this condition, deciding whether waking was
+    /// polite right now. It is gone with the rest of the pressure machinery: reloading costs a
+    /// moment and a few hundred megabytes, which is not a decision worth negotiating with the OS
+    /// about. And there used to be a "ping" after this - a full inference over a second of
+    /// silence, on every key press, which the real dictation then waited for. That made every
+    /// dictation two inferences where one was needed; warming still happens where it is earned,
+    /// once after a load and once after the machine wakes.
+    /// </remarks>
+    public void RewarmEngineIfCold(RewarmTrigger trigger)
+    {
+        if (transcriber is null) { return; }
+        lock (gate)
+        {
+            if (isRecyclingEngine
+                || isEngineReady
+                || !hasEngineBeenReady
+                || isPreparingEngine
+                || !modelState.IsReady)
+            {
+                return;
+            }
+
+            shouldStayUnloadedUntilUse = false;
+        }
+
+        DiagnosticLog.Emit("engine.rewarm", ("trigger", trigger));
+        _ = Task.Run(() => WarmUpEngine());
+    }
+
+    /// <summary>
+    /// Does one attempt's outcome leave the app still owing a ready engine?
+    /// </summary>
+    /// <remarks>
+    /// Two places read an outcome - the first attempt and the retry ladder - and this is the
+    /// only sentence either of them is allowed to read it by. They used to answer it separately,
+    /// and they answered "skipped" differently: the first attempt treated "nothing happened" as
+    /// one moment's answer, the ladder as the world's. A single cancelled load inside the ladder
+    /// therefore ended preparation for good, on the one engine nothing else can rescue - an
+    /// engine that has never been ready is not woken by a key press, has no idle-unload comeback
+    /// to wait for, and is reloaded only when readiness changes, which it does not, because the
+    /// model has been ready the whole time. Quitting was the only way out.
+    /// </remarks>
+    private bool PreparationContinues(EngineWarmupOutcome outcome) => outcome switch
+    {
+        // The engine is loaded. Nothing is owed.
+        EngineWarmupOutcome.Ready => false,
+        // The files are the problem, and only the person can answer for them. The card says so
+        // and offers the button.
+        EngineWarmupOutcome.RepairRequired => false,
+        // A momentary failure that says nothing about the verified files. Wait longer and retry.
+        EngineWarmupOutcome.Retryable => true,
+        // Nothing happened: a cancelled request, an overtaken generation, a guard that was
+        // briefly false. Whether that is the end depends on one thing only - whether the app
+        // still wants a ready engine.
+        EngineWarmupOutcome.Skipped => WantsEngineReady,
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
+    };
+
+    /// <summary>
+    /// Prepare one fully warm engine. Calls from launch, wake, recovery and a key-down are
+    /// coalesced here so only the owner updates the UI and decides whether a failure means
+    /// "retry" or "repair files".
+    /// </summary>
+    private async Task<EngineWarmupOutcome> WarmUpEngine(bool allowAutomaticRetry = true)
+    {
+        Task<EngineWarmupOutcome> task;
+        int revision;
+        bool owner;
+        lock (gate)
+        {
+            if (engineWarmupTask is { } inFlight)
+            {
+                task = inFlight;
+                revision = engineWarmupTaskRevision;
+                owner = false;
+            }
+            else
+            {
+                engineWarmupTaskRevision += 1;
+                revision = engineWarmupTaskRevision;
+                task = Task.Run(PerformEngineWarmup);
+                engineWarmupTask = task;
+                owner = true;
+            }
+        }
+
+        EngineWarmupOutcome outcome = await task.ConfigureAwait(false);
+        if (!owner) { return outcome; }
+
+        lock (gate)
+        {
+            if (engineWarmupTaskRevision == revision) { engineWarmupTask = null; }
+        }
+
+        if (allowAutomaticRetry && PreparationContinues(outcome))
+        {
+            ScheduleEngineWarmupRetry(outcome == EngineWarmupOutcome.Retryable
+                ? "the engine failed to load"
+                : "preparation did not start");
+        }
+
+        return outcome;
+    }
+
+    private async Task<EngineWarmupOutcome> PerformEngineWarmup()
+    {
+        // One source of truth. The published model state is what the screens read, and asking
+        // the store again only introduces a second opinion that can disagree for an instant -
+        // and that instant used to be terminal: the disagreement returned "nothing to do",
+        // which schedules no retry, so a fresh install could sit on a promise nobody was keeping.
+        if (transcriber is null || engineDirectory is null) { return EngineWarmupOutcome.Skipped; }
+        if (!ModelStateValue.IsReady) { return EngineWarmupOutcome.Skipped; }
 
         IsEngineReady = false;
         IsPreparingEngine = true;
-        BeginPreparationCountdown(EnginePreparationState.Phase.LoadingRecognizer);
+        // The retry loop owns one continuous countdown across its waits; a lone attempt owns its
+        // own. Whoever owns it also ends it, so the indicator never blinks between two attempts
+        // of the same preparation.
+        bool ownsCountdown;
+        lock (gate) { ownsCountdown = engineWarmupRetryTask is null; }
+        if (ownsCountdown) { BeginPreparationCountdown(EnginePreparationState.Phase.LoadingRecognizer); }
+
         long loadBegan = Stopwatch.GetTimestamp();
         DiagnosticLog.Emit("engine.load.begin", ("state", DictationStateValue));
 
@@ -223,6 +505,7 @@ public sealed partial class AppState
         {
             await transcriber.Prepare(engineDirectory).ConfigureAwait(false);
             long loaded = Stopwatch.GetTimestamp();
+            SetPreparationPhase(EnginePreparationState.Phase.WarmingUp);
             await transcriber.WarmUpInference().ConfigureAwait(false);
             DiagnosticLog.Emit(
                 "engine.load.end",
@@ -230,15 +513,15 @@ public sealed partial class AppState
                 ("load_ms", Stopwatch.GetElapsedTime(loadBegan, loaded)),
                 ("warm_ms", Stopwatch.GetElapsedTime(loaded)));
 
-            IsEngineReady = true;
             lock (gate)
             {
                 engineLoadFailure = null;
-                lastLoadCompletedAt = now();
-                lastEngineActivity = now();
+                RevokeRetryLocked();
             }
 
-            EvaluateResidency();
+            IsEngineReady = true;
+            RescheduleIdleUnload();
+            return EngineWarmupOutcome.Ready;
         }
         catch (OperationCanceledException)
         {
@@ -249,13 +532,11 @@ public sealed partial class AppState
                 ("load_ms", Stopwatch.GetElapsedTime(loadBegan)));
             // The load was overtaken: an unload bumped the transcriber's generation while the
             // weights were still coming off disk, which is exactly what wedge recovery and model
-            // deletion do. Not a broken model - the newer owner is responsible for the engine from
-            // here - so no repair state and no message. Catching it matters more than the silence:
-            // letting it escape kills the recycle task before it clears
-            // <see cref="isRecyclingEngine"/>, and one wedge then makes every later wedge
-            // incurable.
+            // deletion do. Not a broken model - whether the app still owes an engine is decided
+            // by the one sentence that reads outcomes, see PreparationContinues.
+            return EngineWarmupOutcome.Skipped;
         }
-        catch (Exception error) when (error is ASREngineError or IOException or InvalidOperationException)
+        catch (ASREngineError.ModelsUnavailable error)
         {
             DiagnosticLog.EmitException(
                 "engine.load.failed",
@@ -263,20 +544,160 @@ public sealed partial class AppState
                 ("load_ms", Stopwatch.GetElapsedTime(loadBegan)));
             string detail = "the files passed verification, but the engine couldn't load the model: "
                 + error.Message;
-            lock (gate) { engineLoadFailure = detail; }
+            // The model state said the files are there - the guard at the top of this method
+            // is that very statement, and it is what makes this a rejection rather than a
+            // missing model. The repair redownloads them anyway, so the volume is republished
+            // right here: without it the only control on the setup screen read "Redownload
+            // Model — 0 MB".
+            ModelState filesOnDisk = ModelStateValue;
+            lock (gate)
+            {
+                engineLoadFailure = detail;
+                RevokeRetryLocked();
+            }
+
+            // The volume goes out before the state: a screen that wakes on "repair required"
+            // reads the button's number in the same instant, and a number published a beat later
+            // is the "0 MB" this comment is about, seen once on a loaded test host.
+            PublishRemainingDownload(filesOnDisk);
             ModelStateValue = new ModelState.RepairRequired(detail);
-            int megabytes = RemainingDownloadMegabytes == 0
-                ? ModelStatus.FullDownloadMegabytes
-                : RemainingDownloadMegabytes;
             Notify(new DictationNotice(
                 DictationNoticeKind.Failure,
-                $"The model didn't load. An explicit repair will redownload {megabytes} MB."));
+                $"The model didn't load. An explicit repair will redownload {RemainingDownloadMegabytes} MB."));
+            return EngineWarmupOutcome.RepairRequired;
+        }
+        catch (Exception error) when (error is ASREngineError or IOException or InvalidOperationException)
+        {
+            // A momentary failure says nothing about the verified files on disk. Keep them and
+            // try again in the background.
+            DiagnosticLog.EmitException(
+                "engine.load.retryable",
+                error,
+                ("load_ms", Stopwatch.GetElapsedTime(loadBegan)));
+            lock (gate) { engineLoadFailure = null; }
+            return EngineWarmupOutcome.Retryable;
         }
         finally
         {
-            IsPreparingEngine = false;
-            EndPreparationCountdown();
+            bool stillOwns;
+            lock (gate) { stillOwns = engineWarmupRetryTask is null; }
+            if (stillOwns)
+            {
+                IsPreparingEngine = false;
+                EndPreparationCountdown();
+            }
         }
+    }
+
+    /// <summary>
+    /// Keep preparing until it works. There is nothing else to do.
+    /// </summary>
+    /// <remarks>
+    /// The files are verified; only the load failed, and the commonest reason is a machine
+    /// momentarily busy with the hundreds of megabytes it just wrote. A budget of attempts turned
+    /// that into a permanent "give up" state with a button, on the very first run - the app now
+    /// simply waits longer between attempts and stays honestly "preparing" throughout, so the
+    /// interface never has to ask a person to retry work it can do itself. One task at a time,
+    /// fenced by revision, cancelled by unload and delete.
+    /// </remarks>
+    private void ScheduleEngineWarmupRetry(string initialDetail)
+    {
+        int revision;
+        CancellationToken token;
+        lock (gate)
+        {
+            if (engineWarmupRetryTask is not null || !modelState.IsReady || disposed) { return; }
+            engineWarmupRetryRevision += 1;
+            revision = engineWarmupRetryRevision;
+            engineWarmupRetryCancellation = new CancellationTokenSource();
+            token = engineWarmupRetryCancellation.Token;
+            // Claimed under the lock so the countdown below is owned by the loop from its first
+            // instant, before any attempt can end it.
+            engineWarmupRetryTask = Task.CompletedTask;
+        }
+
+        DiagnosticLog.Emit("engine.rewarm.scheduled", ("reason", initialDetail));
+        // The countdown keeps running across the waits: the person sees one continuous
+        // "preparing", which is exactly what is happening.
+        IsPreparingEngine = true;
+        BeginPreparationCountdown(EnginePreparationState.Phase.LoadingRecognizer);
+
+        Task loop = Task.Run(async () =>
+        {
+            int failures = 0;
+            while (true)
+            {
+                // Re-assert after each attempt: the attempt's own bookkeeping runs while this
+                // loop is still going to try again.
+                IsPreparingEngine = true;
+                try
+                {
+                    await Task.Delay(EngineWarmupRetryDelay(failures), token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    FinishRetryPresentation(revision);
+                    return;
+                }
+
+                bool current;
+                lock (gate) { current = engineWarmupRetryRevision == revision && modelState.IsReady; }
+                if (!current)
+                {
+                    FinishRetryPresentation(revision);
+                    return;
+                }
+
+                EngineWarmupOutcome outcome = await WarmUpEngine(allowAutomaticRetry: false).ConfigureAwait(false);
+                if (!PreparationContinues(outcome))
+                {
+                    FinishRetryPresentation(revision);
+                    return;
+                }
+
+                failures += 1;
+            }
+        });
+        lock (gate)
+        {
+            if (engineWarmupRetryRevision == revision) { engineWarmupRetryTask = loop; }
+        }
+    }
+
+    private TimeSpan EngineWarmupRetryDelay(int failures) =>
+        engineWarmupRetryDelayOverride ?? EngineWarmupBackoff.Delay(failures);
+
+    /// <summary>
+    /// Hand the preparation indicator back once the loop is done owning it.
+    /// </summary>
+    /// <remarks>
+    /// A revoked ladder arrives here with a stale revision by definition - that is what revoking
+    /// means - so refusing it outright left the indicator lit with nobody behind it. Only a live
+    /// successor may keep the indicator, and a successor is exactly what a non-null retry task
+    /// means: every revocation site clears it, so a stale revision with nothing in that slot is
+    /// a ladder that left without an heir.
+    /// </remarks>
+    private void FinishRetryPresentation(int revision)
+    {
+        lock (gate)
+        {
+            if (engineWarmupRetryRevision != revision && engineWarmupRetryTask is not null) { return; }
+            engineWarmupRetryTask = null;
+            engineWarmupRetryCancellation?.Dispose();
+            engineWarmupRetryCancellation = null;
+        }
+
+        IsPreparingEngine = false;
+        EndPreparationCountdown();
+    }
+
+    /// <summary>Cancel the retry loop. Called under <c>gate</c>.</summary>
+    private void RevokeRetryLocked()
+    {
+        engineWarmupRetryRevision += 1;
+        engineWarmupRetryCancellation?.Cancel();
+        engineWarmupRetryCancellation = null;
+        engineWarmupRetryTask = null;
     }
 
     /// <summary>
@@ -301,42 +722,8 @@ public sealed partial class AppState
             if (finished != warm || warm.IsFaulted)
             {
                 RecycleWedgedEngine();
-                return;
             }
-
-            lock (gate) { lastEngineActivity = now(); }
         });
-    }
-
-    /// <summary>Internal, not private: the residency test drives the exact press hook.</summary>
-    public void WarmEngineUnderVoiceIfCold()
-    {
-        if (transcriber is null) { return; }
-        lock (gate)
-        {
-            if (isRecyclingEngine) { return; }
-        }
-
-        // Residency gave the memory back: the press starts the FULL reload in parallel with the
-        // recording. The single-flight transcriber coalesces this with the transcription path's
-        // own prepare, and the preparation UI narrates honestly if the reload outlasts the speech.
-        if (!IsEngineReady)
-        {
-            if (HasEngineBeenReady && !IsPreparingEngine)
-            {
-                _ = Task.Run(WarmUpEngine);
-            }
-
-            return;
-        }
-
-        DateTimeOffset? last;
-        lock (gate) { last = lastEngineActivity; }
-        if (!EngineWarming.ShouldWarm(last, now())) { return; }
-
-        // A generous deadline: the recording gives it cover, and a real wedge still surfaces
-        // through the dictation's own deadline right after.
-        PingEngine(TimeSpan.FromSeconds(30));
     }
 
     /// <summary>
@@ -345,6 +732,7 @@ public sealed partial class AppState
     /// Sleep is where the engine's execution state dies. Without this, the first dictation of the
     /// morning pays the reconnect. The ping forces it now, while nobody is waiting; if even that
     /// hangs, the engine is wedged and gets recycled here rather than during someone's sentence.
+    /// This is one of the two places warming is earned - the other is right after a load.
     /// </summary>
     private void RevalidateEngineAfterWake()
     {
@@ -386,114 +774,118 @@ public sealed partial class AppState
             {
                 // The flag falls whatever happened. Leaving it raised after a failed recovery
                 // makes the engine permanently un-recyclable: every later wedge returns at the
-                // "one wedge, one cure" guard, the residency evaluator sees a forever-busy
-                // engine, and the person's key keeps starting dictations nothing can finish.
+                // "one wedge, one cure" guard, and the person's key keeps starting dictations
+                // nothing can finish.
                 lock (gate) { isRecyclingEngine = false; }
             }
+
+            // A recycle whose reload was overtaken leaves a ready model with a cold engine and
+            // nothing running - the state the standing rule exists to leave.
+            PrepareEngineIfIdleAndCold();
         });
     }
 
-    // MARK: - Engine residency (automatic, zero settings)
+    // MARK: - Idle unload (the person's own control)
 
-    /// <summary>Internal, not private: tests inject tiers the OS only sends under real starvation.</summary>
-    public void RegisterMemoryPressure(MemoryPressureTier tier)
+    /// <summary>
+    /// When to give the engine's memory back after dictation goes idle. Mirrors Handy's "Unload
+    /// Model" row; <see cref="IdleUnloadPolicy.Never"/> is the always-resident behaviour.
+    /// </summary>
+    public IdleUnloadPolicy ModelUnloadTimeout
     {
-        lock (gate)
+        get { lock (gate) { return modelUnloadTimeout; } }
+        set
         {
-            lastPressureTier = tier;
-            switch (tier)
-            {
-                case MemoryPressureTier.Warning: consecutiveWarnings += 1; break;
-                case MemoryPressureTier.Critical: break;
-                case MemoryPressureTier.Normal: consecutiveWarnings = 0; break;
-            }
+            if (!Set(ref modelUnloadTimeout, value)) { return; }
+            UpdateSettings(current => current with { ModelUnloadTimeout = value.RawValue });
+            RescheduleIdleUnload();
         }
-
-        EvaluateResidency();
     }
 
     /// <summary>
-    /// One evaluation path for every trigger: pressure change, finished dictation, finished load,
-    /// wake, boundary timer.
+    /// Same doctrine as the countdown: this is visible so a test can say the app arms nothing it
+    /// has no reason to arm.
     /// </summary>
-    private void EvaluateResidency()
-    {
-        MemoryPressureTier tier;
-        int warnings;
-        TimeSpan idleFor;
-        TimeSpan sinceLoad;
-        DateTimeOffset reference = now();
-        bool recycling;
+    public bool IsAwaitingIdleUnload { get { lock (gate) { return idleUnloadTimer is not null; } } }
 
+    /// <summary>Every state change re-arms or cancels the countdown: activity disarms it, idleness starts it.</summary>
+    private void RescheduleIdleUnload()
+    {
+        CancelIdleUnload();
+        if (transcriber is null) { return; }
+        TimeSpan? policyDelay = ModelUnloadTimeout.IdleDelay;
+        if (DictationStateValue != DictationState.Idle
+            || !IsEngineReady
+            // Setup is not idleness: the person is granting permissions, not resting from
+            // dictation, and the try-out is a minute away. The engine stays so that first
+            // dictation is instant. Nothing depends on this any more - the setup screen no
+            // longer waits for a loaded engine, and a resting one is woken by the same key press
+            // as everywhere else - so it is a courtesy, not a guard.
+            || !OnboardingCompleted
+            || policyDelay is null)
+        {
+            return;
+        }
+
+        // The override shortens the countdown for tests; the decision itself (never keeps the
+        // engine forever) always belongs to the policy.
+        TimeSpan delay = idleUnloadDelayOverride ?? policyDelay.Value;
         lock (gate)
         {
-            residencyTimer?.Dispose();
-            residencyTimer = null;
-            tier = lastPressureTier;
-            warnings = consecutiveWarnings;
-            idleFor = lastEngineActivity is DateTimeOffset activity
-                ? reference - activity
-                : TimeSpan.MaxValue;
-            sinceLoad = lastLoadCompletedAt is DateTimeOffset loaded
-                ? reference - loaded
-                : TimeSpan.MaxValue;
-            recycling = isRecyclingEngine;
+            if (disposed) { return; }
+            idleUnloadTimer = new Timer(
+                _ =>
+                {
+                    lock (gate)
+                    {
+                        idleUnloadTimer?.Dispose();
+                        idleUnloadTimer = null;
+                    }
+
+                    PerformIdleUnload();
+                },
+                null,
+                delay,
+                Timeout.InfiniteTimeSpan);
         }
+    }
 
-        EngineResidencyPolicy.Decision decision = EngineResidencyPolicy.Decide(
-            tier,
-            warnings,
-            engineLoaded: IsEngineReady,
-            engineBusy: DictationStateValue != DictationState.Idle
-                || IsRecoveryOperationActive
-                || recycling
-                || IsPreparingEngine,
-            idleFor,
-            sinceLoad);
-
-        switch (decision)
+    private void CancelIdleUnload()
+    {
+        lock (gate)
         {
-            case EngineResidencyPolicy.Decision.Keep:
-                break;
-
-            case EngineResidencyPolicy.Decision.Unload:
-                if (transcriber is null) { return; }
-                _ = Task.Run(async () =>
-                {
-                    if (!await transcriber.UnloadIfIdle().ConfigureAwait(false)) { return; }
-                    // HasEngineBeenReady stays true: dictation remains enabled, the reload rides
-                    // under the next voice.
-                    IsEngineReady = false;
-                    EnginePreparation = EnginePreparationState.Make(
-                        EnginePreparationState.Phase.Idle, TimeSpan.Zero);
-                });
-                break;
-
-            case EngineResidencyPolicy.Decision.CheckAgain checkAgain:
-                TimeSpan after = checkAgain.After < TimeSpan.FromSeconds(1)
-                    ? TimeSpan.FromSeconds(1)
-                    : checkAgain.After;
-                lock (gate)
-                {
-                    if (disposed) { return; }
-                    residencyTimer = new Timer(
-                        _ =>
-                        {
-                            lock (gate)
-                            {
-                                residencyTimer?.Dispose();
-                                residencyTimer = null;
-                            }
-
-                            EvaluateResidency();
-                        },
-                        null,
-                        after,
-                        Timeout.InfiniteTimeSpan);
-                }
-
-                break;
+            idleUnloadTimer?.Dispose();
+            idleUnloadTimer = null;
         }
+    }
+
+    private void PerformIdleUnload()
+    {
+        if (transcriber is null) { return; }
+        lock (gate)
+        {
+            if (dictationState != DictationState.Idle
+                || isRecoveryOperationActive
+                || isRecyclingEngine
+                || isPreparingEngine
+                || !isEngineReady)
+            {
+                return;
+            }
+        }
+
+        DiagnosticLog.Emit("engine.idle.unload", ("policy", ModelUnloadTimeout.RawValue));
+        _ = Task.Run(async () =>
+        {
+            if (!await transcriber.UnloadIfIdle().ConfigureAwait(false)) { return; }
+            lock (gate) { shouldStayUnloadedUntilUse = true; }
+            // HasEngineBeenReady stays true: dictation remains enabled, the reload rides under
+            // the next voice. Deliberately no proactive rewarm: the comeback is the next key
+            // press.
+            IsEngineReady = false;
+            EnginePreparation = EnginePreparationState.Make(
+                EnginePreparationState.Phase.Idle, TimeSpan.Zero);
+        });
     }
 
     // MARK: - Engine preparation countdown
@@ -517,6 +909,17 @@ public sealed partial class AppState
                 TimeSpan.FromSeconds(1),
                 TimeSpan.FromSeconds(1));
         }
+    }
+
+    /// <summary>A milestone completed: the bar moves, the seconds keep counting.</summary>
+    private void SetPreparationPhase(EnginePreparationState.Phase phase)
+    {
+        lock (gate)
+        {
+            if (preparationTimer is null) { return; }
+        }
+
+        EnginePreparation = EnginePreparationState.Make(phase, ElapsedPreparation());
     }
 
     private void TickPreparation()

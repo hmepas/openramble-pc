@@ -1,3 +1,4 @@
+using DictationCore;
 using LocalASR;
 
 namespace OpenRamble.AppCore;
@@ -70,6 +71,84 @@ public static class OnboardingStepInfo
 }
 
 /// <summary>
+/// Everything onboarding is allowed to wait for, in one value.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The list is the whole safety property, so it is written down as a type rather than as a
+/// parameter list that each caller fills in for itself. A screen may only be held by a fact
+/// that is the person's to change - the permission, a download they start - or by work
+/// genuinely in motion that ends on its own. A loaded engine is neither: the idle unload gives
+/// its memory back on a schedule, and that engine's own comeback is the next key press, which
+/// nobody makes while this very screen is holding them here. Upstream had it on this list
+/// until 0.8.2, and the result was a setup screen that said "Model ready" and "Getting the model
+/// ready…" at the same instant and never let go until the app was quit.
+/// </para>
+/// <para>
+/// Anything added here has to meet that test first - and it is read off the running app in
+/// exactly one place, <see cref="OnboardingConditions(AppState, bool)"/>, so the tests that hold
+/// this bar cannot be looking at a different screen from the one the app draws.
+/// </para>
+/// </remarks>
+public sealed record OnboardingConditions
+{
+    public OnboardingConditions(
+        bool microphoneGranted,
+        ModelState modelState,
+        bool isDictationBusy = false,
+        bool trialSucceeded = true,
+        string? dictationRefusal = null)
+    {
+        MicrophoneGranted = microphoneGranted;
+        ModelState = modelState;
+        IsDictationBusy = isDictationBusy;
+        TrialSucceeded = trialSucceeded;
+        DictationRefusal = dictationRefusal;
+    }
+
+    /// <summary>The facts as the running app holds them - the one reader every screen shares.</summary>
+    public OnboardingConditions(AppState state, bool trialSucceeded)
+        : this(
+            state.MicrophoneGranted,
+            state.ModelStateValue,
+            isDictationBusy: state.DictationStateValue != DictationState.Idle,
+            trialSucceeded: trialSucceeded,
+            dictationRefusal: DictationReadiness.Reason(
+                state.MicrophoneGranted,
+                state.ModelStateValue,
+                state.IsEngineReady,
+                state.HasEngineBeenReady))
+    {
+    }
+
+    public bool MicrophoneGranted { get; }
+
+    public ModelState ModelState { get; }
+
+    /// <summary>
+    /// A dictation started from the try-out step. It ends by itself or by the "Cancel Dictation"
+    /// button that is on the same screen.
+    /// </summary>
+    public bool IsDictationBusy { get; }
+
+    public bool TrialSucceeded { get; }
+
+    /// <summary>
+    /// Why a key press right now would be refused, in the words the press itself uses -
+    /// <c>null</c> when dictation can start.
+    /// </summary>
+    /// <remarks>
+    /// The one exception to the paragraph above, and it earns it by never disabling anything:
+    /// it only ever replaces the try-out step's own sentence with a truer one. That step is
+    /// already held by a trial that has not happened, and while the one-time load runs it
+    /// cannot happen - asking for it then is asking for something the app is refusing. There is
+    /// no second opinion to drift, because this is the sentence the refused press itself shows
+    /// (<see cref="DictationReadiness"/>).
+    /// </remarks>
+    public string? DictationRefusal { get; }
+}
+
+/// <summary>
 /// Does the step let the person through and, if not, why.
 ///
 /// The reason is not decoration. A dimmed button leaves a person guessing what is wanted from
@@ -84,32 +163,46 @@ public static class OnboardingStepInfo
 public static class OnboardingGate
 {
     /// <summary><c>null</c> - you can move on.</summary>
-    public static string? BlockReason(
-        OnboardingStep step,
-        bool microphoneGranted,
-        ModelState modelState,
-        bool engineReady = true,
-        bool trialSucceeded = true)
+    public static string? BlockReason(OnboardingStep step, OnboardingConditions conditions)
     {
+        // While a take is running, Back, Next and Skip are all disabled - this is the sentence
+        // under all of them. It outranks the step's own reason because it is the one thing the
+        // person can act on right now.
+        if (conditions.IsDictationBusy)
+        {
+            return "Finish or cancel the current dictation first.";
+        }
+
         switch (step)
         {
             case OnboardingStep.Welcome:
                 return null;
 
             case OnboardingStep.TryIt:
-                return trialSucceeded ? null : "Try dictation first, or press “Skip the try-out”.";
+                if (conditions.TrialSucceeded) { return null; }
+                // This step asks for a key press, so it is held by whatever holds that press.
+                // After a fresh install that is the one-time load, and for its tens of seconds
+                // "try dictation first" asks for something the app itself is refusing - the
+                // person holds the key, nothing records, and the screen keeps asking. The load
+                // ends by itself and "Skip the try-out" is on the same screen, so nothing here
+                // is a deadlock; it only has to be true.
+                if (conditions.DictationRefusal is string refusal) { return refusal; }
+                return "Try dictation first, or press “Skip the try-out”.";
 
             case OnboardingStep.Setup:
                 // The permission and the local model are one setup job. Keeping them on separate
                 // pages created an almost empty "Model ready" step for existing installs and made
                 // the shortest path feel longer than it is.
-                if (!microphoneGranted) { return "Microphone is still needed."; }
+                if (!conditions.MicrophoneGranted) { return "Microphone is still needed."; }
 
-                return modelState switch
+                // Usable files are the whole model requirement. The gate is not told whether
+                // the engine is loaded, and must not be: the engine is loaded and unloaded by
+                // the idle rule, and a resting one waits for a key press that nobody makes on
+                // this screen. Every input here either moves by itself or is the person's to
+                // change.
+                return conditions.ModelState switch
                 {
-                    ModelState.Ready => engineReady
-                        ? null
-                        : "Wait for the model to finish preparing for first use.",
+                    ModelState.Ready => null,
                     ModelState.NotInstalled =>
                         "Download the model first — without it there is nothing to recognize with.",
                     ModelState.Downloading => "Wait for the download to finish.",
@@ -117,7 +210,7 @@ public static class OnboardingGate
                     ModelState.RepairRequired => "The model is damaged. Redownload it explicitly.",
                     ModelState.Failed => "The download failed. Try again.",
                     ModelState.Deleting => "The model is being deleted.",
-                    _ => throw new ArgumentOutOfRangeException(nameof(modelState)),
+                    _ => throw new ArgumentOutOfRangeException(nameof(conditions)),
                 };
 
             default:
@@ -125,11 +218,6 @@ public static class OnboardingGate
         }
     }
 
-    public static bool CanAdvance(
-        OnboardingStep step,
-        bool microphoneGranted,
-        ModelState modelState,
-        bool engineReady = true,
-        bool trialSucceeded = true) =>
-        BlockReason(step, microphoneGranted, modelState, engineReady, trialSucceeded) is null;
+    public static bool CanAdvance(OnboardingStep step, OnboardingConditions conditions) =>
+        BlockReason(step, conditions) is null;
 }

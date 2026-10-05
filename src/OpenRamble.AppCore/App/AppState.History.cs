@@ -1,0 +1,202 @@
+using System.Runtime.InteropServices;
+using DictationCore;
+
+namespace OpenRamble.AppCore;
+
+/// <summary>Finished dictations kept on disk, with their audio (upstream 0.9.0, 0.18.0, 0.19.0).</summary>
+public sealed partial class AppState
+{
+    private DictationHistoryStore? historyStore;
+    private IReadOnlyList<HistoryEntry> history = [];
+    private int historyLimit;
+    private bool isRetranscribing;
+
+    /// <summary>Finished dictations kept on disk, newest first, with their audio.</summary>
+    public IReadOnlyList<HistoryEntry> History
+    {
+        get { lock (gate) { return history; } }
+        private set => Set(ref history, value);
+    }
+
+    /// <summary>
+    /// How many takes the history keeps. Changing it trims what is already stored, so lowering
+    /// the number is a deletion the person can rely on.
+    /// </summary>
+    public int HistoryLimit
+    {
+        get { lock (gate) { return historyLimit; } }
+        set
+        {
+            int clamped = DictationHistoryStore.ClampLimit(value);
+            if (!Set(ref historyLimit, clamped)) { return; }
+            UpdateSettings(current => current with { HistoryLimit = clamped });
+            if (historyStore is null) { return; }
+            History = TryHistory(() => historyStore.ApplyLimit(clamped)) ?? History;
+        }
+    }
+
+    /// <summary>
+    /// One re-run at a time: the engine takes one call, and a queue of them would be a queue
+    /// nobody asked for.
+    /// </summary>
+    public bool IsRetranscribing
+    {
+        get { lock (gate) { return isRetranscribing; } }
+        private set => Set(ref isRetranscribing, value);
+    }
+
+    /// <summary>
+    /// Keep a finished take: its text, and a copy of its audio.
+    ///
+    /// Failures here are reported rather than swallowed. A history that silently stops
+    /// recording looks exactly like a history of someone who stopped dictating.
+    /// </summary>
+    private void Archive(string text, string audio)
+    {
+        if (historyStore is null) { return; }
+        IReadOnlyList<HistoryEntry>? recorded = TryHistory(
+            () => historyStore.Record(text, audio, HistoryLimit, now()),
+            "history.record.failed");
+        if (recorded is not null) { History = recorded; }
+    }
+
+    /// <summary>The take's audio, if it is still on disk.</summary>
+    public string? HistoryAudioPath(HistoryEntry entry) => historyStore?.AudioPath(entry);
+
+    /// <summary>
+    /// Open the folder holding the audio kept alongside history.
+    ///
+    /// Points at a recording rather than the bare folder when there is one, so the file manager
+    /// opens with something to look at instead of leaving the person to work out which of these
+    /// files is theirs.
+    /// </summary>
+    public void RevealHistoryAudio()
+    {
+        string? target = History.Select(HistoryAudioPath).FirstOrDefault(path => path is not null);
+        if (target is null)
+        {
+            Notify(new DictationNotice(DictationNoticeKind.Info, "No recordings kept yet."));
+            return;
+        }
+
+        try
+        {
+            folders?.Open(target);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Notify(new DictationNotice(DictationNoticeKind.Failure, "Couldn't open the recordings folder."));
+        }
+    }
+
+    /// <summary>
+    /// Recognise a kept recording again.
+    ///
+    /// Worth having after editing the dictionary: the words the model heard do not change, but
+    /// what they become does, and re-running is the only way to see that without dictating the
+    /// sentence a second time.
+    ///
+    /// The new text replaces the entry's text and nothing else. The audio stays where it is, so
+    /// this can be done repeatedly, and a run that fails leaves the previous text intact rather
+    /// than blanking a record of something the person actually said.
+    /// </summary>
+    public void RetranscribeHistoryEntry(HistoryEntry entry)
+    {
+        if (IsRetranscribing) { return; }
+        string? audio = HistoryAudioPath(entry);
+        if (audio is null)
+        {
+            Notify(new DictationNotice(DictationNoticeKind.Info, "That dictation's audio is gone."));
+            return;
+        }
+
+        if (transcriber is null || !IsEngineReady)
+        {
+            Notify(new DictationNotice(DictationNoticeKind.Info, "The speech model isn't ready yet."));
+            return;
+        }
+
+        IsRetranscribing = true;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                ASRResult result = await transcriber.Transcribe(audio).ConfigureAwait(false);
+                string text = MakePipeline().Run(result.Text).Output.Text;
+                if (historyStore is null) { return; }
+                History = TryHistory(() => historyStore.ReplaceText(text, entry)) ?? History;
+            }
+            catch (Exception error) when (error is ASREngineError or IOException or OperationCanceledException)
+            {
+                DiagnosticLog.EmitException("history.retranscribe.failed", error);
+                Notify(new DictationNotice(DictationNoticeKind.Failure, "Couldn't recognise that recording again."));
+            }
+            finally
+            {
+                IsRetranscribing = false;
+            }
+        });
+    }
+
+    /// <summary>Star an entry so retention leaves it alone, or unstar it.</summary>
+    public void SetHistoryEntryKept(bool isKept, HistoryEntry entry)
+    {
+        if (historyStore is null) { return; }
+        History = TryHistory(() => historyStore.SetKept(isKept, entry)) ?? History;
+    }
+
+    public void DeleteHistoryEntry(HistoryEntry entry)
+    {
+        if (historyStore is null) { return; }
+        History = TryHistory(() => historyStore.Delete(entry)) ?? History;
+    }
+
+    public void ClearHistory()
+    {
+        if (historyStore is null) { return; }
+        try
+        {
+            historyStore.DeleteAll();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            DiagnosticLog.EmitException("history.clear.failed", error);
+        }
+
+        History = [];
+    }
+
+    /// <summary>
+    /// Put a stored transcript back on the clipboard.
+    ///
+    /// Host-only, exactly like every other copy this app makes: a transcript must not travel
+    /// into clipboard history just because it came from a list rather than from a live dictation.
+    /// </summary>
+    public void CopyHistoryEntry(HistoryEntry entry)
+    {
+        try
+        {
+            clipboard?.Copy(entry.Text);
+        }
+        catch (Exception error) when (error is InvalidOperationException or ExternalException)
+        {
+            Notify(new DictationNotice(DictationNoticeKind.Failure, "Couldn't copy the dictation."));
+        }
+    }
+
+    /// <summary>A store operation, or <c>null</c> when the disk said no. Counts only ever reach the log.</summary>
+    private static IReadOnlyList<HistoryEntry>? TryHistory(
+        Func<IReadOnlyList<HistoryEntry>> operation,
+        string failureEvent = "history.write.failed")
+    {
+        try
+        {
+            return operation();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            DiagnosticLog.EmitException(failureEvent, error);
+            return null;
+        }
+    }
+}

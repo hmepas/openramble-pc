@@ -22,9 +22,8 @@ public sealed class MenuSectionsTests
         DictationState state = DictationState.Idle,
         bool ready = true,
         bool recoveredText = false,
-        bool recents = false,
-        bool copyAsSpoken = false) =>
-        MenuSections.Sections(state, ready, recoveredText, recents, copyAsSpoken)
+        bool recents = false) =>
+        MenuSections.Sections(state, ready, recoveredText, recents)
             .Select(section => section.ToArray())
             .ToArray();
 
@@ -45,10 +44,10 @@ public sealed class MenuSectionsTests
             [
                 [MenuRow.StatusLine],
                 [MenuRow.InsertLastDictation],
-                [MenuRow.RecentDictations, MenuRow.CopyLastAsSpoken],
+                [MenuRow.RecentDictations, MenuRow.CopyLast],
                 [MenuRow.Settings, MenuRow.Quit],
             ],
-            Sections(recoveredText: true, recents: true, copyAsSpoken: true));
+            Sections(recoveredText: true, recents: true));
     }
 
     /// <summary>
@@ -66,7 +65,7 @@ public sealed class MenuSectionsTests
                     [MenuRow.StopAndInsert, MenuRow.CancelDictation],
                     [MenuRow.Settings, MenuRow.Quit],
                 ],
-                Sections(state, recoveredText: true, recents: true, copyAsSpoken: true));
+                Sections(state, recoveredText: true, recents: true));
         }
     }
 
@@ -107,23 +106,21 @@ public sealed class MenuSectionsTests
                 [MenuRow.StatusLine],
                 [MenuRow.SetupHints, MenuRow.FinishSetup],
                 [MenuRow.InsertLastDictation],
-                [MenuRow.RecentDictations],
+                [MenuRow.RecentDictations, MenuRow.CopyLast],
                 [MenuRow.Settings, MenuRow.Quit],
             ],
             Sections(ready: false, recoveredText: true, recents: true));
     }
 
     /// <summary>
-    /// "Copy Last as Spoken" appears only when it would not duplicate the inserted text - the
-    /// policy travels through canCopyAsSpoken.
+    /// The copy row sits next to the dictation it copies, and only when there is one to copy:
+    /// with nothing dictated the menu offers nothing to put back on the clipboard.
     /// </summary>
     [Fact]
     public void Scenario007()
     {
-        Assert.DoesNotContain(MenuRow.CopyLastAsSpoken, Sections(recents: true).SelectMany(section => section));
-        Assert.Contains(
-            MenuRow.CopyLastAsSpoken,
-            Sections(recents: true, copyAsSpoken: true).SelectMany(section => section));
+        Assert.DoesNotContain(MenuRow.CopyLast, Sections().SelectMany(section => section));
+        Assert.Contains(MenuRow.CopyLast, Sections(recents: true).SelectMany(section => section));
     }
 
     /// <summary>Settings and Quit close every menu, in every state.</summary>
@@ -135,7 +132,7 @@ public sealed class MenuSectionsTests
             Sections(),
             Sections(DictationState.Listening),
             Sections(DictationState.Transcribing),
-            Sections(ready: false, recoveredText: true, recents: true, copyAsSpoken: true),
+            Sections(ready: false, recoveredText: true, recents: true),
         ];
 
         foreach (MenuRow[][] variant in variants)
@@ -151,7 +148,7 @@ public sealed class MenuSectionsTests
     public void Scenario009()
     {
         var everything = new HashSet<MenuRow>(
-            Sections(ready: false, recoveredText: true, recents: true, copyAsSpoken: true)
+            Sections(ready: false, recoveredText: true, recents: true)
                 .SelectMany(section => section)
                 .Concat(Sections(DictationState.Listening, recoveredText: true).SelectMany(section => section))
                 .Concat(Sections(DictationState.Transcribing, recoveredText: true).SelectMany(section => section)));
@@ -160,7 +157,7 @@ public sealed class MenuSectionsTests
         {
             MenuRow.StatusLine, MenuRow.StopAndInsert, MenuRow.CancelDictation, MenuRow.SetupHints,
             MenuRow.FinishSetup, MenuRow.InsertLastDictation, MenuRow.RecentDictations,
-            MenuRow.CopyLastAsSpoken, MenuRow.Settings, MenuRow.Quit,
+            MenuRow.CopyLast, MenuRow.Settings, MenuRow.Quit,
         };
 
         Assert.True(everything.IsSubsetOf(allowed));

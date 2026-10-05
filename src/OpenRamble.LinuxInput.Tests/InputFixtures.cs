@@ -31,6 +31,9 @@ internal static class Keys
     public const int LeftCtrl = 29;
     public const int RightCtrl = 97;
     public const int CapsLock = 58;
+    public const int LeftAlt = 56;
+    public const int LeftMeta = 125;
+    public const int F13 = 183;
 }
 
 /// <summary>Building the bytes a keyboard would have produced.</summary>

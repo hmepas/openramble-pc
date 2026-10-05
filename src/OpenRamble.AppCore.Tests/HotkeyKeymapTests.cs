@@ -64,11 +64,16 @@ public sealed class HotkeyKeymapTests
         Assert.Equal(VkCapital, keymap.CodeFor(DictationHotkey.CapsLock));
         Assert.Equal(VkF13, keymap.CodeFor(DictationHotkey.F13));
 
-        // Never the LEFT twin of a modifier: the left keys carry the shortcuts people type.
+        Assert.Equal(VkLeftControl, keymap.CodeFor(DictationHotkey.LeftCtrl));
+        Assert.Equal(VkLeftShift, keymap.CodeFor(DictationHotkey.LeftShift));
+
+        // Left Ctrl and Left Shift are offered, the way the original offers Left Control: a second
+        // key while they are held is a shortcut, and the gesture machine ends the hold. Left Alt is
+        // not - a bare Alt tap is what Windows uses to reach the menu bar.
         int[] offered = DictationHotkeyInfo.AllCases.Select(keymap.CodeFor).ToArray();
-        Assert.DoesNotContain(VkLeftControl, offered);
+        Assert.Contains(VkLeftControl, offered);
+        Assert.Contains(VkLeftShift, offered);
         Assert.DoesNotContain(VkLeftMenu, offered);
-        Assert.DoesNotContain(VkLeftShift, offered);
     }
 
     /// <summary>
@@ -113,11 +118,15 @@ public sealed class HotkeyKeymapTests
         Assert.Equal(KeyCapsLock, keymap.CodeFor(DictationHotkey.CapsLock));
         Assert.Equal(KeyF13, keymap.CodeFor(DictationHotkey.F13));
 
-        // Never the LEFT twin of a modifier: the left keys carry the shortcuts people type.
+        Assert.Equal(KeyLeftCtrl, keymap.CodeFor(DictationHotkey.LeftCtrl));
+        Assert.Equal(KeyLeftShift, keymap.CodeFor(DictationHotkey.LeftShift));
+
+        // The left pair is offered - on a keyd-remapped keyboard it is the only Ctrl and Shift the
+        // app ever sees, since keyd emits the right keys under the left codes. Left Alt is not.
         int[] offered = DictationHotkeyInfo.AllCases.Select(keymap.CodeFor).ToArray();
-        Assert.DoesNotContain(KeyLeftCtrl, offered);
+        Assert.Contains(KeyLeftCtrl, offered);
+        Assert.Contains(KeyLeftShift, offered);
         Assert.DoesNotContain(KeyLeftAlt, offered);
-        Assert.DoesNotContain(KeyLeftShift, offered);
     }
 
     /// <summary>

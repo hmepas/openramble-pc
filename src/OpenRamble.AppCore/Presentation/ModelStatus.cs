@@ -63,6 +63,26 @@ public sealed record ModelStatus
     /// <summary>How much the install/repair button will download - the full volume or the remainder.</summary>
     public int DownloadMegabytes { get; init; } = FullDownloadMegabytes;
 
+    /// <summary>
+    /// The whole card in one line, for the places that have room for one - the menu and the
+    /// try-out step - or nothing at all.
+    /// </summary>
+    /// <remarks>
+    /// A success tone means the model asks nothing of anyone: the files are usable and, whether
+    /// the engine is loaded or resting, the next key press works. Everything else - missing,
+    /// downloading, verifying, actually preparing, damaged, failing, being deleted - either
+    /// needs the person or is visibly working, and says so.
+    ///
+    /// The menu used to write this line itself, from a ready model and a cold engine alone, and
+    /// so it announced preparation of an engine residency had put to rest with nothing running.
+    /// That is the setup screen's own bug on a second surface. One author for the sentence, and
+    /// there is no second opinion to drift.
+    /// </remarks>
+    public string? SetupLine =>
+        ToneValue == Tone.Success
+            ? null
+            : ProgressLabel is string label ? $"{Title} — {label}" : Title;
+
     public string TitleFor(Action action) => TitleOf(action, DownloadMegabytes);
 
     public string HintFor(Action action) => HintOf(action, DownloadMegabytes);
@@ -92,23 +112,30 @@ public sealed record ModelStatus
         _ => throw new ArgumentOutOfRangeException(nameof(action)),
     };
 
+    /// <summary>
+    /// The card reads three facts, and never guesses: is the recognizer usable, is preparation
+    /// actually running right now, and how far along it is. Claiming "preparing" from readiness
+    /// alone is what once left a fresh install staring at a promise nothing was keeping.
+    /// </summary>
     public static ModelStatus Make(
         ModelState state,
-        bool isPreparingEngine,
         Place place,
         EnginePreparationState? preparation = null,
-        int downloadMegabytes = FullDownloadMegabytes) =>
-        MakeStatus(state, isPreparingEngine, preparation, place, downloadMegabytes) with
+        int downloadMegabytes = FullDownloadMegabytes,
+        bool isEngineReady = true,
+        bool isPreparingEngine = false) =>
+        MakeStatus(state, preparation, place, downloadMegabytes, isEngineReady, isPreparingEngine) with
         {
             DownloadMegabytes = downloadMegabytes,
         };
 
     private static ModelStatus MakeStatus(
         ModelState state,
-        bool isPreparingEngine,
         EnginePreparationState? preparation,
         Place place,
-        int downloadMegabytes)
+        int downloadMegabytes,
+        bool isEngineReady,
+        bool isPreparingEngine)
     {
         switch (state)
         {
@@ -156,20 +183,49 @@ public sealed record ModelStatus
                 };
 
             case ModelState.Ready:
+                // Three honest states, never blurred: preparing (with real steps), resting (given
+                // back on purpose, comes back on the next press), and ready. Saying "preparing"
+                // without work behind it is the sentence that made a first run feel broken.
+                if (!isEngineReady && isPreparingEngine)
+                {
+                    int step = preparation?.Step ?? 1;
+                    const int total = EnginePreparationState.StepCount;
+                    return new ModelStatus
+                    {
+                        Title = "Preparing the model",
+                        // Live seconds, not "usually 20–40": a wait with a moving counter reads
+                        // as work, without one it reads as stuck.
+                        Detail = preparation?.Detail
+                            ?? "The model is being read into memory and planned for this PC. This happens once.",
+                        Progress = (double)(step - 1) / total,
+                        ProgressLabel = preparation is null
+                            ? $"Step {step} of {total}"
+                            : $"Step {step} of {total} · {preparation.Title}",
+                        Actions = place == Place.Settings ? [Action.Delete] : [],
+                        ToneValue = Tone.Neutral,
+                        Announcement = $"Preparing the model, step {step} of {total}",
+                    };
+                }
+
+                if (!isEngineReady)
+                {
+                    return new ModelStatus
+                    {
+                        Title = "Model ready",
+                        Detail = "The model rests until your next dictation, then loads in a moment.",
+                        Actions = place == Place.Settings ? [Action.Delete] : [],
+                        ToneValue = Tone.Success,
+                        Announcement = "Model ready, resting",
+                    };
+                }
+
                 return new ModelStatus
                 {
                     Title = "Model ready",
-                    // While the first load into the engine is in progress the person sees
-                    // "ready", but dictation will still think about it. Staying silent about that
-                    // earns a complaint about being slow the first time. Live seconds, not
-                    // "usually 20–40": a wait with a counter reads as work, without one it reads
-                    // as stuck.
-                    Detail = isPreparingEngine
-                        ? preparation?.Title ?? "Preparing for this PC — usually 20–40 seconds, and only once."
-                        : null,
+                    Detail = null,
                     Actions = place == Place.Settings ? [Action.Delete] : [],
                     ToneValue = Tone.Success,
-                    Announcement = isPreparingEngine ? "Model ready, preparing for first use" : "Model ready",
+                    Announcement = "Model ready",
                 };
 
             case ModelState.RepairRequired repairRequired:

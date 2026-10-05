@@ -26,6 +26,8 @@ public sealed class LinuxHotkeyKeymap : IHotkeyKeymap
     private const int KeyRightShift = 54;
     private const int KeyRightCtrl = 97;
     private const int KeyRightAlt = 100;
+    private const int KeyLeftCtrl = 29;
+    private const int KeyLeftShift = 42;
     private const int KeyF13 = 183;
 
     private LinuxHotkeyKeymap()
@@ -42,6 +44,8 @@ public sealed class LinuxHotkeyKeymap : IHotkeyKeymap
         DictationHotkey.RightShift => KeyRightShift,
         DictationHotkey.RightAlt => KeyRightAlt,
         DictationHotkey.CapsLock => KeyCapsLock,
+        DictationHotkey.LeftCtrl => KeyLeftCtrl,
+        DictationHotkey.LeftShift => KeyLeftShift,
         // Not offered by the picker, and no keyboard sends it unaided - but a settings file
         // written by an earlier build may still say F13, and a table with a hole in it would
         // throw where the rest of the code merely falls back to the default.

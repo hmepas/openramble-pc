@@ -135,7 +135,6 @@ public sealed class TextPipelineContractTests
     {
         TextPipeline.RunResult run = new TextPipeline().Run("");
         Assert.Equal("", run.Output.Text);
-        Assert.Equal("", run.Provenance.Raw);
         Assert.Empty(run.Provenance.Spans);
     }
 }
@@ -144,7 +143,7 @@ public sealed class TextPipelineContractTests
 public sealed class PipelineProvenanceTests
 {
     [Fact]
-    public void TestRawIsRecordedBeforeAnyStageTouchesIt()
+    public void TestTheDictionaryCheckpointIsRecordedBeforeTheCosmetics()
     {
         DictionaryReplacement[] terms =
         [
@@ -152,7 +151,6 @@ public sealed class PipelineProvenanceTests
         ];
         PipelineProvenance provenance = new TextPipeline(replacements: terms)
             .Run("открой поуст герз").Provenance;
-        Assert.Equal("открой поуст герз", provenance.Raw);
         Assert.Equal("открой Postgres", provenance.AfterDictionary);
         Assert.Equal("Открой Postgres", provenance.FinalText);
     }
@@ -185,7 +183,6 @@ public sealed class PipelineProvenanceTests
                     allowPressReturnCommand: allowReturn,
                     phoneticMatching: phonetic);
                 PipelineProvenance provenance = pipeline.Run("надо сделать деплой").Provenance;
-                Assert.Equal("надо сделать деплой", provenance.Raw);
                 Assert.NotEqual("", provenance.FinalText);
             }
         }

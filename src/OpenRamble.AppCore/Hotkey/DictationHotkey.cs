@@ -50,6 +50,16 @@ public enum DictationHotkey
     RightAlt,
     CapsLock,
 
+    /// <summary>
+    /// The left-hand twins, added for the same reason upstream added Left Command and Left Option
+    /// in 0.15.0: every key that types nothing while held is offered. They also answer a Linux
+    /// fact the right-hand keys cannot: keyd, a common remapper, folds Right Ctrl and Right Shift
+    /// into their left codes on its virtual keyboard, so on such a machine the right keys never
+    /// arrive and the left ones are the only Ctrl and Shift there are.
+    /// </summary>
+    LeftCtrl,
+    LeftShift,
+
     /// <summary>Not offered. Kept so a stored choice from an earlier build is still readable.</summary>
     F13,
 }
@@ -87,8 +97,8 @@ public enum HotkeyModifiers
 public static class DictationHotkeyInfo
 {
     /// <summary>
-    /// What the pickers offer, and it is an order: the keys that just work come first, and the
-    /// two that carry a warning come last.
+    /// What the pickers offer, and it is an order: the keys that just work come first - right
+    /// side, then left - and the two that carry a warning come last.
     /// </summary>
     /// <remarks>
     /// <see cref="DictationHotkey.F13"/> is deliberately absent. It is the only candidate a
@@ -101,6 +111,8 @@ public static class DictationHotkeyInfo
     [
         DictationHotkey.RightCtrl,
         DictationHotkey.RightShift,
+        DictationHotkey.LeftCtrl,
+        DictationHotkey.LeftShift,
         DictationHotkey.RightAlt,
         DictationHotkey.CapsLock,
     ];
@@ -113,6 +125,8 @@ public static class DictationHotkeyInfo
             DictationHotkey.RightShift => "Right Shift",
             DictationHotkey.RightAlt => "Right Alt",
             DictationHotkey.CapsLock => "Caps Lock",
+            DictationHotkey.LeftCtrl => "Left Ctrl",
+            DictationHotkey.LeftShift => "Left Shift",
             DictationHotkey.F13 => "F13",
             _ => throw new ArgumentOutOfRangeException(nameof(hotkey)),
         };
@@ -130,6 +144,8 @@ public static class DictationHotkeyInfo
             DictationHotkey.RightShift => HotkeyModifiers.Shift,
             DictationHotkey.RightAlt => HotkeyModifiers.Alt,
             DictationHotkey.CapsLock => HotkeyModifiers.None,
+            DictationHotkey.LeftCtrl => HotkeyModifiers.Control,
+            DictationHotkey.LeftShift => HotkeyModifiers.Shift,
             DictationHotkey.F13 => HotkeyModifiers.None,
             _ => throw new ArgumentOutOfRangeException(nameof(hotkey)),
         };

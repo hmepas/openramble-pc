@@ -49,7 +49,6 @@ internal static class Program
               OPENRAMBLE_ASR_PROVIDER    cpu (default) | cuda | directml
               OPENRAMBLE_ASR_THREADS     intra-op threads (default: product value, 4)
               OPENRAMBLE_ASR_DECODING    greedy_search (default) | modified_beam_search
-              OPENRAMBLE_ASR_LANGUAGE    forced language (ru, en, ...) instead of auto
               OPENRAMBLE_ASR_PREWARM=on  run the same inference warm-up as the shipping app
               OPENRAMBLE_EVAL_PIPELINE   on | exact - score the text after the replacement dictionary
             """);
@@ -418,31 +417,6 @@ internal static class Program
         }
     }
 
-    /// <summary>
-    /// A forced language instead of auto-detection - exactly what a person picks in settings.
-    /// It exists so the hypothesis "a hard language choice helps" can be checked by running
-    /// rather than by discussing.
-    /// </summary>
-    internal static string? LanguageHint()
-    {
-        string? raw = Environment.GetEnvironmentVariable("OPENRAMBLE_ASR_LANGUAGE");
-        if (raw is null)
-        {
-            return null;
-        }
-
-        if (!SherpaOnnxAdapter.SupportedLanguageHints.Contains(raw))
-        {
-            Console.WriteLine($"OPENRAMBLE_ASR_LANGUAGE: unsupported language '{raw}'");
-            Environment.Exit(64);
-        }
-
-        Console.WriteLine($"Forced language: {raw}");
-        Console.WriteLine(
-            "  (the ONNX engine has no language input: the hint is validated and the model still auto-detects)");
-        return raw;
-    }
-
     // MARK: - Recognition
 
     private static async Task<int> Eval(string manifestPath)
@@ -450,7 +424,6 @@ internal static class Program
         IReadOnlyList<EvalItem> items = Evaluation.LoadManifest(manifestPath);
         LocalTranscriber transcriber = await PrepareTranscriber().ConfigureAwait(false);
         Func<string, string>? pipeline = MakeEvalPipeline();
-        string? language = LanguageHint();
 
         var outcomes = new List<EvalOutcome>();
         foreach (EvalItem item in items)
@@ -459,7 +432,7 @@ internal static class Program
             ASRResult result;
             try
             {
-                result = await transcriber.Transcribe(item.File, language).ConfigureAwait(false);
+                result = await transcriber.Transcribe(item.File).ConfigureAwait(false);
             }
             catch (ASREngineError error)
             {
@@ -513,14 +486,13 @@ internal static class Program
     private static async Task<int> Transcribe(string[] paths, bool measure)
     {
         LocalTranscriber transcriber = await PrepareTranscriber().ConfigureAwait(false);
-        string? language = LanguageHint();
 
         foreach (string path in paths)
         {
             long started = Stopwatch.GetTimestamp();
             try
             {
-                ASRResult result = await transcriber.Transcribe(path, language).ConfigureAwait(false);
+                ASRResult result = await transcriber.Transcribe(path).ConfigureAwait(false);
                 TimeSpan wall = Stopwatch.GetElapsedTime(started);
 
                 Console.WriteLine($"\n=== {Path.GetFileName(path)} ===");

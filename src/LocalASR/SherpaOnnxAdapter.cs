@@ -299,47 +299,18 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
     }
 
     /// <summary>
-    /// Languages the engine accepts as hints (BCP-47 codes).
-    ///
-    /// The list is a property of the engine, not of the product, so it lives on the only
-    /// sherpa-onnx import boundary. The UI builds the language picker from it.
-    /// </summary>
-    /// <remarks>
-    /// The 25 European languages Parakeet TDT 0.6B v3 was trained on; the model's own
-    /// <c>tokens.txt</c> carries exactly these as <c>&lt;|xx|&gt;</c> tags.
-    /// </remarks>
-    public static IReadOnlyList<string> SupportedLanguageHints { get; } =
-    [
-        "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it",
-        "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
-    ];
-
-    public Task<ASRResult> Transcribe(float[] samples) => Transcribe(samples, null);
-
-    /// <summary>
     /// Recognize the fragment.
     /// </summary>
     /// <remarks>
-    /// <paramref name="languageHint"/> is validated and then <b>ignored</b>, and both halves
-    /// are deliberate. Validated, because an unknown code is a caller's mistake and it must be
-    /// visible instead of silently becoming "auto" - that is the behaviour the Swift tests
-    /// pin down. Ignored, because sherpa-onnx's offline recognizer has no language input at
-    /// all for a NeMo transducer: the model detects the language from the sound itself, and
-    /// there is no configuration field, no stream option, and no decoder argument to override
-    /// it with. <see cref="IASREngineAdapting.Transcribe(float[], string?)"/> calls the hint
-    /// optional for exactly this case - "an engine that does not understand it recognizes as
-    /// usual" - so a person who picked a language still gets their dictation, and the picker
-    /// simply does not shift the odds the way it does on macOS.
+    /// There is no language parameter, and there used to be one that was validated and then
+    /// ignored. sherpa-onnx's offline recognizer has no language input at all for a NeMo
+    /// transducer: the model detects the language from the sound itself, and there is no
+    /// configuration field, no stream option, and no decoder argument to override it with.
+    /// Upstream measured the same thing against its own runtime and removed the setting that
+    /// never had an effect; this port follows.
     /// </remarks>
-    public async Task<ASRResult> Transcribe(float[] samples, string? languageHint)
+    public async Task<ASRResult> Transcribe(float[] samples)
     {
-        // The hint is checked before everything else: an unknown code is the caller's error,
-        // and it must be visible rather than silently becoming "auto".
-        if (languageHint is not null && !SupportedLanguageHints.Contains(languageHint))
-        {
-            throw new ASREngineError.InferenceFailed($"unsupported language hint: {languageHint}");
-        }
-
         OfflineRecognizer engine;
         lock (gate)
         {
@@ -366,20 +337,37 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
 
             IReadOnlyList<TokenTiming> timings;
             string text;
+            TimeSpan processing;
             try
             {
-                (text, timings) = await Task.Run(() => Decode(engine, samples)).ConfigureAwait(false);
+                // On a thread of its own, never the pool: the decode is a synchronous native
+                // call that runs for as long as the audio needs, and a busy pool would put the
+                // person's words in a queue behind everything else. See DedicatedThread.
+                (text, timings, processing) = await DedicatedThread.Run(
+                    () =>
+                    {
+                        long decodeStarted = Stopwatch.GetTimestamp();
+                        (string decoded, IReadOnlyList<TokenTiming> decodedTimings) = Decode(engine, samples);
+                        return (decoded, decodedTimings, Stopwatch.GetElapsedTime(decodeStarted));
+                    },
+                    "OpenRamble recognition").ConfigureAwait(false);
             }
             catch (Exception error) when (error is not ASREngineError)
             {
                 throw new ASREngineError.InferenceFailed(error.Message);
             }
 
+            TimeSpan whole = Stopwatch.GetElapsedTime(started);
+            // What the runtime call itself cost, and what it cost to reach it and come back:
+            // starting the thread, and the continuation's return to the caller. Two numbers,
+            // because "the engine is slow" and "getting to the engine is slow" want different
+            // remedies.
             return new ASRResult(
                 text,
                 Words(timings),
                 audioDuration,
-                Stopwatch.GetElapsedTime(started));
+                processing,
+                engineDispatchDuration: whole > processing ? whole - processing : TimeSpan.Zero);
         }
         finally
         {

@@ -16,6 +16,8 @@ public sealed class WindowsHotkeyKeymap : IHotkeyKeymap
     private const int VkRightShift = 0xA1;
     private const int VkRightMenu = 0xA5;
     private const int VkCapital = 0x14;
+    private const int VkLeftControl = 0xA2;
+    private const int VkLeftShift = 0xA0;
     private const int VkF13 = 0x7C;
 
     private WindowsHotkeyKeymap()
@@ -32,6 +34,8 @@ public sealed class WindowsHotkeyKeymap : IHotkeyKeymap
         DictationHotkey.RightShift => VkRightShift,
         DictationHotkey.RightAlt => VkRightMenu,
         DictationHotkey.CapsLock => VkCapital,
+        DictationHotkey.LeftCtrl => VkLeftControl,
+        DictationHotkey.LeftShift => VkLeftShift,
         DictationHotkey.F13 => VkF13,
         _ => throw new ArgumentOutOfRangeException(nameof(hotkey)),
     };

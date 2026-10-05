@@ -20,12 +20,51 @@ and WPF on one side; PipeWire, `/dev/input`, `wtype` and Avalonia on the other.
 > Upstream code and icon are used under the [MIT license](LICENSE).
 
 Recognition runs locally (NVIDIA Parakeet TDT 0.6b v3 via sherpa-onnx —
-the same model the macOS app runs via Core ML). Audio is never uploaded,
-there are no accounts, no analytics, and transcripts are never written to
-disk or logs — including the opt-in diagnostic log, which records what the
-app *did* (states, durations, counts, error codes) and never what was said.
-The only network access is downloading the model and nothing else. See [docs/differences-from-macos.md](docs/differences-from-macos.md)
-for what this port does and does not carry over.
+the same model the macOS app runs through its own runtime). Audio is never
+uploaded, there are no accounts and no analytics. Recent dictations **are**
+kept on this machine, with their audio, so you can replay, copy, re-recognize
+or delete them: the last 5 by default, adjustable from 5 to 50 in Settings ▸
+Dictation History, and a starred one stays outside that limit until you delete
+it. Nothing is written to any log — neither the opt-in diagnostic log nor the
+opt-in plain-text log file, which record what the app *did* (states, durations,
+counts, error codes) and never what was said. The only network access is
+downloading the model and nothing else. See
+[docs/differences-from-macos.md](docs/differences-from-macos.md) for what this
+port does and does not carry over from the macOS app.
+
+## Usage
+
+- Hold the dictation key, speak, release it: the text lands at the cursor.
+- Double-press the key for hands-free dictation; press once more to finish, or
+  turn on "Finish hands-free dictation on silence" and two seconds of quiet end
+  it for you. While you hold the key a pause is never treated as the end.
+- Escape while recording cancels the take.
+- A second shortcut — any chord you press into the field in Settings — puts
+  the last dictation back on the clipboard. Off until you choose one.
+- Optional, off by default: leave every dictation on the clipboard as well,
+  add a space after each dictation (never after "new line"), choose the
+  microphone, put the dictation panel at the top or bottom of the screen, pick
+  when an idle model leaves memory (never, immediately, 2 min … 1 hour; 5
+  minutes by default), and a light, dark or system theme.
+- Every changed setting shows a small arrow that puts just that one back.
+- Long takes are recognized in pieces at your natural pauses while you are
+  still speaking, so a two-minute dictation becomes text almost as soon as you
+  let go. Cuts only ever land in silence; a take without pauses is recognized
+  whole, as before.
+
+## Local data
+
+Under `%LOCALAPPDATA%\OpenRambleData` on Windows and
+`~/.local/share/OpenRamble` on Linux:
+
+| Data | Retention |
+|---|---|
+| Recognition model (`Models`) | Until deleted in Settings |
+| Current take (`Takes`) | Deleted after success or explicit cancellation |
+| Recovery audio after a technical failure (`RecoveredAudio`) | Up to 10 WAV files, seven days, 1 GiB |
+| Dictation history: transcripts and their audio (`History`) | The last 5 by default (5–50 in Settings); starred entries are exempt; deleting an entry deletes its audio |
+| Plain-text log (`Logs`, one file per day) | Only while "Keep detailed logs" is on; timings and reasons, never words |
+| Settings and replacement dictionary (`settings.json`, `replacements.json`) | Until changed |
 
 ## Building (on Linux)
 
@@ -63,6 +102,10 @@ onboarding. What the machine has to provide:
   instead, see [below](#hotkey-without-the-input-group).
 - **PipeWire** (`pw-record`) to record, **wl-clipboard** (`wl-copy`,
   `wl-paste`) for the clipboard path, **wtype** to type into other windows.
+- **keyd** users: keyd re-emits every key through its own virtual keyboard
+  and folds Right Ctrl and Right Shift into the left codes, so pick **Left
+  Ctrl** or **Left Shift** as the dictation key there (Right Alt survives as
+  itself). `python3 scripts/keyd-keys.py` shows what actually arrives.
 - **ydotool** where `wtype` cannot work — GNOME and X11 sessions do not offer
   the virtual-keyboard protocol it speaks — with its daemon running.
 - Optional: `libcanberra` for the attention sound, `xdg-utils` for the

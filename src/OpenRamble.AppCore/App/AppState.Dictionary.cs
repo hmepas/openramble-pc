@@ -12,10 +12,14 @@ public sealed partial class AppState
     /// command. A shared builder makes "both paths are the same" a property of the code rather
     /// than something to remember while editing one of two places.
     /// </summary>
-    private TextPipeline MakePipeline() =>
+    private ITextProcessing MakePipeline() =>
         // The safe built-in technical vocabulary is part of recognition, not a hidden setup
-        // chore. Personal entries win when they use the same heard spelling.
-        new([.. StarterDictionary.Missing(Replacements), .. Replacements]);
+        // chore. Personal entries win when they use the same heard spelling. The trailing
+        // space is a wrapper rather than a stage: a personal preference has no business inside
+        // the shared rule set.
+        new TrailingSpacePipeline(
+            new TextPipeline([.. StarterDictionary.Missing(Replacements), .. Replacements]),
+            AppendsTrailingSpace);
 
     /// <summary>
     /// Learn from edits to inserted text noticed in the target application.

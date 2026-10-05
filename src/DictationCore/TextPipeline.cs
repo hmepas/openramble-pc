@@ -161,7 +161,7 @@ public static class TrailingCommandParser
 /// at all</b>. This is the rule "the clear will of a person is higher than the protection of a
 /// span" - there is no need to write a separate precedence rule, order is the rule.
 /// </summary>
-public sealed record TextPipeline
+public sealed record TextPipeline : ITextProcessing
 {
     public sealed record Output
     {
@@ -278,9 +278,22 @@ public sealed record TextPipeline
         return new RunResult(
             output: output,
             provenance: new PipelineProvenance(
-                raw: recognized,
                 afterDictionary: afterDictionary,
                 finalText: output.Text,
                 spans: ProtectedSpanDetector.Detect(output.Text)));
     }
+}
+
+/// <summary>
+/// Anything that can turn recognized text into text to insert.
+///
+/// Exists so the application can choose its implementation while this package keeps its own.
+/// That distinction matters more than it looks: upstream's conformance fixtures are recordings
+/// of the pipeline above, and a package that delegated to another implementation would be
+/// recording the thing the fixtures are meant to check. The two have to stay genuinely
+/// independent for the comparison to mean anything.
+/// </summary>
+public interface ITextProcessing
+{
+    TextPipeline.RunResult Run(string recognized);
 }

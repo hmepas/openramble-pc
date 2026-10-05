@@ -6,6 +6,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using DictationCore;
 using LocalASR;
@@ -42,6 +43,7 @@ public sealed partial class App : Application
     private TrayIcon? tray;
     private LinuxSystemEventSource? systemEvents;
     private EvdevKeyboardMonitor? hotkeys;
+    private EvdevShortcutMonitor? copyShortcut;
     private ControlSocketServer? control;
     private OverlayWindow? overlay;
     private PipeWireCapture? capture;
@@ -90,9 +92,15 @@ public sealed partial class App : Application
     {
         var events = new LinuxSystemEventSource();
         var monitor = new EvdevKeyboardMonitor();
+        // The copy chord reads the same devices through the same reader threads; a second
+        // monitor opening /dev/input on its own would double every descriptor for one chord's
+        // worth of comparison. A compositor keybind driving the control socket cannot press it -
+        // see IRawKeySource.
+        var chord = new EvdevShortcutMonitor(monitor);
         var panel = new OverlayWindow();
         systemEvents = events;
         hotkeys = monitor;
+        copyShortcut = chord;
         overlay = panel;
 
         AppPaths paths = AppPaths.Standard();
@@ -111,12 +119,23 @@ public sealed partial class App : Application
             Settings = SettingsStore.Under(paths),
             Permissions = microphone,
             HotkeyMonitor = monitor,
-            Inserter = inserter,
+            CopyShortcutMonitor = chord,
+            ShortcutKeymap = LinuxShortcutKeymap.Instance,
+            InputDevices = new PipeWireInputDevices(),
+            // Our own windows are XWayland, where wtype's keymap does not apply; they take the
+            // text directly. Everything else still goes through the inserter above.
+            Inserter = new OwnWindowTextInserter(inserter, ActiveOwnSink),
             Overlay = panel,
             Sounds = new SoundPlayer(),
-            MakeCapture = (takes, onFailure, onSamples) =>
+            MakeCapture = (takes, onFailure, onSamples, preferredDeviceUid) =>
             {
-                var device = new PipeWireCapture(takes) { Failed = onFailure };
+                // The chosen microphone is a PipeWire node name; a missing one is linked to the
+                // default source by WirePlumber, so the take never fails for it.
+                var device = new PipeWireCapture(takes)
+                {
+                    Failed = onFailure,
+                    PreferredDeviceUid = preferredDeviceUid,
+                };
                 // The capture already reduces each frame to its peak, and the peak is all the
                 // waveform needs. Handing whole frames up would move that arithmetic across a
                 // thread boundary hundreds of times a second for the same number.
@@ -124,7 +143,7 @@ public sealed partial class App : Application
                 capture = device;
                 return device;
             },
-            Transcribe = (engineDirectory, languageHint) => async (path, token) =>
+            Transcribe = engineDirectory => async (path, token) =>
             {
                 // The recognized text never reaches the log - only how long it took and how many
                 // characters came back, which is what tells "the engine answered" apart from "the
@@ -134,15 +153,12 @@ public sealed partial class App : Application
                 // session that asked for it often enough that the number must be the one this
                 // call belongs to, not the one running by the time it answers.
                 int session = DiagnosticLog.Session;
-                DiagnosticLog.Emit(
-                    "transcribe.begin",
-                    ("session", session),
-                    ("language", languageHint() ?? "auto"));
+                DiagnosticLog.Emit("transcribe.begin", ("session", session));
                 try
                 {
                     await transcriber.Prepare(engineDirectory).ConfigureAwait(false);
                     ASRResult result =
-                        await transcriber.Transcribe(path, languageHint(), token).ConfigureAwait(false);
+                        await transcriber.Transcribe(path, token).ConfigureAwait(false);
                     DiagnosticLog.Emit(
                         "transcribe.end",
                         ("session", session),
@@ -178,6 +194,7 @@ public sealed partial class App : Application
         });
 
         state = built;
+        Apply(built.Appearance);
         built.OnInputLevel = level =>
         {
             panel.UpdateInputLevel(level);
@@ -195,6 +212,17 @@ public sealed partial class App : Application
             if (args.PropertyName == nameof(AppState.EnginePreparation))
             {
                 panel.UpdateEnginePreparation(built.EnginePreparation);
+            }
+            // The capture is long-lived and speaks PipeWire's own name for the microphone; the
+            // shared seam names it by its Windows shape. Bridged here rather than in the audio
+            // package, which does not know the application's ports.
+            if (args.PropertyName == nameof(AppState.InputDeviceUid) && capture is { } live)
+            {
+                live.PreferredDeviceUid = built.InputDeviceUid;
+            }
+            if (args.PropertyName == nameof(AppState.Appearance))
+            {
+                Dispatcher.UIThread.Post(() => Apply(built.Appearance));
             }
         };
 
@@ -222,6 +250,8 @@ public sealed partial class App : Application
         // outlives an unlinked process, and the next run would have to prove it stale.
         control?.Dispose();
         control = null;
+        copyShortcut?.Dispose();
+        copyShortcut = null;
         hotkeys?.Dispose();
         capture?.Dispose();
         if (tray is not null)
@@ -433,8 +463,7 @@ public sealed partial class App : Application
             state.DictationStateValue,
             state.IsDictationReady,
             state.RecoveredText is not null,
-            state.RecentDictations.Count > 0,
-            state.CanCopyRawDictation);
+            state.RecentDictations.Count > 0);
 
         foreach (IReadOnlyList<MenuRow> section in sections)
         {
@@ -474,7 +503,7 @@ public sealed partial class App : Application
                 "Recent Dictations",
                 current.RecentDictations.Select(entry =>
                     Item(entry.MenuTitle, () => current.CopyRecentDictation(entry)))),
-            MenuRow.CopyLastAsSpoken => Item("Copy Last as Spoken", current.CopyRawDictation),
+            MenuRow.CopyLast => Item(current.CopyLastMenuTitle, current.CopyLastDictation),
             MenuRow.Settings => Item("Settings…", ShowSettings),
             MenuRow.Quit => Item("Quit OpenRamble", () => lifetime?.Shutdown()),
             _ => Item(string.Empty, null),
@@ -494,6 +523,14 @@ public sealed partial class App : Application
         var submenu = new NativeMenu();
         foreach (NativeMenuItem child in children) { submenu.Items.Add(child); }
         return new NativeMenuItem(title) { Menu = submenu };
+    }
+
+    /// <summary>The window of ours that is in front, if one is; asked on the UI thread.</summary>
+    private IDictationSink? ActiveOwnSink()
+    {
+        if (onboarding is { IsActive: true }) { return onboarding; }
+        if (settings is { IsActive: true }) { return settings; }
+        return null;
     }
 
     private void ShowSettings()
@@ -557,6 +594,19 @@ public sealed partial class App : Application
         // than one of its windows - became active.
         systemEvents?.Raise();
     });
+
+    /// <summary>
+    /// Light, dark, or whatever the desktop is doing. Handed to the application, which owns every
+    /// window including the ones not made yet - the same reason the macOS original hands it to
+    /// AppKit rather than to each view.
+    /// </summary>
+    private void Apply(AppAppearance appearance) =>
+        RequestedThemeVariant = appearance switch
+        {
+            AppAppearance.Light => ThemeVariant.Light,
+            AppAppearance.Dark => ThemeVariant.Dark,
+            _ => ThemeVariant.Default,
+        };
 }
 
 /// <summary>

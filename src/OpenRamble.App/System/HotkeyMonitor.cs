@@ -38,6 +38,17 @@ public sealed class HotkeyMonitor : IHotkeyMonitoring, IDisposable
         hook.SuppressesHotkey = hook.Hotkey.NeedsSuppression;
     }
 
+    /// <summary>
+    /// The hook every key on the machine passes through.
+    /// </summary>
+    /// <remarks>
+    /// Shared with <see cref="WindowsShortcutMonitor"/> on purpose: a second
+    /// <c>WH_KEYBOARD_LL</c> hook would be a second thread every keystroke waits on, a second
+    /// thing for antivirus to notice, and a second place that could be refused. One hook fans
+    /// out its edges; the two monitors read different gestures off the same stream.
+    /// </remarks>
+    public KeyboardHook Hook => hook;
+
     public Action? OnPress { get; set; }
 
     public Action? OnRelease { get; set; }

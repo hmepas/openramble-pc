@@ -47,8 +47,6 @@ public sealed class DictationProvenanceTests
         await Settle();
 
         Assert.NotNull(reported);
-        // Verbatim is what the person said.
-        Assert.Equal("открой поуст герз", reported.Raw);
         Assert.Equal("открой Postgres", reported.AfterDictionary);
         Assert.Equal("Открой Postgres", reported.FinalText);
 

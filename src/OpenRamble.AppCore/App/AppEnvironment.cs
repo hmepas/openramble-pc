@@ -20,6 +20,24 @@ public sealed class AppEnvironment
 
     public required IHotkeyMonitoring HotkeyMonitor { get; init; }
 
+    /// <summary>
+    /// A second watcher, for the shortcut that copies the last dictation.
+    ///
+    /// Its own monitor rather than another callback on the first: that one watches a bare
+    /// modifier being held, this one watches a chord being pressed. Different events, different
+    /// machinery. Optional: a platform without one simply has no copy shortcut.
+    /// </summary>
+    public IShortcutMonitoring? CopyShortcutMonitor { get; init; }
+
+    /// <summary>
+    /// How the platform names keys, for the shortcut shown in the menu. Defaults to the Windows
+    /// table, which is a table and not a live layout; a platform passes its own.
+    /// </summary>
+    public IShortcutKeymap? ShortcutKeymap { get; init; }
+
+    /// <summary>The microphones this machine can hear through. Optional: no picker without one.</summary>
+    public IAudioInputDeviceSource? InputDevices { get; init; }
+
     public required ITextInserting Inserter { get; init; }
 
     public required IOverlayPresenting Overlay { get; init; }
@@ -102,6 +120,34 @@ public sealed class AppEnvironment
     /// </summary>
     public required MicrophoneRemedy MicrophoneRemedy { get; init; }
 
-    /// <summary>The clock. Injected so the residency and warm-up rules stay testable.</summary>
+    /// <summary>The clock. Injected so the warm-up countdown stays testable.</summary>
     public Func<DateTimeOffset>? Now { get; init; }
+
+    /// <summary>
+    /// Test-only override for the idle-unload countdown: the policy's real options start at two
+    /// minutes, and suites never sleep that long. The decision itself always belongs to the
+    /// policy.
+    /// </summary>
+    public TimeSpan? IdleUnloadDelayOverride { get; init; }
+
+    /// <summary>
+    /// A transient engine failure is not evidence that verified model files are bad. Preparation
+    /// retries forever with a backoff ladder; this scale keeps the suite from sleeping
+    /// production-scale intervals (<c>null</c> - the real ladder).
+    /// </summary>
+    public TimeSpan? EngineWarmupRetryDelay { get; init; }
+
+    /// <summary>
+    /// How long a finished take may wait for a cold engine before the words are kept for
+    /// recovery instead. The kernel's own default is upstream's 25 s, calibrated on a Mac where a
+    /// reload is a fraction of a second; a CPU load on a slow PC is not that, so the application
+    /// passes 90 s unless told otherwise.
+    /// </summary>
+    public TimeSpan? PrepareDeadline { get; init; }
+
+    /// <summary>
+    /// The monotonic clock the silence rule reads. Injected so a test can hand it two seconds of
+    /// quiet without sleeping through them.
+    /// </summary>
+    public Func<MonotonicInstant>? MonotonicNow { get; init; }
 }

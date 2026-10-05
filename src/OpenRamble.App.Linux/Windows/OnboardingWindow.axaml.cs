@@ -20,7 +20,7 @@ namespace OpenRamble.App.Linux;
 /// no explanation, and for a blind person that is simply an unavailable button and the end of the
 /// installation. This window never decides; it shows the reason the gate gives.
 /// </remarks>
-public sealed partial class OnboardingWindow : Window
+public sealed partial class OnboardingWindow : Window, IDictationSink
 {
     private readonly AppState state;
     private readonly int successesAtStart;
@@ -110,10 +110,7 @@ public sealed partial class OnboardingWindow : Window
 
         string? reason = OnboardingGate.BlockReason(
             step,
-            state.MicrophoneGranted,
-            state.ModelStateValue,
-            state.IsEngineReady || state.HasEngineBeenReady,
-            TrialSucceeded);
+            new OnboardingConditions(state, TrialSucceeded));
 
         NextButton.IsEnabled = reason is null;
         BlockReason.Text = reason ?? string.Empty;
@@ -138,14 +135,7 @@ public sealed partial class OnboardingWindow : Window
         PermissionButton.Content = permission.ActionTitle ?? string.Empty;
         PermissionButton.IsVisible = permission.ActionTitle is not null;
 
-        ModelStatus status = ModelStatus.Make(
-            state.ModelStateValue,
-            state.IsPreparingEngine,
-            ModelStatus.Place.Onboarding,
-            state.EnginePreparation,
-            state.RemainingDownloadMegabytes == 0
-                ? ModelStatus.FullDownloadMegabytes
-                : state.RemainingDownloadMegabytes);
+        ModelStatus status = ModelCard;
 
         ModelTitle.Text = status.Title;
         ModelDetail.Text = status.Detail ?? string.Empty;
@@ -175,8 +165,28 @@ public sealed partial class OnboardingWindow : Window
         }
     }
 
+    /// <summary>
+    /// What the app has to say about the model, written once for both steps that show it. The
+    /// setup step draws the whole card; the try-out step draws its one-line form while there is
+    /// something to say.
+    /// </summary>
+    private ModelStatus ModelCard => ModelStatus.Make(
+        state.ModelStateValue,
+        ModelStatus.Place.Onboarding,
+        state.EnginePreparation,
+        state.RemainingDownloadMegabytes == 0
+            ? ModelStatus.FullDownloadMegabytes
+            : state.RemainingDownloadMegabytes,
+        state.IsEngineReady,
+        state.IsPreparingEngine);
+
     private void RenderTry()
     {
+        ModelStatus card = ModelCard;
+        TryModelLine.Text = card.SetupLine ?? string.Empty;
+        TryModelLine.IsVisible = card.SetupLine is not null;
+        AutomationProperties.SetName(TryModelLine, card.Announcement);
+
         OnboardingTryOut tryOut = OnboardingTryOut.Make(
             state.Hotkey,
             state.IsHotkeyHeld,
@@ -232,6 +242,19 @@ public sealed partial class OnboardingWindow : Window
         // the next hold on this very page uses the key that was just picked.
         state.Hotkey = DictationHotkeyInfo.AllCases[index];
         Render();
+    }
+
+    /// <summary>
+    /// Dictation on the try-out page lands in the try-out box - whichever key or button started
+    /// it. On any other page there is no field for it, and the words go where they would have
+    /// gone anyway.
+    /// </summary>
+    public bool TryInsert(string text)
+    {
+        if (step != OnboardingStep.TryIt) { return false; }
+
+        DictationSinkTextBox.Insert(TryBox, text);
+        return true;
     }
 
     private void OnHoldPressed(object? sender, PointerPressedEventArgs args)

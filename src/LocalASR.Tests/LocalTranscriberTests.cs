@@ -276,7 +276,7 @@ public class LocalTranscriberTests : IDisposable
         await WaitFor(() => engine.CallCount == 1);
         using var cancellation = new CancellationTokenSource();
         Task<ASRResult> recognition = Task.Run(
-            () => transcriber.Transcribe([0.25f, -0.25f], null, cancellation.Token));
+            () => transcriber.Transcribe([0.25f, -0.25f], cancellation.Token));
         await Settle();
         await cancellation.CancelAsync();
         engine.OpenFirstCall();
@@ -328,6 +328,28 @@ public class LocalTranscriberTests : IDisposable
         Assert.Equal("распознано", result.Text);
         // Half a second at 16 kHz is about 8000 samples.
         Assert.True(Math.Abs(engine.LastSampleCount - 8000) <= 200, $"got {engine.LastSampleCount}");
+    }
+
+    /// <summary>
+    /// The wait before the engine is reported whole, decode included, and the decode on its own.
+    /// A stage timer that sits after the read reports a queue of zero while the dictation waits
+    /// on a disk - the number that hid a slow dictation upstream for months.
+    /// </summary>
+    [Fact]
+    public async Task FileTranscriptionReportsDecodeAndQueueingSeparately()
+    {
+        var engine = new StubEngine();
+        // The stub answers instantly; a fixed, invented engine time would be subtracted from a
+        // wait it never spent.
+        engine.SetResult(new ASRResult("распознано", TimeSpan.FromSeconds(1), TimeSpan.Zero));
+        var transcriber = new LocalTranscriber(engine);
+        await transcriber.Prepare(directory);
+        string path = WriteWAV(seconds: 0.5);
+
+        ASRResult result = await transcriber.Transcribe(path);
+
+        Assert.True(result.DecodingDuration > TimeSpan.Zero, "opening and decoding the recording takes measurable time");
+        Assert.True(result.QueueingDuration >= result.DecodingDuration, "the queue includes the decode");
     }
 
     [Fact]

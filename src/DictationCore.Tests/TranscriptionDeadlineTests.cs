@@ -23,16 +23,30 @@ public sealed class TranscriptionDeadlineTests
     // MARK: - Policy
 
     /// <summary>
-    /// Short dictations get the twenty-second floor; long ones scale at
-    /// twice real time, so no healthy transcription ever meets the deadline.
+    /// The bound is a backstop against a dead service, never a performance budget. A healthy
+    /// machine must not be able to reach it, however slow it is having its day: the old
+    /// three-second bound was calibrated on a warm engine's best case, and a machine that was
+    /// merely paging or sharing its accelerator lost the words to it.
     /// </summary>
     [Fact]
-    public void TestDeadlineScalesWithAudioButNeverDropsBelowFloor()
+    public void TestTheBoundIsFarBeyondAnyHealthyRecognition()
     {
-        Assert.Equal(TimeSpan.FromSeconds(20), Deadline(TimeSpan.Zero));
-        Assert.Equal(TimeSpan.FromSeconds(20), Deadline(TimeSpan.FromSeconds(3)));
-        Assert.Equal(TimeSpan.FromSeconds(20), Deadline(TimeSpan.FromSeconds(10)));
-        Assert.Equal(TimeSpan.FromSeconds(60), Deadline(TimeSpan.FromSeconds(30)));
+        // Measured warm p50 for a short take upstream is ~0.15 s, and even a five-minute take
+        // is under a second there. Two orders of magnitude of headroom is the point, not an
+        // accident.
+        Assert.Equal(TimeSpan.FromSeconds(120), Deadline(TimeSpan.Zero));
+        Assert.Equal(TimeSpan.FromSeconds(120), Deadline(TimeSpan.FromSeconds(15)));
+        Assert.Equal(TimeSpan.FromSeconds(120), Deadline(TimeSpan.FromSeconds(60)));
+    }
+
+    /// <summary>
+    /// A long take still gets more room than a short one, because the work is genuinely
+    /// proportional to the audio.
+    /// </summary>
+    [Fact]
+    public void TestLongRecordingsScaleAboveTheFloor()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(600), Deadline(TimeSpan.FromSeconds(300)));
         Assert.Equal(TimeSpan.FromSeconds(3600), Deadline(TimeSpan.FromSeconds(1800)));
     }
 

@@ -434,9 +434,10 @@ public sealed class HotkeyGestureMachineTests
         Assert.Equal(Vk.Capital, Keymap.CodeFor(DictationHotkey.CapsLock));
         Assert.Equal(Vk.F13, Keymap.CodeFor(DictationHotkey.F13));
 
-        // A candidate must never be the LEFT twin of a modifier: the left keys carry the
-        // shortcuts people actually type.
-        Assert.DoesNotContain(Vk.LeftControl, codes);
+        // Left Ctrl is a candidate, the way Left Control always was on the Mac: the shortcuts
+        // people type on it end the hold as chords instead of dictating over it. Left Alt is not -
+        // a bare Alt tap reaches the menu bar on Windows.
+        Assert.Contains(Vk.LeftControl, codes);
         Assert.DoesNotContain(Vk.LeftMenu, codes);
 
         // Every candidate must have a title to show and a chord kind to exclude itself by.

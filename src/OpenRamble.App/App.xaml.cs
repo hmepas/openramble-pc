@@ -26,6 +26,7 @@ public partial class App : Application
     private TrayIcon? tray;
     private SystemEventSource? systemEvents;
     private HotkeyMonitor? hotkeys;
+    private WindowsShortcutMonitor? copyShortcut;
     private OverlayWindow? overlay;
     private WasapiCapture? capture;
     private AppState? state;
@@ -61,6 +62,9 @@ public partial class App : Application
 
         AppPaths paths = AppPaths.Standard();
         var transcriber = new LocalTranscriber(new SherpaOnnxAdapter());
+        // The chord that copies the last dictation reads the one keyboard hook the dictation key
+        // reads; a second WH_KEYBOARD_LL would be a second thread every keystroke waits on.
+        copyShortcut = new WindowsShortcutMonitor(hotkeys.Hook);
         var inserter = new TextInserter(reportRestoreFailure: _ => state?.ReportClipboardRestoreFailure());
 
         state = new AppState(new AppEnvironment
@@ -69,14 +73,19 @@ public partial class App : Application
             Settings = SettingsStore.Under(paths),
             Permissions = new MicrophonePermissions(),
             HotkeyMonitor = hotkeys,
+            CopyShortcutMonitor = copyShortcut,
+            // Labels asked of the live keyboard layout, so a shortcut recorded on a Latin layout
+            // still names a real key after switching to Cyrillic.
+            ShortcutKeymap = LiveWindowsShortcutKeymap.Instance,
+            InputDevices = new WasapiInputDevices(),
             Inserter = inserter,
             Overlay = overlay,
             Sounds = new SoundPlayer(),
             // scripts/build-win.sh puts the model here; the installer carries it along.
             BundledModelDirectory = Path.Combine(AppContext.BaseDirectory, "model"),
-            MakeCapture = (takes, onFailure, onSamples) =>
+            MakeCapture = (takes, onFailure, onSamples, preferredDeviceUid) =>
             {
-                var device = new WasapiCapture(takes) { Failed = onFailure };
+                var device = new WasapiCapture(takes, preferredDeviceUid) { Failed = onFailure };
                 // The capture already reduces each frame to its peak, and the peak is all the
                 // waveform needs. Handing whole frames up would move that arithmetic across a
                 // thread boundary hundreds of times a second for the same number.
@@ -84,7 +93,7 @@ public partial class App : Application
                 capture = device;
                 return device;
             },
-            Transcribe = (engineDirectory, languageHint) => async (path, token) =>
+            Transcribe = engineDirectory => async (path, token) =>
             {
                 // The recognized text never reaches the log - only how long it took and how many
                 // characters came back, which is what tells "the engine answered" apart from "the
@@ -94,15 +103,12 @@ public partial class App : Application
                 // session that asked for it often enough that the number must be the one this
                 // call belongs to, not the one running by the time it answers.
                 int session = DiagnosticLog.Session;
-                DiagnosticLog.Emit(
-                    "transcribe.begin",
-                    ("session", session),
-                    ("language", languageHint() ?? "auto"));
+                DiagnosticLog.Emit("transcribe.begin", ("session", session));
                 try
                 {
                     await transcriber.Prepare(engineDirectory).ConfigureAwait(false);
                     ASRResult result =
-                        await transcriber.Transcribe(path, languageHint(), token).ConfigureAwait(false);
+                        await transcriber.Transcribe(path, token).ConfigureAwait(false);
                     DiagnosticLog.Emit(
                         "transcribe.end",
                         ("session", session),
@@ -144,9 +150,16 @@ public partial class App : Application
             // the only place a person can see that the microphone is actually delivering sound.
             onboarding?.UpdateInputLevel(level);
         };
+        // Light, dark or the system's: applied before any window exists, and again on change.
+        AppTheme.Apply(state.Appearance);
+
         state.PropertyChanged += (_, args) =>
         {
             Dispatcher.BeginInvoke(RefreshTray);
+            if (args.PropertyName == nameof(AppState.Appearance))
+            {
+                Dispatcher.BeginInvoke(() => AppTheme.Apply(state.Appearance));
+            }
             // The panel is the only thing on screen while a dictation finishes, and a reload that
             // rides under the person's voice is the one thing that can keep it there for a minute.
             // Push it in as it ticks: nothing else redraws the panel between the key release and
@@ -169,6 +182,7 @@ public partial class App : Application
     {
         DiagnosticLog.Emit("app.exit", ("code", args.ApplicationExitCode));
         state?.Dispose();
+        copyShortcut?.Dispose();
         hotkeys?.Dispose();
         capture?.Dispose();
         tray?.Dispose();
@@ -309,8 +323,7 @@ public partial class App : Application
             state.DictationStateValue,
             state.IsDictationReady,
             state.RecoveredText is not null,
-            state.RecentDictations.Count > 0,
-            state.CanCopyRawDictation);
+            state.RecentDictations.Count > 0);
 
         foreach (IReadOnlyList<MenuRow> section in sections)
         {
@@ -351,7 +364,7 @@ public partial class App : Application
                 Children = [.. current.RecentDictations.Select(entry =>
                     new TrayMenuItem(entry.MenuTitle, () => current.CopyRecentDictation(entry)))],
             },
-            MenuRow.CopyLastAsSpoken => new TrayMenuItem("Copy Last as Spoken", current.CopyRawDictation),
+            MenuRow.CopyLast => new TrayMenuItem(current.CopyLastMenuTitle, current.CopyLastDictation),
             MenuRow.Settings => new TrayMenuItem("Settings…", ShowSettings),
             MenuRow.Quit => new TrayMenuItem("Quit OpenRamble", Shutdown),
             _ => TrayMenuItem.Separator,

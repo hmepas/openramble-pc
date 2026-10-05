@@ -81,6 +81,22 @@ public sealed class PipeWireCapture : IMicrophoneDevice
     /// <summary>The recording that is accepting frames, if one is.</summary>
     private Session? current;
 
+    /// <summary>Where finished pieces of a running take go, if anyone asked for them.</summary>
+    private Action<float[]>? segmentSink;
+
+    /// <summary>
+    /// The take reached its in-memory cap.
+    /// </summary>
+    /// <remarks>
+    /// While nobody listens, crossing the cap means what it always did: the in-memory copy is
+    /// given up and recognition reads the WAV. With a listener the take is closed at the cap
+    /// instead - the complete bounded prefix stays in memory and the WAV agrees with it - and
+    /// the listener is expected to finish the dictation through the ordinary path, which is
+    /// what <c>DictationController.StopAtCaptureMemoryLimit</c> does. Raised once per take,
+    /// from the frame queue's own thread.
+    /// </remarks>
+    public Action? OnMemoryLimitReached { get; set; }
+
     /// <summary>
     /// The most recent recording, live or just finished.
     /// </summary>
@@ -97,7 +113,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
     /// person's voice has no business staying on disk.
     /// </param>
     public PipeWireCapture(string takesDirectory)
-        : this(takesDirectory, () => PwRecordProcess.Launch(RecordingFormat))
+        : this(takesDirectory, target => PwRecordProcess.Launch(RecordingFormat, target))
     {
     }
 
@@ -120,6 +136,26 @@ public sealed class PipeWireCapture : IMicrophoneDevice
     /// </remarks>
     public static string RecorderExecutable => PwRecordProcess.Executable;
 
+    /// <summary>
+    /// Which microphone to record through, by PipeWire's <c>node.name</c>; <c>null</c> - the
+    /// server's default, which is what the capture did before this existed.
+    /// </summary>
+    /// <remarks>
+    /// Read at every start and handed to the recorder as <c>--target</c>, so a choice made in
+    /// Settings reaches the very next dictation. Not checked against the device list here: that
+    /// would put a subprocess between the key press and the first word, and the server already
+    /// falls back to the default when the name is gone - see <see cref="PwRecordProcess.Arguments"/>.
+    /// The person is told about the fallback by <c>AudioInputDevicePolicy.Notice</c>, from the
+    /// settings screen, where a sentence belongs.
+    /// </remarks>
+    public string? PreferredDeviceUid
+    {
+        get { lock (gate) { return preferredDeviceUid; } }
+        set { lock (gate) { preferredDeviceUid = value; } }
+    }
+
+    private string? preferredDeviceUid;
+
     /// <inheritdoc/>
     public Action<float>? OnInputLevel { get; set; }
 
@@ -140,6 +176,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
     public Task<string> StartRecording()
     {
         Session session;
+        string? target;
         lock (gate)
         {
             if (current is not null)
@@ -150,11 +187,12 @@ public sealed class PipeWireCapture : IMicrophoneDevice
             session = BuildSession();
             current = session;
             latest = session;
+            target = preferredDeviceUid;
         }
 
         try
         {
-            session.Attach(launch());
+            session.Attach(launch(target));
         }
         catch (Exception error)
         {
@@ -191,7 +229,10 @@ public sealed class PipeWireCapture : IMicrophoneDevice
             ("ok", true),
             ("device_rate", (int)RecordingFormat.SampleRate),
             ("device_channels", RecordingFormat.Channels),
-            ("resampled", false));
+            ("resampled", false),
+            // Whether a specific microphone was asked for - never its name, which the person chose
+            // and which can identify their hardware; "default" or "chosen" is the whole answer.
+            ("device", target is null ? "default" : "chosen"));
         return Task.FromResult(session.Writer.FilePath);
     }
 
@@ -348,7 +389,11 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         // time, and closing the file without draining would lose the last word - the one the
         // person releases the key on.
         var queue = new FrameSink();
-        var memory = new RecognitionSampleBuffer(MaximumBufferedSamples);
+        var memory = new RecognitionSampleBuffer(
+            MaximumBufferedSamples,
+            keepsPrefixAtLimit: OnMemoryLimitReached is not null);
+        var segments = new RecordingSegmentAttachment();
+        segments.SetSink(segmentSink);
         var session = new Session(
             // The dictation the take belongs to, not a counter of our own: the kernel publishes
             // the number before it asks for a recording, and every event of that session - the
@@ -356,15 +401,56 @@ public sealed class PipeWireCapture : IMicrophoneDevice
             DiagnosticLog.Session,
             writer,
             queue,
-            memory);
+            memory,
+            segments);
 
         session.Deliver = queue.Start(frame =>
         {
-            writer.Append(frame);
-            memory.Append(frame);
+            Commit(session, frame);
             return Task.CompletedTask;
         });
         return session;
+    }
+
+    /// <summary>
+    /// One frame from the queue into the take, the memory and the segmenter, in that order.
+    /// </summary>
+    /// <remarks>
+    /// The segmenter is fed the same committed frames, inside the ordered drain, because order
+    /// is the whole contract: a segmenter fed out of order would place seams in the wrong places.
+    /// The memory cap is judged here too, and with a listener it ends the take: frames past the
+    /// cap are refused so that the WAV and the buffer describe the same recording.
+    /// </remarks>
+    private void Commit(Session session, float[] frame)
+    {
+        session.Writer.Append(frame);
+        bool kept = session.Buffered.Append(frame);
+        session.Segments.Submit(frame);
+        if (kept || OnMemoryLimitReached is not { } limitReached || session.LimitReported) { return; }
+
+        session.LimitReported = true;
+        session.Close();
+        DiagnosticLog.Emit("capture.memory-limit", ("session", session.Number), ("samples", session.Samples));
+        limitReached();
+    }
+
+    public Task SetSegmentSink(Action<float[]>? sink)
+    {
+        lock (gate)
+        {
+            segmentSink = sink;
+            current?.Segments.SetSink(sink);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<int> ConsumedSampleCount()
+    {
+        Session? session;
+        lock (gate) { session = latest; }
+
+        return Task.FromResult(session?.Segments.DrainConsumedSampleCount() ?? 0);
     }
 
     /// <summary>
@@ -585,12 +671,18 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         private bool closed;
         private volatile bool finishing;
 
-        public Session(int number, WAVWriter writer, FrameSink sink, RecognitionSampleBuffer buffered)
+        public Session(
+            int number,
+            WAVWriter writer,
+            FrameSink sink,
+            RecognitionSampleBuffer buffered,
+            RecordingSegmentAttachment segments)
         {
             Number = number;
             Writer = writer;
             Sink = sink;
             Buffered = buffered;
+            Segments = segments;
             StartedAt = Stopwatch.GetTimestamp();
         }
 
@@ -601,6 +693,11 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         public FrameSink Sink { get; }
 
         public RecognitionSampleBuffer Buffered { get; }
+
+        public RecordingSegmentAttachment Segments { get; }
+
+        /// <summary>The memory cap has been announced for this take. Once, never per frame.</summary>
+        public bool LimitReported { get; set; }
 
         /// <summary>The recorder, from the moment it starts until the stop takes it away.</summary>
         public IRecorderProcess? Recorder { get; private set; }

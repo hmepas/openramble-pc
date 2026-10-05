@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using DictationCore;
 using LocalASR;
+using OpenRamble.AppCore.Audio;
 
 namespace OpenRamble.AppCore;
 
@@ -39,6 +40,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly SettingsStore settingsStore;
     private readonly IPermissionReading permissions;
     private readonly IHotkeyMonitoring hotkeyMonitor;
+    private readonly IShortcutMonitoring? copyShortcutMonitor;
+    private readonly IShortcutKeymap shortcutKeymap;
+    private readonly IAudioInputDeviceSource? inputDevices;
     private readonly ITextInserting inserter;
     private readonly IOverlayPresenting overlay;
     private readonly TimeSpan permissionPollInterval;
@@ -52,12 +56,17 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly string? hotkeySettingsHint;
     private readonly MicrophoneRemedy microphoneRemedy;
     private readonly Func<DateTimeOffset> now;
+    private readonly Func<MonotonicInstant> monotonicNow;
+    private readonly DictationLogFile logFile;
+    /// <summary>Keeps one level update in flight at a time. See <see cref="LevelUpdateGate"/>.</summary>
+    private readonly LevelUpdateGate levelGate = new();
     private readonly ReplacementsStore replacementsStore;
     private readonly EditLearningWatcher editWatcher;
     private readonly LocalTranscriber? transcriber;
     private readonly string? bundledModelDirectory;
 
     private AppSettings settings;
+    private IAudioCapturing? capture;
     private DictationController? controller;
     private RecordingRecoveryStore? recordingRecovery;
     private ModelStore? store;
@@ -79,6 +88,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         bundledModelDirectory = environment.BundledModelDirectory;
         permissions = environment.Permissions;
         hotkeyMonitor = environment.HotkeyMonitor;
+        copyShortcutMonitor = environment.CopyShortcutMonitor;
+        shortcutKeymap = environment.ShortcutKeymap ?? WindowsShortcutKeymap.Instance;
+        inputDevices = environment.InputDevices;
         inserter = environment.Inserter;
         overlay = environment.Overlay;
         permissionPollInterval = environment.PermissionPollInterval;
@@ -92,22 +104,31 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         hotkeySettingsHint = environment.HotkeySettingsHint;
         microphoneRemedy = environment.MicrophoneRemedy;
         now = environment.Now ?? (static () => DateTimeOffset.Now);
+        monotonicNow = environment.MonotonicNow ?? (static () => MonotonicInstant.Now);
+        idleUnloadDelayOverride = environment.IdleUnloadDelayOverride;
+        engineWarmupRetryDelayOverride = environment.EngineWarmupRetryDelay;
+        logFile = new DictationLogFile(DictationLogFile.DirectoryUnder(paths));
         transcriber = environment.LocalTranscriber;
         editWatcher = new EditLearningWatcher(
             environment.FocusedFieldReader ?? new NoFocusedField());
 
         settings = settingsStore.Read();
-        // The saved code is checked against the engine's list. That list is a property of the
-        // library and may get narrower when it is updated; without the check every dictation
-        // would fail on "unsupported language hint", WAVs would pile up in recovery, and the
-        // picker would show a blank row. An unfamiliar code means automatic detection, exactly
-        // as it was before the person chose anything.
-        recognitionLanguage = RecognitionLanguages.IsSupported(settings.RecognitionLanguage)
-            ? settings.RecognitionLanguage
-            : null;
         learnFromEdits = settings.LearnFromEdits;
         hotkey = ParseHotkey(settings.Hotkey);
         soundsEnabled = settings.SoundsEnabled;
+        // Every one of these reads through the defaults the revert arrow uses, so what the app
+        // starts with and what the arrow gives back cannot be two different values.
+        copiesToClipboard = settings.CopiesToClipboard;
+        copyShortcut = KeyCombination.Parse(settings.CopyShortcut);
+        appendsTrailingSpace = settings.AppendsTrailingSpace;
+        appearance = AppAppearances.Parse(settings.Appearance);
+        inputDeviceUid = string.IsNullOrEmpty(settings.InputDeviceUid) ? null : settings.InputDeviceUid;
+        detailedLogging = settings.DetailedLogging;
+        logFile.IsEnabled = detailedLogging;
+        stopsOnSilence = settings.StopsOnSilence;
+        overlayPlacement = DictationOverlayPlacements.Parse(settings.OverlayPlacement);
+        modelUnloadTimeout = IdleUnloadPolicies.Parse(settings.ModelUnloadTimeout);
+        historyLimit = DictationHistoryStore.ClampLimit(settings.HistoryLimit);
         launchAtLogin = launchAtLoginService?.IsEnabled ?? false;
         // Test environments substitute a ready-made ASR closure and need no engine warm-up.
         // Production always passes a shared transcriber.
@@ -117,6 +138,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         ReplacementsStore.Load loaded = replacementsStore.Read();
         replacements = loaded.Replacements;
         dictionaryProblem = loaded.Problem;
+
+        (overlay as IOverlayPlacementConfiguring)?.Placement = overlayPlacement;
 
         SetUp(environment);
 
@@ -152,11 +175,23 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                         peak = Math.Max(peak, Math.Abs(sample));
                     }
 
-                    lock (gate) { takePeak = Math.Max(takePeak, peak); }
-                    OnInputLevel?.Invoke(peak);
-                });
+                    RegisterInputLevel(peak);
+                },
+                InputDeviceUid);
+            this.capture = capture;
+            if (capture is IMicrophoneDevice device)
+            {
+                // Disk spill never gates the microphone. If it remained unavailable until the
+                // bounded PCM buffer became full, finish the complete retained take normally
+                // instead of dropping history or continuing into unrecoverable audio.
+                device.OnMemoryLimitReached = () => controller?.StopAtCaptureMemoryLimit();
+            }
 
             recordingRecovery = new RecordingRecoveryStore(paths.AudioRecovery());
+
+            var historyStore = new DictationHistoryStore(Path.Combine(paths.Support(), "History"));
+            this.historyStore = historyStore;
+            history = historyStore.Load();
 
             ModelManifest manifest = ModelManifest.Bundled();
             var layout = new ModelInstallLayout(manifest, paths.Models());
@@ -164,7 +199,6 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             mainModelBytes = manifest.TotalByteCount;
             engineDirectory = layout.EngineDirectory;
 
-            Func<string?> languageHint = () => RecognitionLanguage;
             Func<float[], CancellationToken, Task<ASRResult>>? transcribeSamples = transcriber is null
                 ? null
                 : async (samples, token) =>
@@ -178,12 +212,11 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                     DiagnosticLog.Emit(
                         "transcribe.begin",
                         ("session", session),
-                        ("language", languageHint() ?? "auto"),
                         ("audio_ms", samples.Length / 16),
                         ("peak_dbfs", MicrophoneLevelHint.Decibels(InputGain.Peak(samples))));
                     try
                     {
-                        ASRResult result = await transcriber.Transcribe(samples, languageHint(), token).ConfigureAwait(false);
+                        ASRResult result = await transcriber.Transcribe(samples, token).ConfigureAwait(false);
                         DiagnosticLog.Emit(
                             "transcribe.end",
                             ("session", session),
@@ -205,7 +238,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
             var built = new DictationController(
                 capture,
-                environment.Transcribe(layout.EngineDirectory, languageHint),
+                environment.Transcribe(layout.EngineDirectory),
                 inserter,
                 overlay,
                 new GatedSounds(environment.Sounds, () => SoundsEnabled),
@@ -214,7 +247,10 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 MakePipeline,
                 prepareForTranscription: transcriber is null
                     ? null
-                    : token => transcriber.Prepare(layout.EngineDirectory));
+                    : token => transcriber.Prepare(layout.EngineDirectory),
+                // Ninety seconds rather than the kernel's 25: the reload rides under the voice
+                // either way, and on a slow PC the CPU load can outlast a short take.
+                prepareDeadline: environment.PrepareDeadline ?? TimeSpan.FromSeconds(90));
 
             built.OnStateChange = state =>
             {
@@ -231,19 +267,25 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 DictationStateValue = state;
                 FlushNoticeAfterSession(state);
                 // The person just pressed the key and is about to speak for seconds: if the
-                // engine sat idle long enough for the system to reclaim it, reload it now, under
-                // their voice, instead of after it.
+                // engine gave its memory back while idle, reload it now, under their voice,
+                // instead of after it. By the time this runs the key-down trigger has usually
+                // started that reload already; the single-flight load makes the second call free.
                 if (state == DictationState.Preparing)
                 {
-                    lock (gate) { takePeak = 0f; }
-                    WarmEngineUnderVoiceIfCold();
+                    lock (gate)
+                    {
+                        takePeak = 0f;
+                        silence.Reset();
+                    }
+
+                    RewarmEngineIfCold(RewarmTrigger.KeyDown);
                 }
 
                 if (state == DictationState.Transcribing) { JudgeMicrophoneLevel(); }
 
-                // A finished session is a residency event: the engine just became safely idle,
-                // and a deferred unload may now proceed.
-                if (state == DictationState.Idle) { EvaluateResidency(); }
+                // Every state change re-arms or cancels the idle-unload timer: activity disarms
+                // it, idleness starts the countdown.
+                RescheduleIdleUnload();
             };
             built.OnNotice = notice =>
             {
@@ -279,6 +321,21 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             built.OnTextInserted = text =>
             {
                 RecordSuccessfulDictation(text);
+                if (CopiesToClipboard)
+                {
+                    // Host-only, like every other copy this app makes: asking for the clipboard
+                    // is not asking for it to be synced to other devices.
+                    try
+                    {
+                        clipboard?.Copy(text);
+                    }
+                    catch (Exception error) when (error is InvalidOperationException
+                        or System.Runtime.InteropServices.ExternalException)
+                    {
+                        DiagnosticLog.EmitException("clipboard.copy.failed", error);
+                    }
+                }
+
                 if (!LearnFromEdits) { return; }
                 editWatcher.BeginWatching(text, (original, edited) => Learn(original, edited));
             };
@@ -296,14 +353,18 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                     ("pasted_ms", report.ToPasteDispatched),
                     ("restored_ms", report.ToClipboardRestored),
                     ("mic_startup_ms", report.MicrophoneStartup));
+                // The stages travel with the total because the total alone cannot name the
+                // cause. Numbers only; the log file is off unless the person turned it on.
+                logFile.Write(DictationSpeedLine.Text(StagesOf(report)));
                 LastSpeed = report;
             };
             built.OnDictationCompleted = provenance =>
-            {
                 LastDictationValue = new LastDictation(provenance.FinalText, provenance);
-                // Real inference just ran — the cold-suspicion clock restarts.
-                lock (gate) { lastEngineActivity = now(); }
-            };
+            // The last moment the take still exists: whoever keeps a history has to take its
+            // copy now; the kernel deletes the original right after.
+            built.OnTakeFinished = Archive;
+            built.OnEnginePreparationWait = waiting =>
+                (overlay as IEngineWaitPresenting)?.SetWaitingForEngine(waiting);
 
             controller = built;
         }
@@ -320,17 +381,17 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // Unlike macOS, the hook needs no permission - it starts once and stays for the life of
         // the process. Nothing about a revoked microphone makes the keyboard hook invalid.
         hotkeyMonitor.Start();
+        ApplyCopyShortcut();
         RefreshPermissions();
 
         _ = Task.Run(async () =>
         {
             await ImportAbandonedRecordings().ConfigureAwait(false);
+            // No explicit warm-up here: reading the disk publishes the model state, and readiness
+            // itself starts preparation. Launch is not a special case, and having it be one is
+            // how the rule came to hold at launch and nowhere else.
             await RefreshModelState().ConfigureAwait(false);
-            if (ModelStateValue.IsReady)
-            {
-                await WarmUpEngine().ConfigureAwait(false);
-            }
-            else if (HasBundledModel)
+            if (!ModelStateValue.IsReady && HasBundledModel)
             {
                 // The model came with the installer. Nobody should have to press a button, let
                 // alone wait for a download, to get what is already on their disk: put it in
@@ -373,6 +434,31 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>
+    /// The stage report as the log line reads it. Absent stages stay absent: a zero is a
+    /// measurement, and confusing the two is what hid slow dictations for weeks.
+    /// </summary>
+    internal static DictationSpeedLine.Stages StagesOf(DictationSpeedReport report)
+    {
+        DictationPhaseBreakdown? phases = report.Phases;
+        return phases is null
+            ? DictationSpeedLine.StagesOf(report)
+            : new DictationSpeedLine.Stages(
+                Total: report.ToRecognizedText,
+                Paste: report.ToPasteDispatched,
+                CaptureFreeze: phases.CaptureFreeze,
+                EnginePreparation: phases.EnginePreparation,
+                Recognition: phases.Recognition,
+                RecordingReadable: phases.RecordingReadable,
+                AudioDecoding: phases.AudioDecoding,
+                EngineTransport: phases.EngineTransport,
+                EngineDispatch: phases.EngineDispatch,
+                EngineQueueing: phases.EngineQueueing,
+                EngineProcessing: phases.EngineProcessing,
+                AudioDuration: phases.AudioDuration,
+                StreamedSegments: phases.StreamedSegments);
+    }
+
     /// <param name="remedy">
     /// Where the platform sends a person whose microphone will not open - the one line of this
     /// message that is not the same on both.
@@ -394,6 +480,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
     private void WireHotkey()
     {
+        if (copyShortcutMonitor is not null) { copyShortcutMonitor.OnPress = CopyLastDictation; }
         hotkeyMonitor.SetHotkey(Hotkey);
         hotkeyMonitor.OnPress = BeginHoldToDictate;
         hotkeyMonitor.OnRelease = EndHoldToDictate;
@@ -424,6 +511,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // key arrived - which is the one thing the first-launch try-out has to be able to show.
         hotkeyMonitor.OnHotkeyDown = () =>
         {
+            // Before any guard can swallow the press: the reload must start at the earliest
+            // observable moment of intent.
+            RewarmEngineIfCold(RewarmTrigger.KeyDown);
             HotkeyPressCount += 1;
             IsHotkeyHeld = true;
             // An edge is the one proof the kept failure lacks. However it traveled - a hook
@@ -457,6 +547,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// </summary>
     private void BeginHoldToDictate()
     {
+        // The on-screen button has no raw key edge to ride; it wakes the engine here.
+        RewarmEngineIfCold(RewarmTrigger.KeyDown);
         if (IsRecoveryOperationActive)
         {
             DiagnosticLog.Emit(
@@ -622,16 +714,17 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     ///
     /// The message is given only for a cancellation that actually happened. From
     /// <see cref="DictationState.Inserting"/> there is nothing to cancel - the paste has already
-    /// gone into someone else's window - and the kernel ignores such a request. "The recording
-    /// was deleted" would then say the exact opposite of what the person sees a moment later in
-    /// their document, and would also erase the real warning about the insertion.
+    /// gone into someone else's window - and the kernel ignores such a request. A message saying
+    /// the recording was queued for deletion would then say the exact opposite of what the person
+    /// sees a moment later in their document, and would also erase the real warning about the
+    /// insertion.
     /// </summary>
     public void CancelCurrentDictation()
     {
         if (IsRecoveryOperationActive) { return; }
         if (!DictationStopPolicy.CanCancel(DictationStateValue)) { return; }
         controller?.Cancel();
-        Notify(new DictationNotice(DictationNoticeKind.Info, "Dictation cancelled. The recording was deleted."));
+        Notify(new DictationNotice(DictationNoticeKind.Info, "Dictation cancelled. Its local recording is queued for deletion."));
     }
 
     /// <summary>
@@ -654,10 +747,14 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         systemEvents.DidWake += HandleWake;
         systemEvents.AudioDeviceChanged += HandleAudioConfigurationChange;
         systemEvents.ApplicationBecameActive += HandleApplicationBecameActive;
-        systemEvents.MemoryPressureChanged += RegisterMemoryPressure;
     }
 
-    private void HandleApplicationBecameActive() => RefreshPermissions();
+    private void HandleApplicationBecameActive()
+    {
+        RefreshPermissions();
+        // Coming back to the app is a cheap hint that dictation is near.
+        RewarmEngineIfCold(RewarmTrigger.AppActivation);
+    }
 
     /// <summary>
     /// The computer goes to sleep.
@@ -705,13 +802,14 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private void HandleWake()
     {
         hotkeyMonitor.Stop();
+        copyShortcutMonitor?.Stop();
         // The release never arrived, so nothing will ever say the key came up. Restarting
         // tracking erases the gesture; this erases the same memory on our side.
         IsHotkeyHeld = false;
         hotkeyMonitor.Start();
+        ApplyCopyShortcut();
         RefreshPermissions();
         RevalidateEngineAfterWake();
-        EvaluateResidency();
     }
 
     /// <summary>
@@ -954,19 +1052,27 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             disposed = true;
             permissionTimer?.Dispose();
             permissionTimer = null;
-            residencyTimer?.Dispose();
-            residencyTimer = null;
+            idleUnloadTimer?.Dispose();
+            idleUnloadTimer = null;
             preparationTimer?.Dispose();
             preparationTimer = null;
+            engineWarmupTaskRevision += 1;
+            RevokeRetryLocked();
         }
 
         systemEvents.WillSleep -= HandleSleep;
         systemEvents.DidWake -= HandleWake;
         systemEvents.AudioDeviceChanged -= HandleAudioConfigurationChange;
         systemEvents.ApplicationBecameActive -= HandleApplicationBecameActive;
-        systemEvents.MemoryPressureChanged -= RegisterMemoryPressure;
         editWatcher.Cancel();
+        logFile.Dispose();
         hotkeyMonitor.Stop();
+        if (copyShortcutMonitor is not null)
+        {
+            copyShortcutMonitor.Stop();
+            copyShortcutMonitor.OnPress = null;
+        }
+
         // The monitor outlives us - it owns an OS hook. Leaving our callbacks on it would keep
         // this object, its controller and its capture alive for the rest of the process.
         hotkeyMonitor.OnPress = null;

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DictationCore;
 
 namespace LocalASR;
@@ -209,15 +210,9 @@ public sealed class LocalTranscriber
         await capable.LoadVocabularyModels(modelDirectory, boost).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Recognize the recorded file.
-    ///
-    /// <paramref name="languageHint"/> is a BCP-47 code or <c>null</c> for auto-detection;
-    /// see <see cref="IASREngineAdapting.Transcribe(float[], string?)"/>.
-    /// </summary>
+    /// <summary>Recognize the recorded file.</summary>
     public async Task<ASRResult> Transcribe(
         string filePath,
-        string? languageHint = null,
         CancellationToken cancellationToken = default)
     {
         lock (gate)
@@ -228,18 +223,42 @@ public sealed class LocalTranscriber
             }
         }
 
+        // Stamped before the read, because the read is where the time went.
+        long arrived = Stopwatch.GetTimestamp();
+
+        // Reading and decoding the recording is synchronous file work, and it used to happen
+        // right here, on whichever pool thread the dictation was waiting on. A pool thread
+        // blocked on a disk is not yielded but lost, and the whole dictation waits behind it.
+        // Upstream's field logs showed recognition of 11.65 s around an engine call of 0.11 s,
+        // with the stage timer reporting a queue of zero - because the timer sat after this line
+        // rather than before it. Disk work gets a thread of its own, which is allowed to wait.
         float[] samples;
+        long decodeStarted = Stopwatch.GetTimestamp();
         try
         {
-            samples = reader.Samples(filePath);
+            samples = await DedicatedThread.Run(() => reader.Samples(filePath), "OpenRamble recording decode")
+                .ConfigureAwait(false);
         }
         catch (AudioFileReader.Failure failure)
         {
             throw new ASREngineError.UnsupportedAudioFormat(failure.Message);
         }
 
+        TimeSpan decoded = Stopwatch.GetElapsedTime(decodeStarted);
         cancellationToken.ThrowIfCancellationRequested();
-        return await Transcribe(samples, languageHint, cancellationToken).ConfigureAwait(false);
+        ASRResult result = await Transcribe(samples, cancellationToken).ConfigureAwait(false);
+        // Report the whole wait, decode included, rather than only the part after it. The
+        // previous number was true and useless.
+        TimeSpan waited = Stopwatch.GetElapsedTime(arrived);
+        TimeSpan queued = waited - result.ProcessingDuration - result.EngineDispatchDuration;
+        return new ASRResult(
+            result.Text,
+            result.Words,
+            result.AudioDuration,
+            result.ProcessingDuration,
+            engineDispatchDuration: result.EngineDispatchDuration,
+            queueingDuration: queued > TimeSpan.Zero ? queued : TimeSpan.Zero,
+            decodingDuration: decoded);
     }
 
     /// <summary>
@@ -256,11 +275,15 @@ public sealed class LocalTranscriber
     /// </summary>
     public async Task<ASRResult> Transcribe(
         float[] samples,
-        string? languageHint = null,
         CancellationToken cancellationToken = default)
     {
         Task? warmup;
         int expectedGeneration;
+        // Stamped at the door, before any waiting. Everything between here and the engine - a
+        // shared warm-up, another dictation holding the engine, a thread that has not been
+        // handed out - used to be reported nowhere at all, and that interval is where every
+        // stall this app has had actually lived.
+        long arrived = Stopwatch.GetTimestamp();
         lock (gate)
         {
             if (loadedDirectory is null)
@@ -305,7 +328,16 @@ public sealed class LocalTranscriber
             // In place: the buffer is this dictation's and nobody reads it after the engine.
             // See InputGain for the numbers behind it.
             _ = InputGain.Normalize(samples);
-            return await engine.Transcribe(samples, languageHint).ConfigureAwait(false);
+            TimeSpan queued = Stopwatch.GetElapsedTime(arrived);
+            ASRResult result = await engine.Transcribe(samples).ConfigureAwait(false);
+            return new ASRResult(
+                result.Text,
+                result.Words,
+                result.AudioDuration,
+                result.ProcessingDuration,
+                engineDispatchDuration: result.EngineDispatchDuration,
+                queueingDuration: queued,
+                decodingDuration: result.DecodingDuration);
         }
         finally
         {
@@ -347,7 +379,7 @@ public sealed class LocalTranscriber
             {
                 inferenceWarmupEpoch++;
                 warmupEpoch = inferenceWarmupEpoch;
-                task = engine.Transcribe(new float[16_000], null);
+                task = engine.Transcribe(new float[16_000]);
                 inferenceWarmupTask = task;
                 activeOperations++;
             }

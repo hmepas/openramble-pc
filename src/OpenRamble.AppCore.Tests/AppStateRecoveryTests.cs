@@ -91,7 +91,6 @@ public sealed class AppStateRecoveryTests : IDisposable
 
         Assert.Equal(["Ping test"], state.RecentDictations.Select(entry => entry.Text));
         Assert.Null(state.LastDictationValue);
-        Assert.False(state.CanCopyRawDictation);
     }
 
     [Fact]
@@ -141,25 +140,6 @@ public sealed class AppStateRecoveryTests : IDisposable
         state.CopyRecentDictation(state.RecentDictations[0]);
 
         Assert.Equal(["Ping test"], harness.Clipboard.Copied);
-    }
-
-    // MARK: - Saved recognition language
-
-    [Fact]
-    public void Scenario058()
-    {
-        harness.Settings.Write(new AppSettings { RecognitionLanguage = "xx-not-a-language" });
-
-        // A code the engine does not know would fail every dictation and pile WAVs into recovery.
-        Assert.Null(harness.MakeState().RecognitionLanguage);
-    }
-
-    [Fact]
-    public void Scenario059()
-    {
-        harness.Settings.Write(new AppSettings { RecognitionLanguage = "ru" });
-
-        Assert.Equal("ru", harness.MakeState().RecognitionLanguage);
     }
 
     private async Task<AppState> ReadyState()

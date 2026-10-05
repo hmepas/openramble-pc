@@ -15,7 +15,7 @@ public enum MenuRow
     FinishSetup,
     InsertLastDictation,
     RecentDictations,
-    CopyLastAsSpoken,
+    CopyLast,
     Settings,
     Quit,
 }
@@ -43,8 +43,7 @@ public static class MenuSections
         DictationState state,
         bool isDictationReady,
         bool hasRecoveredText,
-        bool hasRecents,
-        bool canCopyAsSpoken)
+        bool hasRecents)
     {
         var sections = new List<IReadOnlyList<MenuRow>> { new[] { MenuRow.StatusLine } };
 
@@ -70,20 +69,13 @@ public static class MenuSections
                     sections.Add([MenuRow.InsertLastDictation]);
                 }
 
-                var history = new List<MenuRow>();
                 if (hasRecents)
                 {
-                    history.Add(MenuRow.RecentDictations);
-                }
-
-                if (canCopyAsSpoken)
-                {
-                    history.Add(MenuRow.CopyLastAsSpoken);
-                }
-
-                if (history.Count > 0)
-                {
-                    sections.Add(history);
+                    // Copy Last gets its own row rather than a label inside the submenu: the
+                    // menu shows a shortcut beside Settings and Quit, and the copy key was the
+                    // one binding with nowhere to be seen while it lived a level down next to a
+                    // dictation rather than next to its own action.
+                    sections.Add([MenuRow.RecentDictations, MenuRow.CopyLast]);
                 }
 
                 break;

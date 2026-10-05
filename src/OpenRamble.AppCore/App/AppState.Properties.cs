@@ -17,7 +17,6 @@ public sealed partial class AppState
     private bool isEngineReady;
     private bool hasEngineBeenReady;
     private int remainingDownloadMegabytes = ModelStatus.FullDownloadMegabytes;
-    private string? recognitionLanguage;
     private string? recoveredText;
     private bool isHandsFreeActive;
     private int successfulDictationCount;
@@ -41,9 +40,9 @@ public sealed partial class AppState
     /// made to it; the text never reaches disk.
     /// </summary>
     /// <param name="Provenance">
-    /// What the text was before the dictionary and the cosmetics. One slot, not a history: this
-    /// is where "copy as spoken" comes from, and where learning from edits finds the protected
-    /// spans - it has no other honest source, it only sees the inserted text.
+    /// What the text was after the dictionary and before the cosmetics. One slot, not a history:
+    /// this is where learning from edits finds the protected spans - it has no other honest
+    /// source, it only sees the inserted text.
     /// </param>
     public sealed record LastDictation(string InsertedText, PipelineProvenance Provenance);
 
@@ -132,7 +131,7 @@ public sealed partial class AppState
     ///
     /// Splits two very different "not ready" states: the FIRST warm-up after install (blocks
     /// dictation with an honest message — there is genuinely nothing to recognize with yet) and a
-    /// residency unload (recording must start instantly; the reload rides under the voice).
+    /// an idle unload (recording must start instantly; the reload rides under the voice).
     /// </summary>
     public bool HasEngineBeenReady
     {
@@ -145,22 +144,6 @@ public sealed partial class AppState
     {
         get { lock (gate) { return remainingDownloadMegabytes; } }
         private set => Set(ref remainingDownloadMegabytes, value);
-    }
-
-    /// <summary>
-    /// Recognition language: <c>null</c> - automatic detection by sound; otherwise a BCP-47 code.
-    ///
-    /// Manual selection is the way out when autodetection settles on the wrong language; it is
-    /// contraindicated for mixed speech, so the default is always automatic.
-    /// </summary>
-    public string? RecognitionLanguage
-    {
-        get { lock (gate) { return recognitionLanguage; } }
-        set
-        {
-            if (!Set(ref recognitionLanguage, value)) { return; }
-            UpdateSettings(current => current with { RecognitionLanguage = value });
-        }
     }
 
     /// <summary>Text of a failed insertion. Never written to disk.</summary>
@@ -354,12 +337,6 @@ public sealed partial class AppState
     /// <summary>Is the preparation countdown running? The "the app is silent at rest" test asks this.</summary>
     public bool IsCountingEnginePreparation { get { lock (gate) { return preparationTimer is not null; } } }
 
-    /// <summary>
-    /// Same doctrine as the countdown: at rest — normal pressure, nothing pending — no residency
-    /// timer may exist.
-    /// </summary>
-    public bool IsAwaitingResidencyBoundary { get { lock (gate) { return residencyTimer is not null; } } }
-
     /// <summary>Retry and Delete recovery run one at a time and block the hotkey.</summary>
     public bool IsRecoveryOperationActive { get { lock (gate) { return isRecoveryOperationActive; } } }
 
@@ -385,16 +362,6 @@ public sealed partial class AppState
     /// then erase it whole - and the person would lose everything they accumulated.
     /// </summary>
     public bool IsDictionaryEditable => DictionaryProblem is null;
-
-    /// <summary>
-    /// Is there anything to copy as spoken?
-    ///
-    /// Only when the raw words actually differ from the inserted text: for most dictations the
-    /// dictionary and cosmetics change nothing, and the menu item would duplicate the last recent
-    /// dictation.
-    /// </summary>
-    public bool CanCopyRawDictation =>
-        CopyRawPolicy.CanCopyRaw(LastDictationValue?.Provenance.Raw, LastDictationValue?.InsertedText);
 
     /// <summary>
     /// Has the person finished the setup flow - the revision this build asks for, not any older

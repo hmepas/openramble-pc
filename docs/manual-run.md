@@ -131,6 +131,48 @@ delivered nothing.
    `capture.stop.end` lines must all report back in well under a second, and
    `capture.stop.device-abandoned` must not appear. If it does, the audio path
    is not releasing its thread — the session survives it by design, but say so.
+10. Copy shortcut (Settings → General → "Copy last dictation"): record a
+    chord such as Ctrl+Alt+C, dictate once, press the chord in another app and
+    paste — the last dictation must arrive; Ctrl+Alt+Shift+C must not fire it,
+    and holding the chord must copy once, not on every key repeat. On Linux the
+    chord is read from the same `/dev/input` devices as the dictation key, so
+    it needs the `input` group too; a compositor keybind that drives the
+    control socket cannot press it — bind the copy in the compositor instead.
+    Caps Lock on or off makes no difference; on Windows AltGr counts as
+    Ctrl+Alt. The log line is `shortcut.press`, with no key in it.
+11. Microphone picker (Settings → General → "Microphone"): the list must show
+    every capture source the desktop's own sound settings show (on Linux it is
+    `pw-dump`'s `Audio/Source` nodes; the list is read when the window opens
+    and each time it comes back to the front). Pick one, dictate, then unplug it: the
+    settings row must say the chosen microphone isn't connected and dictation
+    must continue through the default without a failure notice. The
+    `capture.start` line carries `device=chosen` or `device=default`, never
+    the device's name.
+12. History playback: play a take from the History tab; it must stop when the
+    next one starts. On Linux playback runs through `pw-play` (or `paplay`,
+    then `aplay`); a machine with none of them logs `history.play ok=false
+    error=no-player` and "Show in folder" still opens the audio.
+13. Settings → Dictation History: dictate three times with "Keep" at 5, star
+    one, dictate six more — the starred one must survive, the others age out
+    newest-first to five unstarred. "Recognize again" on a kept take after
+    adding a dictionary replacement must rewrite the text and keep the star;
+    the button is disabled while a re-run is in flight. "Delete All" asks
+    first.
+14. Settings → General: every row shows a ↺ arrow only once its value differs
+    from the default, and the arrow puts back that one setting only. Check
+    "Add a space after each dictation" (a dictation ending in "new line" gets
+    no space), "Also copy dictations to the clipboard" (the text is on the
+    clipboard after a paste, and not in Win+V history), "Finish hands-free
+    dictation on silence" (double-press, speak, stay quiet two seconds — it
+    ends by itself; a held key never does), "Dictation panel" Top/Bottom (the
+    panel moves on the screen holding the focused window), "Unload model"
+    Immediately (the Recognition tab says the model rests after a dictation;
+    the next key press reloads it under the voice, the panel says "Waking the
+    model…" if the take ends first).
+15. Settings → About: Theme Light/Dark/System recolours every open window at
+    once; System follows the Windows app theme live. "Keep detailed logs"
+    writes `Logs/<date>.log` under the app data folder and "Open Logs" opens
+    on the newest file; while it is off no file is written.
 
 ### VM keyboard quirk
 

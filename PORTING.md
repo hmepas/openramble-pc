@@ -72,3 +72,14 @@ dotnet build openramble.sln            # the WPF app builds via EnableWindowsTar
 dotnet test src/DictationCore.Tests
 dotnet test src/LocalASR.Tests
 ```
+
+## Upstream sync point
+
+The port tracks `../openramble` at `origin/main` `f0cc1b7` (release 0.27.0).
+The original port was made from `877bd91` (0.5.1); everything between was
+brought over behaviour by behaviour in the `port/upstream-0.27` history, and
+what was deliberately left out is listed in `docs/differences-from-macos.md`
+("Where this port stands against upstream"). Upstream's Rust core
+(`core/`), its Tauri desktop app (`apps/desktop`) and its conformance fixtures
+are not sources for this port; `Packages/DictationCore`, `Packages/LocalASR`
+and `apps/macos` remain the reference.

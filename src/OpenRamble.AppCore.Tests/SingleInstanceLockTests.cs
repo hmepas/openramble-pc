@@ -100,9 +100,25 @@ public sealed class SingleInstanceLockTests
         Assert.True(killed.IsHeld);
         killed.Dispose();
 
-        using SingleInstanceLock relaunch = SingleInstanceLock.Acquire(name);
+        // The dead owner's thread has been joined, but on Linux the runtime marks a named mutex
+        // abandoned from the thread's own exit path, which can land a beat after Join returns.
+        // A real relaunch is seconds away from the crash it follows; the test only has to prove
+        // the lock is free, not that it is free in the same microsecond.
+        using SingleInstanceLock relaunch = AcquireWithin(name, TimeSpan.FromSeconds(2));
 
         Assert.True(relaunch.IsHeld);
+    }
+
+    private static SingleInstanceLock AcquireWithin(string name, TimeSpan patience)
+    {
+        DateTime deadline = DateTime.UtcNow + patience;
+        while (true)
+        {
+            SingleInstanceLock attempt = SingleInstanceLock.Acquire(name);
+            if (attempt.IsHeld || DateTime.UtcNow >= deadline) { return attempt; }
+            attempt.Dispose();
+            Thread.Sleep(10);
+        }
     }
 
     /// <summary>

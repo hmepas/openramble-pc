@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using DictationCore;
 using LocalASR;
+using OpenRamble.AppCore.Audio;
 
 namespace OpenRamble.AppCore.Tests;
 
@@ -167,12 +168,21 @@ public sealed class FakeInserter : ITextInserting
     public TargetApplication? FrontmostApplication() => Frontmost;
 }
 
-public sealed class FakeOverlay : IOverlayPresenting
+public sealed class FakeOverlay : IOverlayPresenting, IEngineWaitPresenting
 {
     private readonly object gate = new();
     private readonly List<DictationState> presented = [];
     private readonly List<DictationNotice> notices = [];
+    private readonly List<bool> engineWaits = [];
     private int dismissCount;
+
+    /// <summary>Every "waiting for the model" announcement and retraction, in order.</summary>
+    public IReadOnlyList<bool> EngineWaits { get { lock (gate) { return [.. engineWaits]; } } }
+
+    public void SetWaitingForEngine(bool waiting)
+    {
+        lock (gate) { engineWaits.Add(waiting); }
+    }
 
     public IReadOnlyList<DictationState> PresentedStates { get { lock (gate) { return [.. presented]; } } }
 
@@ -320,6 +330,41 @@ public sealed class FakeSystemEvents : ISystemEventSource
     public void PostApplicationBecameActive() => ApplicationBecameActive?.Invoke();
 
     public void PostMemoryPressure(MemoryPressureTier tier) => MemoryPressureChanged?.Invoke(tier);
+}
+
+/// <summary>The second watcher, as a test sees it: which chord it was given and whether it runs.</summary>
+public sealed class FakeShortcutMonitor : IShortcutMonitoring
+{
+    public Action? OnPress { get; set; }
+
+    public bool IsRunning { get; private set; }
+
+    public KeyCombination? Shortcut { get; private set; }
+
+    public void SetShortcut(KeyCombination? shortcut)
+    {
+        Shortcut = shortcut;
+        if (shortcut is null) { Stop(); }
+    }
+
+    public void Start()
+    {
+        if (Shortcut is null) { return; }
+        IsRunning = true;
+    }
+
+    public void Stop() => IsRunning = false;
+
+    /// <summary>The chord arrived on the keyboard.</summary>
+    public void Press() => OnPress?.Invoke();
+}
+
+/// <summary>The machine's microphones, as the test decides they are.</summary>
+public sealed class FakeInputDevices : IAudioInputDeviceSource
+{
+    public List<AudioInputDevice> Devices { get; } = [];
+
+    public IReadOnlyList<AudioInputDevice> Available() => [.. Devices];
 }
 
 public sealed class FakeLaunchAtLogin : ILaunchAtLoginService
@@ -570,6 +615,122 @@ public sealed class WedgingASREngine : IASREngineAdapting
 }
 
 /// <summary>
+/// An engine whose loads follow a written script.
+/// </summary>
+/// <remarks>
+/// The existing fakes either always succeed or always fail. Neither can express the shape that
+/// strands a first run: an attempt that ends without an answer, followed by one that would have
+/// worked.
+/// </remarks>
+public sealed class ScriptedLoadEngine : IASREngineAdapting
+{
+    public enum Outcome
+    {
+        /// <summary>
+        /// The load ends without an answer - a cancelled request, an overtaken generation, a
+        /// momentary disagreement about the model state.
+        /// </summary>
+        Cancelled,
+
+        /// <summary>The load fails for a reason that says nothing about the files.</summary>
+        Fails,
+
+        Succeeds,
+    }
+
+    private readonly Lock gate = new();
+    private readonly Queue<Outcome> script;
+    private readonly Outcome fallback;
+    private int attempts;
+    private int warmUps;
+
+    public ScriptedLoadEngine(IEnumerable<Outcome> script, Outcome fallback = Outcome.Succeeds)
+    {
+        this.script = new Queue<Outcome>(script);
+        this.fallback = fallback;
+    }
+
+    public int Attempts => Volatile.Read(ref attempts);
+
+    public int WarmUps => Volatile.Read(ref warmUps);
+
+    public Task LoadModels(string directory)
+    {
+        Interlocked.Increment(ref attempts);
+        Outcome next;
+        lock (gate) { next = script.Count > 0 ? script.Dequeue() : fallback; }
+        return next switch
+        {
+            Outcome.Cancelled => Task.FromException(new OperationCanceledException()),
+            // A dead pipe, a worker that died - anything that leaves the verified files on disk
+            // untouched and only costs one attempt.
+            Outcome.Fails => Task.FromException(new IOException("the engine process went away")),
+            _ => Task.CompletedTask,
+        };
+    }
+
+    public Task<ASRResult> Transcribe(float[] samples)
+    {
+        Interlocked.Increment(ref warmUps);
+        return Task.FromResult(new ASRResult(string.Empty, TimeSpan.Zero, TimeSpan.Zero));
+    }
+
+    public Task Unload() => Task.CompletedTask;
+}
+
+/// <summary>
+/// An engine whose first load lasts as long as the test wants it to.
+/// </summary>
+/// <remarks>
+/// The one cost a first run cannot avoid is the one-time load, and no other fake spends it: they
+/// all answer instantly, so every test so far measured a first run in which the engine was ready
+/// before the person had finished reading the screen.
+/// </remarks>
+public sealed class SlowFirstLoadEngine : IASREngineAdapting
+{
+    private readonly TaskCompletionSource loadFinished = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly int holdFromLoad;
+    private int loads;
+
+    /// <param name="holdFromLoad">Which load, 1-based, is the one held open; earlier ones answer at once.</param>
+    public SlowFirstLoadEngine(int holdFromLoad = 1)
+    {
+        this.holdFromLoad = holdFromLoad;
+    }
+    private int unloads;
+    private int warmUps;
+
+    public int Loads => Volatile.Read(ref loads);
+
+    public int Unloads => Volatile.Read(ref unloads);
+
+    public int WarmUps => Volatile.Read(ref warmUps);
+
+    public bool LoadStarted => Loads > 0;
+
+    /// <summary>Let the load through, exactly as the machine does when it is done.</summary>
+    public void FinishLoading() => loadFinished.TrySetResult();
+
+    public async Task LoadModels(string directory)
+    {
+        if (Interlocked.Increment(ref loads) < holdFromLoad) { return; }
+        await loadFinished.Task.ConfigureAwait(false);
+    }
+
+    public Task<ASRResult> Transcribe(float[] samples)
+    {
+        Interlocked.Increment(ref warmUps);
+        return Task.FromResult(new ASRResult(string.Empty, TimeSpan.Zero, TimeSpan.Zero));
+    }
+
+    public Task Unload()
+    {
+        Interlocked.Increment(ref unloads);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
 /// The dummy application environment.
 ///
 /// Assembled in one place so that different sets of checks do not drift apart in how the
@@ -604,6 +765,19 @@ public sealed class AppHarness : IDisposable
     public FakeMicrophoneConsentFlow MicrophoneConsent { get; }
 
     public FakeHotkeyMonitor Monitor { get; } = new();
+
+    public FakeShortcutMonitor CopyMonitor { get; } = new();
+
+    public FakeInputDevices InputDevices { get; } = new();
+
+    /// <summary>
+    /// The monotonic clock the silence rule reads. A test advances it by hand; production reads
+    /// the stopwatch.
+    /// </summary>
+    public MonotonicInstant MonotonicNow { get; set; } = MonotonicInstant.Now;
+
+    /// <summary>Where a state built here writes its plain-text log.</summary>
+    public string MakeStateLogDirectory() => DictationLogFile.DirectoryUnder(Paths);
 
     public FakeOverlay Overlay { get; } = new();
 
@@ -648,6 +822,14 @@ public sealed class AppHarness : IDisposable
     /// <summary>Zero - permission polling is off: in a test we change them, not the system.</summary>
     public TimeSpan PermissionPollInterval { get; set; } = TimeSpan.Zero;
 
+    /// <summary>Shortens the idle-unload countdown; the policy still decides whether there is one.</summary>
+    public TimeSpan? IdleUnloadDelayOverride { get; set; }
+
+    /// <summary>Shortens the retry ladder so a suite never sleeps production-scale intervals.</summary>
+    public TimeSpan? EngineWarmupRetryDelay { get; set; }
+
+    public TimeSpan? PrepareDeadline { get; set; }
+
     public bool LayoutHasAltGraph { get; set; }
 
     /// <summary>
@@ -672,16 +854,19 @@ public sealed class AppHarness : IDisposable
             Settings = Settings,
             Permissions = Permissions,
             HotkeyMonitor = Monitor,
+            CopyShortcutMonitor = CopyMonitor,
+            InputDevices = InputDevices,
+            MonotonicNow = () => MonotonicNow,
             Inserter = Inserter,
             Overlay = Overlay,
             Sounds = Sounds,
-            MakeCapture = (_, _, samples) =>
+            MakeCapture = (_, _, samples, _) =>
             {
                 onSamples = new WeakReference<Action<float[]>>(samples);
                 if (samples.Target is { } owner) { onSamplesLifetime.AddOrUpdate(owner, samples); }
                 return Capture;
             },
-            Transcribe = (_, _) => async (_, token) =>
+            Transcribe = _ => async (_, token) =>
             {
                 if (Transcription.Delay is TimeSpan delay)
                 {
@@ -692,6 +877,9 @@ public sealed class AppHarness : IDisposable
                 return new ASRResult(Transcription.Text, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(0.05));
             },
             PermissionPollInterval = PermissionPollInterval,
+            IdleUnloadDelayOverride = IdleUnloadDelayOverride,
+            EngineWarmupRetryDelay = EngineWarmupRetryDelay,
+            PrepareDeadline = PrepareDeadline,
             ModelDownloader = Downloader,
             MicrophoneConsent = MicrophoneConsent,
             SystemEvents = SystemEvents,

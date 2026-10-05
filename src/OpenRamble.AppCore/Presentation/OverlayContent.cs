@@ -54,11 +54,16 @@ public sealed record OverlayContent
     /// What the recognition engine is doing right now; <c>null</c> when nobody manages its
     /// residency and it is simply always there.
     /// </param>
+    /// <param name="isWaitingForEngine">
+    /// The take is finished and the model is not resident yet, so the words are waiting for a
+    /// load rather than for recognition.
+    /// </param>
     public static OverlayContent Make(
         DictationState state,
         DictationNotice? notice,
         TimeSpan elapsed,
-        EnginePreparationState? enginePreparation = null)
+        EnginePreparationState? enginePreparation = null,
+        bool isWaitingForEngine = false)
     {
         // The message is more important than the state: it is shown instead.
         if (notice is not null)
@@ -73,6 +78,27 @@ public sealed record OverlayContent
                 // The message comes exactly when something goes wrong. Waiting for the end of
                 // someone else's sentence means saying it too late to be useful.
                 IsAnnouncementUrgent = notice.Kind != DictationNoticeKind.Info,
+            };
+        }
+
+        if (state == DictationState.Transcribing && isWaitingForEngine)
+        {
+            // The words are safe either way, and the distinction is the difference between a
+            // panel that is working and a panel that is waiting. A model that has to be loaded
+            // costs seconds, and on a short take there is no speech for that load to hide under,
+            // so "Transcribing…" would spend the whole wait describing work that has not
+            // started. Nothing is lost and nothing is at risk here - say what is actually
+            // happening, and when the preparation narrates its own seconds, let them through.
+            return new OverlayContent
+            {
+                Title = "Waking the model…",
+                Subtitle = IsLoading(enginePreparation)
+                    ? enginePreparation!.Title
+                    : "Your words are waiting, not lost.",
+                Tone = OverlayTone.Working,
+                AccessibilityLabel = "Recording stopped, waiting for the speech model to load",
+                Announcement = "Waiting for the speech model to load",
+                IsAnnouncementUrgent = false,
             };
         }
 
@@ -165,7 +191,8 @@ public sealed record OverlayContent
     private static bool IsLoading(EnginePreparationState? preparation) =>
         preparation?.PhaseValue
             is EnginePreparationState.Phase.LoadingRecognizer
-            or EnginePreparationState.Phase.LoadingVocabulary;
+            or EnginePreparationState.Phase.LoadingVocabulary
+            or EnginePreparationState.Phase.WarmingUp;
 
     private static OverlayTone ToneFor(DictationNoticeKind kind) => kind switch
     {

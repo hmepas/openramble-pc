@@ -17,13 +17,20 @@ public sealed class OnboardingStepTests
 {
     private static readonly ModelState Ready = new ModelState.Ready("/tmp/model");
 
+    private static OnboardingConditions Conditions(
+        bool microphone = true,
+        ModelState? model = null,
+        bool dictationBusy = false,
+        bool trialSucceeded = true) =>
+        new(microphone, model ?? Ready, isDictationBusy: dictationBusy, trialSucceeded: trialSucceeded);
+
     private static string? Reason(
         OnboardingStep step,
         bool microphone = true,
         ModelState? model = null,
-        bool engineReady = true,
+        bool dictationBusy = false,
         bool trialSucceeded = true) =>
-        OnboardingGate.BlockReason(step, microphone, model ?? Ready, engineReady, trialSucceeded);
+        OnboardingGate.BlockReason(step, Conditions(microphone, model, dictationBusy, trialSucceeded));
 
     [Fact]
     public void Scenario001()
@@ -108,7 +115,7 @@ public sealed class OnboardingStepTests
     public void Scenario010()
     {
         Assert.Null(Reason(OnboardingStep.Setup, microphone: true));
-        Assert.True(OnboardingGate.CanAdvance(OnboardingStep.Setup, microphoneGranted: true, modelState: Ready));
+        Assert.True(OnboardingGate.CanAdvance(OnboardingStep.Setup, Conditions()));
     }
 
     // MARK: - Model
@@ -133,18 +140,36 @@ public sealed class OnboardingStepTests
             Reason(OnboardingStep.Setup, model: new ModelState.Deleting()));
     }
 
+    // MARK: - A running take
+
+    /// <summary>
+    /// A running take is the one thing that speaks over the step's own reason.
+    ///
+    /// It ends by itself, or by the "Cancel Dictation" button standing next to the disabled one -
+    /// so it is a legitimate thing to be held by.
+    /// </summary>
+    [Fact]
+    public void ARunningDictationOutranksEveryStepsOwnReason()
+    {
+        foreach (OnboardingStep step in OnboardingStepInfo.AllCases)
+        {
+            Assert.Equal(
+                "Finish or cancel the current dictation first.",
+                Reason(step, dictationBusy: true));
+        }
+    }
+
+    /// <summary>
+    /// Usable files are the whole model requirement.
+    ///
+    /// The gate is not told whether the engine is loaded, and must not be: the engine is loaded
+    /// and unloaded by the idle rule, and a resting one waits for a key press that nobody makes
+    /// on this screen. Every input here either moves by itself or is the person's to change.
+    /// </summary>
     [Fact]
     public void Scenario012()
     {
         Assert.Null(Reason(OnboardingStep.Setup, model: Ready));
-    }
-
-    [Fact]
-    public void Scenario013()
-    {
-        Assert.Equal(
-            "Wait for the model to finish preparing for first use.",
-            Reason(OnboardingStep.Setup, model: Ready, engineReady: false));
     }
 
     /// <summary>
@@ -173,8 +198,9 @@ public sealed class OnboardingStepTests
             {
                 foreach (ModelState model in states)
                 {
-                    bool blocked = !OnboardingGate.CanAdvance(step, microphone, model);
-                    string? text = OnboardingGate.BlockReason(step, microphone, model);
+                    OnboardingConditions facts = Conditions(microphone, model);
+                    bool blocked = !OnboardingGate.CanAdvance(step, facts);
+                    string? text = OnboardingGate.BlockReason(step, facts);
 
                     Assert.Equal(blocked, !string.IsNullOrEmpty(text));
                 }

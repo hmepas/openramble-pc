@@ -1,4 +1,5 @@
 using DictationCore;
+using OpenRamble.AppCore.Audio;
 
 namespace OpenRamble.AppCore;
 
@@ -170,18 +171,88 @@ public interface IFolderOpening
 /// <param name="takesDirectory">Where the WAV goes.</param>
 /// <param name="onFailure">The audio stream died mid-sentence; the reason must be shown exactly.</param>
 /// <param name="onSamples">Live samples for the recording waveform.</param>
+/// <param name="preferredDeviceUid">
+/// The microphone the person chose, or <c>null</c> for the system default. A later change
+/// reaches the capture through <see cref="IPreferredInputDevice"/> when it implements it.
+/// </param>
 public delegate IAudioCapturing CaptureFactory(
     string takesDirectory,
     Action<AudioCaptureError> onFailure,
-    Action<float[]> onSamples);
+    Action<float[]> onSamples,
+    string? preferredDeviceUid);
 
 /// <summary>
-/// Builds the recognition call for one engine directory.
+/// A capture that can be pointed at a different microphone after it was built.
 /// </summary>
-/// <param name="languageHint">
-/// Read at every call, not captured once: the person may change the language between dictations,
-/// and fixing it at assembly time would mean ignoring the choice.
-/// </param>
+/// <remarks>
+/// Optional on purpose: the setting is applied at construction through the factory, and a
+/// capture that also implements this gets the change without a relaunch. The UID is the
+/// platform's stable name - see <see cref="AudioInputDevice"/>; an unknown one means the default.
+/// </remarks>
+public interface IPreferredInputDevice
+{
+    string? PreferredDeviceId { get; set; }
+}
+
+/// <summary>
+/// An overlay that can say the model is being woken rather than that words are being transcribed.
+/// </summary>
+/// <remarks>
+/// Optional: the panel is the only feedback channel during dictation, and a wait for a model
+/// that is still loading is not the same event as transcription. Presenters that cannot say so
+/// simply keep their previous message.
+/// </remarks>
+public interface IEngineWaitPresenting
+{
+    void SetWaitingForEngine(bool waiting);
+}
+
+/// <summary>
+/// An overlay that can be told where on the screen to sit.
+/// </summary>
+/// <remarks>
+/// Optional: the placement is pure geometry (<see cref="OverlayPlacementPolicy"/>) applied by the
+/// window that owns the panel, and a presenter with no screen - a test double - has nothing to
+/// place.
+/// </remarks>
+public interface IOverlayPlacementConfiguring
+{
+    DictationOverlayPlacement Placement { set; }
+}
+
+/// <summary>
+/// Builds the recognition call for one engine directory: give it the engine folder, get back the
+/// call that recognizes one recording.
+/// </summary>
 public delegate Func<string, CancellationToken, Task<ASRResult>> TranscribeFactory(
-    string engineDirectory,
-    Func<string?> languageHint);
+    string engineDirectory);
+
+/// <summary>
+/// Watches the whole machine for one shortcut - the chord that copies the last dictation.
+/// </summary>
+/// <remarks>
+/// Its own monitor rather than another callback on <see cref="IHotkeyMonitoring"/>: that one
+/// watches a bare modifier being held, this one watches a chord being pressed. Different
+/// events, different machinery. Nothing is swallowed: a shortcut that happens to collide with
+/// one in the front application still reaches it - eating other applications' keys from the
+/// background is how a small utility becomes the thing that broke someone's editor.
+/// </remarks>
+public interface IShortcutMonitoring
+{
+    Action? OnPress { get; set; }
+
+    bool IsRunning { get; }
+
+    /// <summary><c>null</c> takes the shortcut off the keyboard entirely.</summary>
+    void SetShortcut(KeyCombination? shortcut);
+
+    void Start();
+
+    void Stop();
+}
+
+/// <summary>The microphones this machine can hear through, right now.</summary>
+public interface IAudioInputDeviceSource
+{
+    IReadOnlyList<AudioInputDevice> Available();
+}

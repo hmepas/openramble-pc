@@ -6,8 +6,9 @@ namespace OpenRamble.AppCore;
 /// <summary>
 /// Everything the person chose, and nothing else.
 ///
-/// Six values. There is no telemetry identifier, no install date, no counters: a settings file
-/// that grows things the person never set is a settings file that has started reporting.
+/// Fifteen values, every one of them a choice made in Settings. There is no telemetry
+/// identifier, no install date, no counters: a settings file that grows things the person never
+/// set is a settings file that has started reporting.
 /// </summary>
 public sealed record AppSettings
 {
@@ -16,8 +17,41 @@ public sealed record AppSettings
 
     public bool SoundsEnabled { get; init; } = true;
 
-    /// <summary>BCP-47 code, or <c>null</c> for automatic detection by sound.</summary>
-    public string? RecognitionLanguage { get; init; }
+    /// <summary>
+    /// Also leave each finished dictation on the clipboard. Off by default: dictated text on the
+    /// clipboard is dictated text handed to every clipboard manager on the machine.
+    /// </summary>
+    public bool CopiesToClipboard { get; init; }
+
+    /// <summary>
+    /// The chord that copies the last dictation, stored as <see cref="KeyCombination.RawValue"/>;
+    /// <c>null</c> or unparsable - no shortcut.
+    /// </summary>
+    public string? CopyShortcut { get; init; }
+
+    /// <summary>End every dictation with a space. For dictating in runs.</summary>
+    public bool AppendsTrailingSpace { get; init; }
+
+    /// <summary>Light, dark, or whatever the machine is doing. Stored spelling: <see cref="AppAppearances"/>.</summary>
+    public string? Appearance { get; init; }
+
+    /// <summary>Which microphone to record through, by its stable UID; <c>null</c> - the system default.</summary>
+    public string? InputDeviceUid { get; init; }
+
+    /// <summary>Keep the plain-text log a person can send. Nothing is written while it is off.</summary>
+    public bool DetailedLogging { get; init; }
+
+    /// <summary>Finish a hands-free dictation on two seconds of quiet.</summary>
+    public bool StopsOnSilence { get; init; }
+
+    /// <summary>Where the dictation panel sits. Stored spelling: <see cref="DictationOverlayPlacements"/>.</summary>
+    public string? OverlayPlacement { get; init; }
+
+    /// <summary>When an idle engine gives its memory back. Stored spelling: <see cref="IdleUnloadPolicies"/>.</summary>
+    public string? ModelUnloadTimeout { get; init; }
+
+    /// <summary>How many dictations the history keeps; <c>null</c> - the default.</summary>
+    public int? HistoryLimit { get; init; }
 
     /// <summary>
     /// Reading the field the app inserted into, to learn from edits. Off unless the person
@@ -93,8 +127,8 @@ public sealed class SettingsStore
     /// killed between the truncation and the flush leaves a half-written file, a half-written file
     /// does not parse, and <see cref="Read"/> then falls back to the defaults - so a crash quietly
     /// takes the person's chosen dictation key away and puts the first-launch flow back on screen.
-    /// What this file holds is six values somebody set by hand; losing them to a crash is not
-    /// acceptable when the cure is a rename.
+    /// What this file holds is a handful of values somebody set by hand; losing them to a crash
+    /// is not acceptable when the cure is a rename.
     /// </remarks>
     public void Write(AppSettings settings)
     {

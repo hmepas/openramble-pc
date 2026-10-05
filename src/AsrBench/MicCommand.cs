@@ -149,13 +149,12 @@ internal static class MicCommand
 
         Console.WriteLine();
         LocalTranscriber transcriber = await Program.PrepareTranscriber().ConfigureAwait(false);
-        string? language = Program.LanguageHint();
 
         long recognizeBegan = Stopwatch.GetTimestamp();
         ASRResult result;
         try
         {
-            result = await transcriber.Transcribe(saved, language).ConfigureAwait(false);
+            result = await transcriber.Transcribe(saved).ConfigureAwait(false);
         }
         catch (ASREngineError error)
         {

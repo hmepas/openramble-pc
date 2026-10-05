@@ -34,6 +34,7 @@ internal sealed class TrackedCapture : IAudioCapturing
     private int inFlight;
     private bool isRecording;
     private Gate? startGate;
+    private Gate? abortGate;
     private readonly string file = Path.Combine(Path.GetTempPath(), "tracked-take.wav");
 
     public int StartCount { get { lock (gate) { return startCount; } } }
@@ -43,6 +44,8 @@ internal sealed class TrackedCapture : IAudioCapturing
     public int InFlight { get { lock (gate) { return inFlight; } } }
 
     public void SetStartGate(Gate? value) { lock (gate) { startGate = value; } }
+
+    public void SetAbortGate(Gate? value) { lock (gate) { abortGate = value; } }
 
     public async Task<string> StartRecording()
     {
@@ -91,10 +94,14 @@ internal sealed class TrackedCapture : IAudioCapturing
         }
     }
 
-    public Task AbortRecording()
+    public async Task AbortRecording()
     {
+        Gate? waiting;
+        lock (gate) { waiting = abortGate; }
+
+        if (waiting is not null) { await waiting.Pass(); }
+
         lock (gate) { isRecording = false; }
-        return Task.CompletedTask;
     }
 }
 
@@ -288,6 +295,86 @@ public sealed class DictationControllerRaceTests
         await Quiesce(controller);
         // The second dictation must not vanish.
         Assert.Equal(["Привет мир"], inserter.InsertedTexts);
+    }
+
+    [Fact]
+    public async Task TestCancelReturnsControllerToIdleWithoutAwaitingWedgedAbort()
+    {
+        var gate = new Gate();
+        capture.SetAbortGate(gate);
+        var controller = MakeController();
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        Assert.Equal(DictationState.Listening, controller.State);
+        controller.Cancel();
+
+        for (int i = 0; i < 200 && controller.State != DictationState.Idle; i += 1)
+        {
+            await Task.Yield();
+            await Task.Delay(1);
+        }
+
+        Assert.True(controller.State == DictationState.Idle, "a cancellation-deaf device edge cannot own UI liveness");
+
+        gate.Open();
+        await Quiesce(controller);
+    }
+
+    /// <summary>
+    /// The hands-free callback is reentrant and may stop the session at once. The stop it
+    /// accepts must not be cleared afterwards by the promotion that raised it.
+    /// </summary>
+    [Fact]
+    public async Task TestHandsFreeCallbackCanStopReentrantlyWithoutLosingTheStop()
+    {
+        var controller = MakeController();
+        controller.OnHandsFreeChange = active =>
+        {
+            if (active) { controller.StopHandsFree(); }
+        };
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.PromoteToHandsFree();
+        await Quiesce(controller);
+
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.Single(inserter.InsertedTexts);
+    }
+
+    /// <summary>
+    /// An idle observer is allowed to start the next session synchronously. The cleanup that
+    /// published the idle must not then take that session's panel or state away.
+    /// </summary>
+    [Fact]
+    public async Task TestIdleObserverCanStartNextSessionWithoutOldCleanupOrphaningIt()
+    {
+        var controller = MakeController();
+        bool restarted = false;
+        controller.OnStateChange = state =>
+        {
+            if (state != DictationState.Idle || restarted) { return; }
+            restarted = true;
+            controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        };
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        for (int i = 0; i < 300 && (controller.State != DictationState.Listening || !restarted); i += 1)
+        {
+            await Task.Yield();
+            await Task.Delay(1);
+        }
+
+        Assert.True(restarted);
+        Assert.Equal(DictationState.Listening, controller.State);
+        Assert.True(capture.IsRecording);
+
+        controller.Stop();
+        await Quiesce(controller);
+        Assert.Equal(2, inserter.InsertedTexts.Count);
     }
 
     [Fact]

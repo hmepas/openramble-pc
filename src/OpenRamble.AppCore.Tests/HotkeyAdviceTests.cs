@@ -131,15 +131,18 @@ public sealed class HotkeyAdviceTests
             Assert.True(titles.Add(hotkey.Title), $"{hotkey.Title} is offered twice");
         }
 
-        // The four the first-launch picker promises, in the order it promises them.
+        // The six the first-launch picker promises, in the order it promises them: the free
+        // keys first, right side before left, and the two that carry a warning last.
         Assert.Equal(
             [
                 DictationHotkey.RightCtrl,
                 DictationHotkey.RightShift,
+                DictationHotkey.LeftCtrl,
+                DictationHotkey.LeftShift,
                 DictationHotkey.RightAlt,
                 DictationHotkey.CapsLock,
             ],
-            DictationHotkeyInfo.AllCases.Take(4));
+            DictationHotkeyInfo.AllCases);
     }
 
     // MARK: - The one sentence that is not shared

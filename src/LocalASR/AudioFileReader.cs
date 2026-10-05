@@ -63,10 +63,32 @@ public sealed class AudioFileReader
 
             public string Reason { get; }
         }
+
+        /// <summary>
+        /// The header claims more audio than the caller is willing to hold. Rejected before a
+        /// single sample is allocated, so oversized metadata cannot become an oversized buffer.
+        /// </summary>
+        public sealed class DurationExceeded : Failure
+        {
+            public DurationExceeded(TimeSpan actual, TimeSpan maximum)
+                : base($"the recording is {actual.TotalSeconds:0.##} s long, more than the {maximum.TotalSeconds:0.##} s allowed")
+            {
+                Actual = actual;
+                Maximum = maximum;
+            }
+
+            public TimeSpan Actual { get; }
+
+            public TimeSpan Maximum { get; }
+        }
     }
 
     /// <summary>Read the entire file, resulting in 16 kHz mono.</summary>
-    public float[] Samples(string path)
+    /// <param name="maximumDuration">
+    /// Refuse a recording longer than this, judged by its header, before the sample buffer is
+    /// built. <c>null</c> - no limit.
+    /// </param>
+    public float[] Samples(string path, TimeSpan? maximumDuration = null)
     {
         FileStream handle;
         try
@@ -85,6 +107,17 @@ public sealed class AudioFileReader
             if (frames <= 0)
             {
                 throw new Failure.EmptyFile();
+            }
+
+            if (format.SampleRate <= 0)
+            {
+                throw new Failure.ConversionFailed("the source sample rate is invalid");
+            }
+
+            var duration = TimeSpan.FromSeconds((double)frames / format.SampleRate);
+            if (maximumDuration is { } maximum && duration > maximum)
+            {
+                throw new Failure.DurationExceeded(duration, maximum);
             }
 
             // If the file is already in the required format, no conversion is needed.

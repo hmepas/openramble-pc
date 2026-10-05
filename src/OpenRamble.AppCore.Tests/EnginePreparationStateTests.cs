@@ -10,6 +10,7 @@ public class EnginePreparationStateTests
         EnginePreparationState.Phase.Idle,
         EnginePreparationState.Phase.LoadingRecognizer,
         EnginePreparationState.Phase.LoadingVocabulary,
+        EnginePreparationState.Phase.WarmingUp,
         EnginePreparationState.Phase.Ready,
     ];
 
@@ -32,11 +33,14 @@ public class EnginePreparationStateTests
     public void Scenario008()
     {
         Assert.Equal(
-            "Preparing the recognizer… 14 s",
+            "Loading the recognizer… 14 s",
             EnginePreparationState.Make(EnginePreparationState.Phase.LoadingRecognizer, TimeSpan.FromSeconds(14)).Title);
         Assert.Equal(
-            "Preparing the term booster… 3 s",
+            "Loading the term booster… 3 s",
             EnginePreparationState.Make(EnginePreparationState.Phase.LoadingVocabulary, TimeSpan.FromSeconds(3)).Title);
+        Assert.Equal(
+            "Warming up recognition… 2 s",
+            EnginePreparationState.Make(EnginePreparationState.Phase.WarmingUp, TimeSpan.FromSeconds(2)).Title);
     }
 
     [Fact]
@@ -79,17 +83,30 @@ public class EnginePreparationStateTests
         Assert.DoesNotContain("macOS", detail);
     }
 
+    /// <summary>The bar advances by completed steps, never by a made-up percentage.</summary>
+    [Fact]
+    public void TheStepIsTheMilestoneThatIsRunning()
+    {
+        Assert.Equal(3, EnginePreparationState.StepCount);
+        Assert.Equal(1, EnginePreparationState.Make(EnginePreparationState.Phase.Idle, TimeSpan.Zero).Step);
+        Assert.Equal(1, EnginePreparationState.Make(EnginePreparationState.Phase.LoadingRecognizer, TimeSpan.Zero).Step);
+        Assert.Equal(2, EnginePreparationState.Make(EnginePreparationState.Phase.LoadingVocabulary, TimeSpan.Zero).Step);
+        Assert.Equal(3, EnginePreparationState.Make(EnginePreparationState.Phase.WarmingUp, TimeSpan.Zero).Step);
+        Assert.Equal(3, EnginePreparationState.Make(EnginePreparationState.Phase.Ready, TimeSpan.Zero).Step);
+    }
+
     /// <summary>Live seconds reach the line a person sees - otherwise a wait reads as a hang.</summary>
     [Fact]
     public void Scenario012()
     {
         ModelStatus status = ModelStatus.Make(
             new ModelState.Ready("/tmp"),
-            isPreparingEngine: true,
             ModelStatus.Place.Settings,
-            EnginePreparationState.Make(EnginePreparationState.Phase.LoadingRecognizer, TimeSpan.FromSeconds(9)));
+            EnginePreparationState.Make(EnginePreparationState.Phase.LoadingRecognizer, TimeSpan.FromSeconds(9)),
+            isEngineReady: false,
+            isPreparingEngine: true);
 
-        Assert.Equal("Preparing the recognizer… 9 s", status.Detail);
+        Assert.Equal("Step 1 of 3 · Loading the recognizer… 9 s", status.ProgressLabel);
     }
 
     /// <summary>
@@ -101,11 +118,13 @@ public class EnginePreparationStateTests
     {
         ModelStatus status = ModelStatus.Make(
             new ModelState.Ready("/tmp"),
-            isPreparingEngine: true,
             ModelStatus.Place.Settings,
-            EnginePreparationState.Make(EnginePreparationState.Phase.LoadingVocabulary, TimeSpan.FromSeconds(2)));
+            EnginePreparationState.Make(EnginePreparationState.Phase.LoadingVocabulary, TimeSpan.FromSeconds(2)),
+            isEngineReady: false,
+            isPreparingEngine: true);
 
-        Assert.Equal("Preparing the term booster… 2 s", status.Detail);
+        Assert.Equal("Step 2 of 3 · Loading the term booster… 2 s", status.ProgressLabel);
+        Assert.Equal(1.0 / 3.0, status.Progress ?? -1, 3);
     }
 
     /// <summary>The preparation is over - there is no line at all.</summary>
@@ -114,10 +133,10 @@ public class EnginePreparationStateTests
     {
         ModelStatus status = ModelStatus.Make(
             new ModelState.Ready("/tmp"),
-            isPreparingEngine: false,
             ModelStatus.Place.Settings,
             EnginePreparationState.Make(EnginePreparationState.Phase.Ready, TimeSpan.Zero));
 
         Assert.Null(status.Detail);
+        Assert.Null(status.ProgressLabel);
     }
 }

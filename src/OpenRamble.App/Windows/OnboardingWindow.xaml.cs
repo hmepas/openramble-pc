@@ -112,10 +112,7 @@ public sealed partial class OnboardingWindow : Window
 
         string? reason = OnboardingGate.BlockReason(
             step,
-            state.MicrophoneGranted,
-            state.ModelStateValue,
-            state.IsEngineReady || state.HasEngineBeenReady,
-            TrialSucceeded);
+            new OnboardingConditions(state, TrialSucceeded));
 
         NextButton.IsEnabled = reason is null;
         BlockReason.Text = reason ?? string.Empty;
@@ -140,14 +137,7 @@ public sealed partial class OnboardingWindow : Window
         PermissionButton.Content = permission.ActionTitle ?? string.Empty;
         PermissionButton.Visibility = permission.ActionTitle is null ? Visibility.Collapsed : Visibility.Visible;
 
-        ModelStatus status = ModelStatus.Make(
-            state.ModelStateValue,
-            state.IsPreparingEngine,
-            ModelStatus.Place.Onboarding,
-            state.EnginePreparation,
-            state.RemainingDownloadMegabytes == 0
-                ? ModelStatus.FullDownloadMegabytes
-                : state.RemainingDownloadMegabytes);
+        ModelStatus status = ModelCard();
 
         ModelTitle.Text = status.Title;
         ModelDetail.Text = status.Detail ?? string.Empty;
@@ -177,8 +167,29 @@ public sealed partial class OnboardingWindow : Window
         }
     }
 
+    /// <summary>
+    /// What the app has to say about the model, written once for both steps that show it. The
+    /// setup step draws the whole card; the try-out step draws its one-line form while there is
+    /// something to say.
+    /// </summary>
+    private ModelStatus ModelCard() => ModelStatus.Make(
+        state.ModelStateValue,
+        ModelStatus.Place.Onboarding,
+        state.EnginePreparation,
+        state.RemainingDownloadMegabytes == 0
+            ? state.FullModelDownloadMegabytes
+            : state.RemainingDownloadMegabytes,
+        state.IsEngineReady,
+        state.IsPreparingEngine);
+
     private void RenderTry()
     {
+        // What to say, and whether to say anything, is the card type's decision.
+        ModelStatus card = ModelCard();
+        TryModelLine.Text = card.SetupLine ?? string.Empty;
+        TryModelLine.Visibility = card.SetupLine is null ? Visibility.Collapsed : Visibility.Visible;
+        System.Windows.Automation.AutomationProperties.SetName(TryModelLine, card.Announcement);
+
         OnboardingTryOut tryOut = OnboardingTryOut.Make(
             state.Hotkey,
             state.IsHotkeyHeld,
@@ -213,7 +224,9 @@ public sealed partial class OnboardingWindow : Window
         TryKeyBadge.BorderBrush = tone;
         TryKeyDot.Fill = tone;
         TryStatus.Text = tryOut.Status;
-        TryStatus.Foreground = tryOut.Tone is null ? Brushes.Gray : tone;
+        TryStatus.Foreground = tryOut.Tone is null
+            ? (Brush)Application.Current.Resources["SecondaryForegroundBrush"]
+            : tone;
 
         TryLevel.Visibility = tryOut.ShowsInputLevel ? Visibility.Visible : Visibility.Collapsed;
         if (tryOut.ShowsInputLevel) { levelClock.Start(); }

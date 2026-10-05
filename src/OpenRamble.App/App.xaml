@@ -7,5 +7,65 @@
         would open one at launch, which is exactly the thing a dictation tool must not do.
         ShutdownMode is explicit for the same reason - closing the settings window is not quitting.
     -->
-    <Application.Resources />
+    <Application.Resources>
+        <ResourceDictionary>
+            <!--
+                The palette every window reads through DynamicResource. These are the light values;
+                AppTheme swaps all four at runtime for Dark, and for System follows what Windows says
+                apps should use. Only the window ground and its text are themed - the controls stay
+                the shell's own, which already follow high contrast and text scaling, and which no
+                two-brush palette could restyle without a theme package.
+            -->
+            <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#FFF5F5F7" />
+            <SolidColorBrush x:Key="WindowForegroundBrush" Color="#FF1C1C1E" />
+            <SolidColorBrush x:Key="SecondaryForegroundBrush" Color="#FF6E6E73" />
+            <SolidColorBrush x:Key="PanelBorderBrush" Color="#FFD2D2D7" />
+
+            <Style TargetType="Window">
+                <Setter Property="Background" Value="{DynamicResource WindowBackgroundBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            </Style>
+            <Style TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+            </Style>
+            <!-- Secondary text: hints, footers, dates. One style so a theme change reaches all of it. -->
+            <Style x:Key="Secondary" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                <Setter Property="Foreground" Value="{DynamicResource SecondaryForegroundBrush}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+            </Style>
+            <Style x:Key="Footer" TargetType="TextBlock" BasedOn="{StaticResource Secondary}">
+                <Setter Property="FontSize" Value="11.5" />
+                <Setter Property="Margin" Value="0,6,0,0" />
+            </Style>
+            <Style x:Key="SectionHeader" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Margin" Value="0,14,0,4" />
+            </Style>
+            <Style TargetType="Separator">
+                <Setter Property="Background" Value="{DynamicResource PanelBorderBrush}" />
+            </Style>
+            <Style TargetType="CheckBox">
+                <Setter Property="Foreground" Value="{DynamicResource WindowForegroundBrush}" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+            </Style>
+            <!--
+                The small arrow that puts one setting back the way it came. Per setting rather than
+                one "reset everything" button: a person who wants the dictation key back does not
+                want their dictionary emptied. Hidden rather than collapsed when nothing differs, so
+                rows never jump as settings change.
+            -->
+            <Style x:Key="RevertButton" TargetType="Button">
+                <Setter Property="Content" Value="↺" />
+                <Setter Property="Width" Value="26" />
+                <Setter Property="Height" Value="24" />
+                <Setter Property="Margin" Value="8,0,0,0" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="ToolTip" Value="Reset to default" />
+                <Setter Property="AutomationProperties.Name" Value="Reset to default" />
+                <Setter Property="Visibility" Value="Hidden" />
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
 </Application>

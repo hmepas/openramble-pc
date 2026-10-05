@@ -12,17 +12,29 @@ public sealed record ASRResult
         string text,
         IReadOnlyList<Word> words,
         TimeSpan audioDuration,
-        TimeSpan processingDuration)
+        TimeSpan processingDuration,
+        TimeSpan engineDispatchDuration = default,
+        TimeSpan queueingDuration = default,
+        TimeSpan decodingDuration = default)
     {
         Text = text;
         Words = words;
         AudioDuration = audioDuration;
         ProcessingDuration = processingDuration;
+        EngineDispatchDuration = engineDispatchDuration;
+        QueueingDuration = queueingDuration;
+        DecodingDuration = decodingDuration;
     }
 
     /// <summary>An empty word list is acceptable: not every engine provides timings.</summary>
-    public ASRResult(string text, TimeSpan audioDuration, TimeSpan processingDuration)
-        : this(text, [], audioDuration, processingDuration)
+    public ASRResult(
+        string text,
+        TimeSpan audioDuration,
+        TimeSpan processingDuration,
+        TimeSpan engineDispatchDuration = default,
+        TimeSpan queueingDuration = default,
+        TimeSpan decodingDuration = default)
+        : this(text, [], audioDuration, processingDuration, engineDispatchDuration, queueingDuration, decodingDuration)
     {
     }
 
@@ -38,8 +50,32 @@ public sealed record ASRResult
     /// <summary>Duration of recognized audio.</summary>
     public TimeSpan AudioDuration { get; }
 
-    /// <summary>How long the recognition itself took - for measurements and for display in diagnostics.</summary>
+    /// <summary>Wall time spent inside the engine runtime call itself.</summary>
     public TimeSpan ProcessingDuration { get; }
+
+    /// <summary>
+    /// Time around the runtime call: admission to the engine's execution queue plus the
+    /// continuation's return to its owner.
+    /// </summary>
+    public TimeSpan EngineDispatchDuration { get; }
+
+    /// <summary>
+    /// How long the call waited before the engine began.
+    ///
+    /// This is the wait outside the engine's own execution queue: admission to the transcriber,
+    /// warm-up ownership and another dictation holding it. <see cref="EngineDispatchDuration"/>
+    /// accounts for the queue immediately around the runtime call, so the two must remain
+    /// separate.
+    /// </summary>
+    public TimeSpan QueueingDuration { get; }
+
+    /// <summary>
+    /// How long opening and decoding the recording took.
+    ///
+    /// Split out from the wait because it is the part that turned out to matter, and because a
+    /// lump that says "something before the engine" is what let this hide for months.
+    /// </summary>
+    public TimeSpan DecodingDuration { get; }
 
     /// <summary>Element-wise, like the Swift array equality this replaces.</summary>
     public bool Equals(ASRResult? other) =>
@@ -47,7 +83,10 @@ public sealed record ASRResult
         && Text == other.Text
         && Words.SequenceEqual(other.Words)
         && AudioDuration == other.AudioDuration
-        && ProcessingDuration == other.ProcessingDuration;
+        && ProcessingDuration == other.ProcessingDuration
+        && EngineDispatchDuration == other.EngineDispatchDuration
+        && QueueingDuration == other.QueueingDuration
+        && DecodingDuration == other.DecodingDuration;
 
     public override int GetHashCode() =>
         HashCode.Combine(Text, Words.Count, AudioDuration, ProcessingDuration);
@@ -130,6 +169,12 @@ public abstract class ASREngineError : Exception
 /// The only implementation in the project lives in the LocalASR package,
 /// and this is the only place where the engine library is imported. Everything else - including
 /// tests of pure logic - works through this interface and uses a mock.
+///
+/// There is no language parameter here, and the absence is a measurement rather than an
+/// oversight: the shipping engine decides the language from the audio and cannot be told
+/// otherwise. Measured against the shipping model, asking for one language, asking for
+/// another and letting the model decide all return identical transcripts - while a code the
+/// model did not recognise would have failed the dictation outright.
 /// </summary>
 public interface IASREngineAdapting
 {
@@ -138,19 +183,6 @@ public interface IASREngineAdapting
 
     /// <summary>Recognize the fragment. Mono 16 kHz Float32 is expected - exactly what the capture gives.</summary>
     Task<ASRResult> Transcribe(float[] samples);
-
-    /// <summary>
-    /// Recognize with a language hint.
-    ///
-    /// <paramref name="languageHint"/> - BCP-47 code ("en", "ru"). <c>null</c> - autodetection by
-    /// sound. The hint narrows the recognition to one language: this is the way out for
-    /// cases when the accent leads the autodetection to the wrong place, but it breaks mixed
-    /// speech - that is why the default is always <c>null</c>.
-    ///
-    /// The hint is an optional ability of the engine: an engine that does not understand it
-    /// recognizes as usual. This is a hint contract, not a degradation.
-    /// </summary>
-    Task<ASRResult> Transcribe(float[] samples, string? languageHint) => Transcribe(samples);
 
     /// <summary>Free up the memory under the model.</summary>
     Task Unload();

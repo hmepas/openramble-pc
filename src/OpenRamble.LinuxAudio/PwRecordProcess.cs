@@ -44,7 +44,10 @@ internal interface IRecorderProcess : IDisposable
 }
 
 /// <summary>Starts a recorder. The one line of the capture that touches the operating system.</summary>
-internal delegate IRecorderProcess RecorderProcessLauncher();
+/// <param name="target">
+/// The <c>node.name</c> of the microphone to record through, or <c>null</c> for the default.
+/// </param>
+internal delegate IRecorderProcess RecorderProcessLauncher(string? target);
 
 /// <summary>
 /// <c>pw-record</c> streaming raw audio to a pipe.
@@ -142,25 +145,42 @@ internal sealed class PwRecordProcess : IRecorderProcess
     /// <item><description><c>media.name</c> - the name the desktop's volume control shows next to
     /// the microphone that is live. A person who wants to know what is listening deserves better
     /// than "pw-record".</description></item>
+    /// <item><description><c>--target</c> - the chosen microphone's <c>node.name</c>, when one was
+    /// chosen. Omitted for the default, which is what the server picks on its own. A name the
+    /// server no longer has is not an error: WirePlumber links a stream whose target is missing to
+    /// the default source (the fallback is on unless <c>node.dont-fallback</c> says otherwise), so
+    /// a headset that was unplugged costs nothing but the notice the settings screen shows for
+    /// it - see <c>AudioInputDevicePolicy</c>.</description></item>
     /// </list>
     /// </remarks>
-    public static IReadOnlyList<string> Arguments(AudioStreamFormat format) =>
-    [
-        "--rate", ((int)format.SampleRate).ToString(CultureInfo.InvariantCulture),
-        "--channels", format.Channels.ToString(CultureInfo.InvariantCulture),
-        "--format", "f32",
-        "--raw",
-        "--latency", "20ms",
-        "--media-role", "Communication",
-        "-P", "media.name=\"OpenRamble dictation\"",
-        "-",
-    ];
+    public static IReadOnlyList<string> Arguments(AudioStreamFormat format, string? target = null)
+    {
+        var arguments = new List<string>
+        {
+            "--rate", ((int)format.SampleRate).ToString(CultureInfo.InvariantCulture),
+            "--channels", format.Channels.ToString(CultureInfo.InvariantCulture),
+            "--format", "f32",
+            "--raw",
+            "--latency", "20ms",
+            "--media-role", "Communication",
+            "-P", "media.name=\"OpenRamble dictation\"",
+        };
+        if (!string.IsNullOrEmpty(target))
+        {
+            arguments.Add("--target");
+            arguments.Add(target);
+        }
+
+        arguments.Add("-");
+        return arguments;
+    }
 
     /// <summary>Start the recorder in the recording format, or say why there is none.</summary>
+    /// <param name="target">The microphone's <c>node.name</c>, or <c>null</c> for the default.</param>
     /// <exception cref="AudioCaptureError.EngineUnavailable">
     /// The tool is missing, or the operating system refused to start it.
     /// </exception>
-    public static IRecorderProcess Launch(AudioStreamFormat format)
+    public static IRecorderProcess Launch(AudioStreamFormat format, string? target = null)
     {
         var start = new ProcessStartInfo(Executable)
         {
@@ -172,7 +192,7 @@ internal sealed class PwRecordProcess : IRecorderProcess
             CreateNoWindow = true,
         };
 
-        foreach (string argument in Arguments(format))
+        foreach (string argument in Arguments(format, target))
         {
             start.ArgumentList.Add(argument);
         }

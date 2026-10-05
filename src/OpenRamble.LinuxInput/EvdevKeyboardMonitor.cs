@@ -55,7 +55,7 @@ namespace OpenRamble.LinuxInput;
 /// <c>hotkey.edge</c>.
 /// </para>
 /// </remarks>
-public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IHotkeyControl, IDisposable
+public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IHotkeyControl, IRawKeySource, IDisposable
 {
     /// <summary>What put an edge on the wire, for the <c>hotkey.edge</c> diagnostic.</summary>
     private const string FromKeyboard = "evdev";
@@ -166,6 +166,13 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IHotkeyControl, ID
     public Action? OnHotkeyUp { get; set; }
 
     public Action<string>? OnTrackingFailure { get; set; }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Raised after the chord bookkeeping and before the gesture, for keyboard events only - see
+    /// <see cref="IRawKeySource"/> for why an injected edge is never published.
+    /// </remarks>
+    public event Action<RawKeyEvent>? KeyObserved;
 
     /// <summary>
     /// Which chord modifiers are held right now, across every keyboard being watched.
@@ -567,7 +574,7 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IHotkeyControl, ID
 
         // A repeat is a key-down as far as everything downstream is concerned - it is what Windows
         // delivers for a held key too, and the gesture machine already answers it with nothing.
-        Deliver(raw.Code, !raw.IsRelease, FromKeyboard, watch);
+        Deliver(raw.Code, !raw.IsRelease, FromKeyboard, watch, raw.IsRepeat);
     }
 
     /// <inheritdoc/>
@@ -575,7 +582,7 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IHotkeyControl, ID
     /// The configured key and no other: <paramref name="down"/> is the whole of what a caller may
     /// say. See <see cref="IHotkeyControl"/> for why this is not a way to inject keys.
     /// </remarks>
-    public bool InjectHotkeyEdge(bool down) => Deliver(code: null, down, FromControlSocket, watch: null);
+    public bool InjectHotkeyEdge(bool down) => Deliver(code: null, down, FromControlSocket, watch: null, repeat: false);
 
     /// <summary>
     /// One key event, from wherever it came, to a gesture.
@@ -591,6 +598,7 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IHotkeyControl, ID
     /// The device it was read from, or <c>null</c> for an injected edge, which belongs to no
     /// device and so cannot belong to a stale generation either.
     /// </param>
+    /// <param name="repeat">The kernel repeating a held key. Published to observers as such.</param>
     /// <returns>Whether tracking was running and the event was taken.</returns>
     /// <remarks>
     /// For a keyboard event this runs on that device's reader thread, synchronously, and the order
@@ -599,9 +607,10 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IHotkeyControl, ID
     /// comparison and a delegate call - although nothing here is removed by the system if it gets
     /// slow; what happens instead is that this keyboard's events queue in the kernel's buffer.
     /// </remarks>
-    private bool Deliver(int? code, bool down, string source, Watch? watch)
+    private bool Deliver(int? code, bool down, string source, Watch? watch, bool repeat)
     {
         HotkeyAction action;
+        int observedKey;
         bool? edge = null;
         bool escaped = false;
         DictationHotkey configured;
@@ -613,6 +622,7 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IHotkeyControl, ID
 
             configured = machine.Hotkey;
             int key = code ?? machine.Keymap.CodeFor(configured);
+            observedKey = key;
             held = Track(key, down);
 
             if (key == KeyEscape)
@@ -643,6 +653,15 @@ public sealed class EvdevKeyboardMonitor : IHotkeyMonitoring, IHotkeyControl, ID
         // Outside the gate, like every other callback here: what a handler does is the shell's
         // business, and holding a lock across it is how a keyboard thread ends up waiting on the
         // interface.
+        //
+        // Observers first, and only for keyboard events: the copy shortcut is a chord, and a chord
+        // is judged against the modifiers as they stood the instant the key went down - which is
+        // `held`, computed under the gate above and not re-read by anybody later.
+        if (watch is not null)
+        {
+            KeyObserved?.Invoke(new RawKeyEvent(observedKey, down, repeat, held));
+        }
+
         if (escaped)
         {
             OnEscape?.Invoke();

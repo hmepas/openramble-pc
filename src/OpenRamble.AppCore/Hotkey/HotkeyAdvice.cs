@@ -61,6 +61,11 @@ public static class KeyUsageInfo
         // Held alone, Shift types nothing and toggles nothing: it only means something together
         // with another key, and another key ends the gesture before it can mean anything.
         DictationHotkey.RightShift => KeyUsage.Free,
+        // The left keys carry every shortcut a person types, and that is exactly why they are
+        // safe: a second key while the hotkey is held is a shortcut, and the gesture machine ends
+        // the hold rather than dictating over it - the rule the original shipped Left Control with.
+        DictationHotkey.LeftCtrl => KeyUsage.Free,
+        DictationHotkey.LeftShift => KeyUsage.Free,
         DictationHotkey.RightAlt => layoutHasAltGraph ? KeyUsage.AltGraph : KeyUsage.Free,
         DictationHotkey.CapsLock => KeyUsage.CapsLockToggle,
         DictationHotkey.F13 => KeyUsage.MissingOnManyKeyboards,

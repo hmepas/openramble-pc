@@ -1,16 +1,19 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Navigation;
 using DictationCore;
-using LocalASR;
 using Microsoft.Win32;
 using OpenRamble.AppCore;
+using OpenRamble.AppCore.Audio;
 
 namespace OpenRamble.App;
 
 /// <summary>
-/// The settings window: the hotkey, the language and model, the dictionary, and what the app does
+/// The settings window: the keys, the model, the history, the dictionary, and what the app does
 /// with a person's voice.
 /// </summary>
 /// <remarks>
@@ -25,6 +28,12 @@ namespace OpenRamble.App;
 /// that the app checks for new versions.
 /// </para>
 /// <para>
+/// Every settings row carries the small arrow that puts that one setting back the way it came -
+/// per setting rather than one "reset everything" button, because those are different promises.
+/// The arrow is only live where the value differs from <see cref="SettingsDefaults"/>, which also
+/// answers "what did I change in here?".
+/// </para>
+/// <para>
 /// The window renders <see cref="AppState"/> and calls back into it. What every string says is
 /// decided by <see cref="ModelStatus"/>, <see cref="PermissionStatus"/> and
 /// <see cref="HotkeyAdvice"/>, all of which are checked without a screen.
@@ -32,29 +41,237 @@ namespace OpenRamble.App;
 /// </remarks>
 public sealed partial class SettingsWindow : Window
 {
+    private static readonly int[] HistoryLimitChoices = [5, 10, 20, 50];
+
     private readonly AppState state;
+    private readonly IShortcutKeymap keymap = LiveWindowsShortcutKeymap.Instance;
+    private readonly WavPlayback playback = new();
+    private Guid? playing;
     private bool updating;
+
+    // General - built in code so each row shares one layout; see Row().
+    private readonly ComboBox hotkeyPicker = new() { Width = 220 };
+    private readonly Button hotkeyRevert;
+    private readonly ShortcutRecorder copyRecorder;
+    private readonly Button copyRevert;
+    private readonly CheckBox launchToggle = new();
+    private readonly Button launchRevert;
+    private readonly CheckBox clipboardToggle = new();
+    private readonly Button clipboardRevert;
+    private readonly CheckBox spaceToggle = new();
+    private readonly Button spaceRevert;
+    private readonly CheckBox soundsToggle = new();
+    private readonly Button soundsRevert;
+    private readonly ComboBox devicePicker = new() { Width = 260 };
+    private readonly Button deviceRevert;
+    private readonly CheckBox silenceToggle = new();
+    private readonly Button silenceRevert;
+    private readonly ComboBox placementPicker = new() { Width = 140 };
+    private readonly Button placementRevert;
+    private readonly ComboBox unloadPicker = new() { Width = 160 };
+    private readonly Button unloadRevert;
+
+    // About
+    private readonly ComboBox themePicker = new() { Width = 140 };
+    private readonly Button themeRevert;
+    private readonly CheckBox logsToggle = new();
+    private readonly Button logsRevert;
+
+    /// <summary>The microphones offered by the picker, in the order it shows them; index 0 is the default.</summary>
+    private IReadOnlyList<AudioInputDevice> devices = [];
 
     public SettingsWindow(AppState state)
     {
         this.state = state;
         InitializeComponent();
 
-        HotkeyPicker.ItemsSource = DictationHotkeyInfo.AllCases.Select(hotkey => hotkey.Title).ToArray();
-        LanguagePicker.ItemsSource = new[] { RecognitionLanguages.Name(null) }
-            .Concat(RecognitionLanguages.Options.Select(option => option.Name))
-            .ToArray();
+        VersionText.Text = $"Version {typeof(SettingsWindow).Assembly.GetName().Version?.ToString(3) ?? "—"}";
 
-        HotkeyPicker.SelectionChanged += OnHotkeyChanged;
-        LanguagePicker.SelectionChanged += OnLanguageChanged;
-        SoundsToggle.Click += (_, _) => state.SoundsEnabled = SoundsToggle.IsChecked == true;
-        LaunchToggle.Click += (_, _) => state.LaunchAtLogin = LaunchToggle.IsChecked == true;
+        // MARK: - Shortcut
+
+        hotkeyPicker.ItemsSource = DictationHotkeyInfo.AllCases.Select(hotkey => hotkey.Title).ToArray();
+        hotkeyPicker.SelectionChanged += OnHotkeyChanged;
+        ShortcutRows.Children.Add(Row(
+            "Dictation key",
+            hotkeyPicker,
+            "The key you hold down while dictating",
+            out hotkeyRevert,
+            () => state.Hotkey = SettingsDefaults.Hotkey));
+
+        copyRecorder = new ShortcutRecorder(keymap);
+        copyRecorder.ShortcutChanged += shortcut => state.CopyShortcut = shortcut;
+        copyRecorder.Changed += RenderCopyProblem;
+        ShortcutRows.Children.Add(Row(
+            "Copy last dictation",
+            copyRecorder,
+            "Press this shortcut to put the last dictation back on the clipboard",
+            out copyRevert,
+            () => state.CopyShortcut = SettingsDefaults.CopyShortcut));
+
+        // MARK: - Behavior
+
+        launchToggle.Click += (_, _) => state.LaunchAtLogin = launchToggle.IsChecked == true;
+        BehaviorRows.Children.Add(Row(
+            "Launch at login",
+            launchToggle,
+            "Starts OpenRamble automatically when you sign in",
+            out launchRevert,
+            () => state.LaunchAtLogin = SettingsDefaults.LaunchAtLogin));
+
+        clipboardToggle.Click += (_, _) => state.CopiesToClipboard = clipboardToggle.IsChecked == true;
+        BehaviorRows.Children.Add(Row(
+            "Also copy dictations to the clipboard",
+            clipboardToggle,
+            "Leaves each finished dictation on the clipboard of this PC. Off by default - the clipboard is shared with everything else running here.",
+            out clipboardRevert,
+            () => state.CopiesToClipboard = SettingsDefaults.CopiesToClipboard));
+
+        spaceToggle.Click += (_, _) => state.AppendsTrailingSpace = spaceToggle.IsChecked == true;
+        BehaviorRows.Children.Add(Row(
+            "Add a space after each dictation",
+            spaceToggle,
+            "For dictating in runs, so the next phrase does not arrive welded to the last word.",
+            out spaceRevert,
+            () => state.AppendsTrailingSpace = SettingsDefaults.AppendsTrailingSpace));
+
+        soundsToggle.Click += (_, _) => state.SoundsEnabled = soundsToggle.IsChecked == true;
+        BehaviorRows.Children.Add(Row(
+            "Play a sound when something needs you",
+            soundsToggle,
+            "A quiet tone when the text didn't reach the field or nothing was recognized. A dictation that works stays silent.",
+            out soundsRevert,
+            () => state.SoundsEnabled = SettingsDefaults.SoundsEnabled));
+
+        devicePicker.SelectionChanged += OnDeviceChanged;
+        BehaviorRows.Children.Add(Row(
+            "Microphone",
+            devicePicker,
+            "Which input to record through. The system default follows whatever Windows is using.",
+            out deviceRevert,
+            () => state.InputDeviceUid = SettingsDefaults.InputDeviceUid));
+
+        silenceToggle.Click += (_, _) => state.StopsOnSilence = silenceToggle.IsChecked == true;
+        BehaviorRows.Children.Add(Row(
+            "Finish hands-free dictation on silence",
+            silenceToggle,
+            "Only in hands-free mode. While you hold the key, a pause is never treated as the end.",
+            out silenceRevert,
+            () => state.StopsOnSilence = SettingsDefaults.StopsOnSilence));
+
+        placementPicker.ItemsSource = DictationOverlayPlacements.AllCases.Select(placement => placement.Title).ToArray();
+        placementPicker.SelectionChanged += (_, _) =>
+        {
+            if (updating || placementPicker.SelectedIndex < 0) { return; }
+            state.OverlayPlacement = DictationOverlayPlacements.AllCases[placementPicker.SelectedIndex];
+        };
+        BehaviorRows.Children.Add(Row(
+            "Dictation panel",
+            placementPicker,
+            "Places dictation feedback at the top or bottom of the active screen",
+            out placementRevert,
+            () => state.OverlayPlacement = SettingsDefaults.OverlayPlacement));
+
+        unloadPicker.ItemsSource = IdleUnloadPolicies.AllCases.Select(policy => policy.Label).ToArray();
+        unloadPicker.SelectionChanged += (_, _) =>
+        {
+            if (updating || unloadPicker.SelectedIndex < 0) { return; }
+            state.ModelUnloadTimeout = IdleUnloadPolicies.AllCases[unloadPicker.SelectedIndex];
+        };
+        BehaviorRows.Children.Add(Row(
+            "Unload model",
+            unloadPicker,
+            "Frees the speech model's memory after this much idle time. It reloads under your voice at the next dictation.",
+            out unloadRevert,
+            () => state.ModelUnloadTimeout = SettingsDefaults.ModelUnloadTimeout));
+
+        // MARK: - History
+
+        HistoryLimitPicker.SelectionChanged += (_, _) =>
+        {
+            if (updating || HistoryLimitPicker.SelectedItem is not int limit) { return; }
+            state.HistoryLimit = limit;
+        };
+
+        // MARK: - Dictionary
+
         LearnToggle.Click += (_, _) => state.LearnFromEdits = LearnToggle.IsChecked == true;
 
+        // MARK: - About
+
+        themePicker.ItemsSource = AppAppearances.AllCases.Select(appearance => appearance.Title).ToArray();
+        themePicker.SelectionChanged += (_, _) =>
+        {
+            if (updating || themePicker.SelectedIndex < 0) { return; }
+            state.Appearance = AppAppearances.AllCases[themePicker.SelectedIndex];
+        };
+        AppearanceRows.Children.Add(Row(
+            "Theme",
+            themePicker,
+            "Follow the system, or keep this app light or dark on its own",
+            out themeRevert,
+            () => state.Appearance = SettingsDefaults.Appearance));
+
+        logsToggle.Click += (_, _) => state.DetailedLogging = logsToggle.IsChecked == true;
+        PrivacyRows.Children.Add(Row(
+            "Keep detailed logs",
+            logsToggle,
+            "Writes a plain text file you can open and send. Off by default, and nothing is written while it is off. Nothing you say is ever recorded - timings and reasons only.",
+            out logsRevert,
+            () => state.DetailedLogging = SettingsDefaults.DetailedLogging));
+
         state.PropertyChanged += OnStateChanged;
-        Closed += (_, _) => state.PropertyChanged -= OnStateChanged;
+        Closed += (_, _) =>
+        {
+            state.PropertyChanged -= OnStateChanged;
+            playback.Dispose();
+        };
 
         Render();
+    }
+
+    /// <summary>
+    /// One settings row: a name, its control, and the arrow that undoes it.
+    /// </summary>
+    /// <remarks>
+    /// The hint goes to the tooltip and the accessibility help text, as the original puts it in
+    /// the accessibility hint: a screen reader reads it on the control, a pointer finds it on
+    /// hover, and the row itself stays one line.
+    /// </remarks>
+    private static Grid Row(string title, FrameworkElement control, string hint, out Button revert, Action reset)
+    {
+        var row = new Grid { Margin = new Thickness(0, 5, 0, 5) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(250) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var label = new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+        row.Children.Add(label);
+
+        control.VerticalAlignment = VerticalAlignment.Center;
+        control.HorizontalAlignment = HorizontalAlignment.Left;
+        control.ToolTip = hint;
+        AutomationProperties.SetName(control, title);
+        AutomationProperties.SetHelpText(control, hint);
+        Grid.SetColumn(control, 1);
+        row.Children.Add(control);
+
+        var arrow = new Button { Style = (Style)Application.Current.Resources["RevertButton"] };
+        arrow.Click += (_, _) => reset();
+        Grid.SetColumn(arrow, 2);
+        row.Children.Add(arrow);
+        revert = arrow;
+
+        return row;
+    }
+
+    /// <summary>
+    /// Kept in the layout rather than removed when inactive: a control that appears and
+    /// disappears makes every row jump as settings change.
+    /// </summary>
+    private static void ShowRevert(Button revert, bool changed)
+    {
+        revert.Visibility = changed ? Visibility.Visible : Visibility.Hidden;
+        revert.IsEnabled = changed;
     }
 
     private void OnStateChanged(object? sender, PropertyChangedEventArgs args) =>
@@ -65,26 +282,94 @@ public sealed partial class SettingsWindow : Window
         updating = true;
         try
         {
-            HotkeyPicker.SelectedIndex = DictationHotkeyInfo.AllCases.ToList().IndexOf(state.Hotkey);
-            SoundsToggle.IsChecked = state.SoundsEnabled;
-            LaunchToggle.IsChecked = state.LaunchAtLogin;
-            LearnToggle.IsChecked = state.LearnFromEdits;
-            LanguagePicker.SelectedIndex = state.RecognitionLanguage is string code
-                ? RecognitionLanguages.Options.ToList().FindIndex(option => option.Code == code) + 1
-                : 0;
-
+            hotkeyPicker.SelectedIndex = DictationHotkeyInfo.AllCases.ToList().IndexOf(state.Hotkey);
+            ShowRevert(hotkeyRevert, state.Hotkey != SettingsDefaults.Hotkey);
             HotkeyWarning.Text = state.HotkeyWarning ?? string.Empty;
             HotkeyWarning.Foreground = StatusBrushes.Attention;
             HotkeyWarning.Visibility = state.HotkeyWarning is null ? Visibility.Collapsed : Visibility.Visible;
 
+            if (copyRecorder.Shortcut != state.CopyShortcut) { copyRecorder.Shortcut = state.CopyShortcut; }
+            ShowRevert(copyRevert, state.CopyShortcut != SettingsDefaults.CopyShortcut);
+
+            launchToggle.IsChecked = state.LaunchAtLogin;
+            ShowRevert(launchRevert, state.LaunchAtLogin != SettingsDefaults.LaunchAtLogin);
+            clipboardToggle.IsChecked = state.CopiesToClipboard;
+            ShowRevert(clipboardRevert, state.CopiesToClipboard != SettingsDefaults.CopiesToClipboard);
+            spaceToggle.IsChecked = state.AppendsTrailingSpace;
+            ShowRevert(spaceRevert, state.AppendsTrailingSpace != SettingsDefaults.AppendsTrailingSpace);
+            soundsToggle.IsChecked = state.SoundsEnabled;
+            ShowRevert(soundsRevert, state.SoundsEnabled != SettingsDefaults.SoundsEnabled);
+            silenceToggle.IsChecked = state.StopsOnSilence;
+            ShowRevert(silenceRevert, state.StopsOnSilence != SettingsDefaults.StopsOnSilence);
+
+            RenderDevices();
+
+            placementPicker.SelectedIndex = DictationOverlayPlacements.AllCases.ToList().IndexOf(state.OverlayPlacement);
+            ShowRevert(placementRevert, state.OverlayPlacement != SettingsDefaults.OverlayPlacement);
+            unloadPicker.SelectedIndex = IdleUnloadPolicies.AllCases.ToList().IndexOf(state.ModelUnloadTimeout);
+            ShowRevert(unloadRevert, state.ModelUnloadTimeout != SettingsDefaults.ModelUnloadTimeout);
+
+            LearnToggle.IsChecked = state.LearnFromEdits;
+
+            themePicker.SelectedIndex = AppAppearances.AllCases.ToList().IndexOf(state.Appearance);
+            ShowRevert(themeRevert, state.Appearance != SettingsDefaults.Appearance);
+            logsToggle.IsChecked = state.DetailedLogging;
+            ShowRevert(logsRevert, state.DetailedLogging != SettingsDefaults.DetailedLogging);
+
             RenderPermission();
             RenderModel();
+            RenderHistory();
             RenderDictionary();
         }
         finally
         {
             updating = false;
         }
+    }
+
+    private void RenderCopyProblem()
+    {
+        string? problem = copyRecorder.Problem;
+        CopyShortcutProblem.Text = problem ?? string.Empty;
+        CopyShortcutProblem.Foreground = StatusBrushes.Attention;
+        CopyShortcutProblem.Visibility = problem is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>
+    /// The system default first, then every microphone the machine can hear through. A chosen
+    /// device that has gone away is still listed - by its UID, as the only name left - so the
+    /// picker shows what is set, and the notice under it says why dictation is not using it.
+    /// </summary>
+    private void RenderDevices()
+    {
+        IReadOnlyList<AudioInputDevice> available = state.AvailableInputDevices;
+        string? chosen = state.InputDeviceUid;
+        var listed = new List<AudioInputDevice>(available);
+        if (chosen is not null && !available.Any(device => device.Uid == chosen))
+        {
+            listed.Add(new AudioInputDevice(chosen, "Not connected"));
+        }
+
+        devices = listed;
+        var names = new List<string> { "System default" };
+        names.AddRange(listed.Select(device => device.Name));
+        devicePicker.ItemsSource = names;
+        devicePicker.SelectedIndex = chosen is null ? 0 : 1 + listed.FindIndex(device => device.Uid == chosen);
+        ShowRevert(deviceRevert, chosen != SettingsDefaults.InputDeviceUid);
+
+        // Said out loud rather than swapped silently: someone who chose a headset and quietly
+        // got the laptop lid would only find out from the transcript.
+        string? notice = state.InputDeviceNotice;
+        InputDeviceNotice.Text = notice ?? string.Empty;
+        InputDeviceNotice.Foreground = StatusBrushes.Attention;
+        InputDeviceNotice.Visibility = notice is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void OnDeviceChanged(object? sender, SelectionChangedEventArgs args)
+    {
+        if (updating || devicePicker.SelectedIndex < 0) { return; }
+        int index = devicePicker.SelectedIndex;
+        state.InputDeviceUid = index == 0 ? null : devices[index - 1].Uid;
     }
 
     private void RenderPermission()
@@ -100,20 +385,22 @@ public sealed partial class SettingsWindow : Window
         PermissionDetail.Text = permission.Detail;
         PermissionButton.Content = permission.ActionTitle ?? string.Empty;
         PermissionButton.Visibility = permission.ActionTitle is null ? Visibility.Collapsed : Visibility.Visible;
-        System.Windows.Automation.AutomationProperties.SetName(
-            PermissionButton, permission.ActionAccessibilityLabel ?? string.Empty);
+        AutomationProperties.SetName(PermissionButton, permission.ActionAccessibilityLabel ?? string.Empty);
     }
 
     private void RenderModel()
     {
+        // The card reads three facts and never guesses: are the files usable, is preparation
+        // actually running, and how far along it is - "Step N of 3" while it runs.
         ModelStatus status = ModelStatus.Make(
             state.ModelStateValue,
-            state.IsPreparingEngine,
             ModelStatus.Place.Settings,
             state.EnginePreparation,
             state.RemainingDownloadMegabytes == 0
-                ? ModelStatus.FullDownloadMegabytes
-                : state.RemainingDownloadMegabytes);
+                ? state.FullModelDownloadMegabytes
+                : state.RemainingDownloadMegabytes,
+            state.IsEngineReady,
+            state.IsPreparingEngine);
 
         ModelTitle.Text = status.Title;
         ModelDetail.Text = status.Detail ?? string.Empty;
@@ -134,11 +421,171 @@ public sealed partial class SettingsWindow : Window
                 Margin = new Thickness(0, 0, 8, 0),
                 ToolTip = status.HintFor(action),
             };
-            System.Windows.Automation.AutomationProperties.SetHelpText(button, status.HintFor(action));
+            AutomationProperties.SetHelpText(button, status.HintFor(action));
             ModelStatus.Action captured = action;
             button.Click += (_, _) => Perform(captured);
             ModelActions.Children.Add(button);
         }
+    }
+
+    private void RenderHistory()
+    {
+        IReadOnlyList<HistoryEntry> history = state.History;
+
+        var limits = new List<int>(HistoryLimitChoices);
+        if (!limits.Contains(state.HistoryLimit))
+        {
+            limits.Add(state.HistoryLimit);
+            limits.Sort();
+        }
+
+        HistoryLimitPicker.ItemsSource = limits;
+        HistoryLimitPicker.SelectedItem = state.HistoryLimit;
+
+        HistoryEmpty.Visibility = history.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ShowRecordingsButton.IsEnabled = history.Count > 0;
+        DeleteAllButton.IsEnabled = history.Count > 0;
+
+        if (playing is { } id && !history.Any(entry => entry.Id == id)) { StopPlayback(); }
+
+        HistoryList.Children.Clear();
+        foreach (HistoryEntry entry in history)
+        {
+            HistoryList.Children.Add(HistoryRow(entry));
+        }
+    }
+
+    /// <summary>
+    /// One kept dictation: when, the text, and what can be done with it. The star means "keep":
+    /// a starred take does not count against the limit and is not pushed out by newer ones.
+    /// </summary>
+    private FrameworkElement HistoryRow(HistoryEntry entry)
+    {
+        string? audio = state.HistoryAudioPath(entry);
+        bool isPlaying = playing == entry.Id;
+
+        var panel = new StackPanel { Margin = new Thickness(0, 8, 0, 8) };
+
+        var header = new DockPanel();
+        var actions = new StackPanel { Orientation = Orientation.Horizontal };
+        DockPanel.SetDock(actions, Dock.Right);
+
+        var star = RowButton(
+            entry.IsKept ? "★" : "☆",
+            entry.IsKept ? "Stop keeping this one" : "Keep this one",
+            entry.IsKept ? "Kept. Stop keeping" : "Keep this dictation",
+            () => state.SetHistoryEntryKept(!entry.IsKept, entry));
+        if (entry.IsKept) { star.Foreground = StatusBrushes.Attention; }
+        actions.Children.Add(star);
+
+        if (audio is not null)
+        {
+            var again = RowButton(
+                "Recognize again",
+                "Recognize this recording again",
+                "Recognize this recording again",
+                () => state.RetranscribeHistoryEntry(entry));
+            again.IsEnabled = !state.IsRetranscribing && state.IsEngineReady;
+            actions.Children.Add(again);
+        }
+
+        actions.Children.Add(RowButton("Copy", "Copy", "Copy this dictation", () => state.CopyHistoryEntry(entry)));
+        actions.Children.Add(RowButton("Delete", "Delete", "Delete this dictation", () =>
+        {
+            if (playing == entry.Id) { StopPlayback(); }
+            state.DeleteHistoryEntry(entry);
+        }));
+        header.Children.Add(actions);
+
+        header.Children.Add(new TextBlock
+        {
+            Text = entry.Date.ToLocalTime().ToString("g", System.Globalization.CultureInfo.CurrentCulture),
+            Style = (Style)Application.Current.Resources["Secondary"],
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        panel.Children.Add(header);
+
+        panel.Children.Add(new TextBox
+        {
+            Text = entry.Text,
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            BorderThickness = new Thickness(0),
+            Background = System.Windows.Media.Brushes.Transparent,
+            Foreground = (System.Windows.Media.Brush)Application.Current.Resources["WindowForegroundBrush"],
+            Margin = new Thickness(0, 4, 0, 4),
+        });
+
+        if (audio is not null)
+        {
+            var play = RowButton(
+                isPlaying ? "■ Stop" : "▶ Play",
+                isPlaying ? "Stop playback" : "Play this recording",
+                isPlaying ? "Stop playback" : "Play this recording",
+                () => TogglePlayback(entry, audio));
+            play.Margin = new Thickness(0);
+            panel.Children.Add(play);
+        }
+        else
+        {
+            // Said rather than hidden: a row without a Play button and no explanation reads as a bug.
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Recording no longer on disk",
+                Style = (Style)Application.Current.Resources["Secondary"],
+                FontSize = 11.5,
+            });
+        }
+
+        return new Border
+        {
+            BorderBrush = (System.Windows.Media.Brush)Application.Current.Resources["PanelBorderBrush"],
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Child = panel,
+        };
+    }
+
+    private static Button RowButton(string content, string tooltip, string accessibleName, Action action)
+    {
+        var button = new Button
+        {
+            Content = content,
+            Padding = new Thickness(8, 2, 8, 2),
+            Margin = new Thickness(6, 0, 0, 0),
+            ToolTip = tooltip,
+        };
+        AutomationProperties.SetName(button, accessibleName);
+        button.Click += (_, _) => action();
+        return button;
+    }
+
+    /// <summary>One take playing at a time: a second Play stops the first rather than layering two.</summary>
+    private void TogglePlayback(HistoryEntry entry, string audio)
+    {
+        if (playing == entry.Id)
+        {
+            StopPlayback();
+            return;
+        }
+
+        try
+        {
+            playback.Play(audio);
+            playing = entry.Id;
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            playing = null;
+            DiagnosticLog.EmitException("history.play", error);
+        }
+
+        RenderHistory();
+    }
+
+    private void StopPlayback()
+    {
+        playback.Stop();
+        playing = null;
     }
 
     private void RenderDictionary()
@@ -165,28 +612,62 @@ public sealed partial class SettingsWindow : Window
                 break;
 
             case ModelStatus.Action.Delete:
-                state.DeleteModel();
+                // Delete sits next to ordinary buttons and used to work on the first click: a
+                // miss cost the whole model and a new download. Ask, and name what it will cost.
+                MessageBoxResult answer = MessageBox.Show(
+                    this,
+                    $"Dictation stops working until you download the model again — that's another "
+                    + $"{state.FullModelDownloadMegabytes} MB over the network.",
+                    "Delete the recognition model?",
+                    MessageBoxButton.OKCancel,
+                    MessageBoxImage.Warning);
+                if (answer == MessageBoxResult.OK) { state.DeleteModel(); }
                 break;
         }
     }
 
     private void OnHotkeyChanged(object? sender, SelectionChangedEventArgs args)
     {
-        if (updating || HotkeyPicker.SelectedIndex < 0) { return; }
-        state.Hotkey = DictationHotkeyInfo.AllCases[HotkeyPicker.SelectedIndex];
-    }
-
-    private void OnLanguageChanged(object? sender, SelectionChangedEventArgs args)
-    {
-        if (updating || LanguagePicker.SelectedIndex < 0) { return; }
-        state.RecognitionLanguage = LanguagePicker.SelectedIndex == 0
-            ? null
-            : RecognitionLanguages.Options[LanguagePicker.SelectedIndex - 1].Code;
+        if (updating || hotkeyPicker.SelectedIndex < 0) { return; }
+        state.Hotkey = DictationHotkeyInfo.AllCases[hotkeyPicker.SelectedIndex];
     }
 
     private void OnPermissionAction(object sender, RoutedEventArgs args) => state.RequestMicrophone();
 
     private void OnOpenRecordings(object sender, RoutedEventArgs args) => state.OpenRecordingsFolder();
+
+    private void OnOpenLogs(object sender, RoutedEventArgs args) => state.RevealLogs();
+
+    private void OnRevealHistoryAudio(object sender, RoutedEventArgs args) => state.RevealHistoryAudio();
+
+    private void OnClearHistory(object sender, RoutedEventArgs args)
+    {
+        MessageBoxResult answer = MessageBox.Show(
+            this,
+            "The transcripts and their recordings are removed from this PC.",
+            "Delete all dictation history?",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning);
+        if (answer != MessageBoxResult.OK) { return; }
+        StopPlayback();
+        state.ClearHistory();
+    }
+
+    private void OnOpenLink(object sender, RequestNavigateEventArgs args)
+    {
+        // A link is the one thing here that leaves the machine, and it does so in the person's
+        // own browser: the app itself never opens a connection for it.
+        try
+        {
+            Process.Start(new ProcessStartInfo(args.Uri.AbsoluteUri) { UseShellExecute = true });
+        }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            DiagnosticLog.EmitException("about.link", error);
+        }
+
+        args.Handled = true;
+    }
 
     private void OnAddReplacement(object sender, RoutedEventArgs args)
     {

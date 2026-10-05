@@ -372,6 +372,81 @@ public sealed class OverlayModelTests
     }
 
     /// <summary>
+    /// A session dismissal must not erase the live state under a notice. The notice owns the
+    /// panel until its timer decides whether to return to the underlying session or hide an idle
+    /// panel.
+    /// </summary>
+    [Fact]
+    public void ADismissalUnderANoticeLeavesTheLiveStateAlone()
+    {
+        model.Show(DictationState.Listening, TimeSpan.FromSeconds(3));
+        model.ShowNotice(new DictationNotice(DictationNoticeKind.Info, "Copied."));
+
+        model.Hide();
+
+        Assert.Equal(DictationState.Listening, model.State);
+        Assert.True(model.IsVisible);
+        Assert.NotNull(model.Notice);
+    }
+
+    /// <summary>
+    /// Cleanup may follow a failure notice immediately. Let the person read the notice, then
+    /// honour that dismissal instead of resurrecting the completed transcription underneath it.
+    /// </summary>
+    [Fact]
+    public async Task ADeferredDismissalIsHonouredWhenTheNoticeExpires()
+    {
+        model.Show(DictationState.Transcribing, TimeSpan.FromSeconds(3));
+        model.SetWaitingForEngine(true);
+        model.ShowNotice(new DictationNotice(DictationNoticeKind.Failure, "Recognition failed."));
+
+        model.Hide();
+
+        Assert.True(model.IsVisible);
+        Assert.NotNull(model.Notice);
+        await WaitForNoticeToHide();
+        Assert.Equal(DictationState.Idle, model.State);
+        Assert.False(model.IsWaitingForEngine);
+        Assert.False(model.IsVisible);
+    }
+
+    /// <summary>
+    /// Starting another take supersedes a deferred dismissal from the previous notice. A later
+    /// notice must return to that new live session.
+    /// </summary>
+    [Fact]
+    public async Task ANewTakeSupersedesADeferredDismissal()
+    {
+        model.Show(DictationState.Transcribing, TimeSpan.FromSeconds(3));
+        model.ShowNotice(new DictationNotice(DictationNoticeKind.Failure, "Recognition failed."));
+        model.Hide();
+
+        model.Show(DictationState.Listening, TimeSpan.Zero);
+        model.ShowNotice(new DictationNotice(DictationNoticeKind.Info, "Copied."));
+
+        await WaitForNoticeToHide();
+        Assert.Equal(DictationState.Listening, model.State);
+        Assert.True(model.IsVisible);
+        Assert.True(model.IsTicking);
+    }
+
+    /// <summary>The wait reaches the panel's words, and a new take clears it.</summary>
+    [Fact]
+    public void TheModelWaitReachesThePanelAndANewTakeClearsIt()
+    {
+        model.Show(DictationState.Transcribing, TimeSpan.FromSeconds(1));
+        model.SetWaitingForEngine(true);
+        Assert.Equal("Waking the model…", model.Content.Title);
+
+        model.SetWaitingForEngine(false);
+        Assert.Equal("Transcribing…", model.Content.Title);
+
+        model.SetWaitingForEngine(true);
+        model.Show(DictationState.Preparing, TimeSpan.Zero);
+        Assert.False(model.IsWaitingForEngine);
+    }
+
+    /// <summary>
     /// The panel picks up the engine's own narration, and drops it again when the load lands.
     ///
     /// Pushed in rather than passed to <c>Show</c>, because a reload starts before the key is

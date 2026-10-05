@@ -639,7 +639,69 @@ public sealed class DictationControllerTests
             notice => notice.Message.Contains("The text was inserted", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// A cancellation the person did not ask for is not Escape. A dependency that throws its own
+    /// cancellation while the session is live has failed to recognize, and the person hears so.
+    /// </summary>
+    [Fact]
+    public async Task TestDependencyCancellationErrorIsAVisibleRecognitionFailureNotUserEscape()
+    {
+        List<DictationNotice> notices = [];
+        var controller = MakeController(transcribeError: new OperationCanceledException());
+        controller.OnNotice = notices.Add;
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        await Settle(30);
+
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.Contains(notices, notice => notice.Kind == DictationNoticeKind.Failure);
+        Assert.Equal(1, sounds.AttentionPlays);
+    }
+
+    [Fact]
+    public async Task TestEngineCancelledErrorIsAVisibleRecognitionFailureNotUserEscape()
+    {
+        List<DictationNotice> notices = [];
+        var controller = MakeController(transcribeError: new ASREngineError.Cancelled());
+        controller.OnNotice = notices.Add;
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        await Settle(30);
+
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.Contains(notices, notice => notice.Kind == DictationNoticeKind.Failure);
+        Assert.Equal(1, sounds.AttentionPlays);
+    }
+
     // MARK: Insertion target
+
+    [Fact]
+    public async Task TestTargetUsesPrepopulatedSnapshotWithoutAKeyDownSystemQuery()
+    {
+        var cached = new TargetApplication("com.apple.TextEdit", 1, "TextEdit");
+        inserter.Frontmost = new TargetApplication("com.apple.Safari", 2, "Safari");
+        var controller = new DictationController(
+            capture: capture,
+            transcribe: (_, _) => Task.FromResult(new ASRResult(
+                "cached target",
+                audioDuration: TimeSpan.FromSeconds(1),
+                processingDuration: TimeSpan.FromSeconds(0.01))),
+            inserter: inserter,
+            overlay: overlay,
+            sounds: sounds,
+            targetApplicationSnapshot: () => cached);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        await Settle();
+
+        Assert.Equal(cached, inserter.Targets.FirstOrDefault());
+    }
 
     [Fact]
     public async Task TestTargetIsCapturedAtKeyDownNotAtInsertion()

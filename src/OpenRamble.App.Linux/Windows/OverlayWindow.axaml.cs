@@ -29,22 +29,30 @@ namespace OpenRamble.App.Linux;
 /// rather than by coordinate, never focusable by construction. That is a wave of its own and is
 /// deliberately deferred. What this means in practice today: under a Wayland session Avalonia
 /// draws through XWayland, where <c>Topmost</c> and an absolute position work as they do on X11 -
-/// and on a compositor that refuses either, the panel is a window in the ordinary stack.
+/// and on a compositor that refuses either, the panel is a window in the ordinary stack, and the
+/// top/bottom choice in Settings is a request the compositor may decline.
 /// </para>
 /// <para>
 /// What is written on it is <see cref="OverlayContent"/>'s decision, and when it appears and hides
-/// is <see cref="OverlayModel"/>'s - both are checked without a screen. This file draws and
-/// nothing else.
+/// is <see cref="OverlayModel"/>'s - both are checked without a screen. Where it sits is
+/// <see cref="OverlayPlacementPolicy"/>'s. This file draws and nothing else.
 /// </para>
 /// </remarks>
-public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessibilityAnnouncing
+public sealed partial class OverlayWindow : Window,
+    IOverlayPresenting,
+    IAccessibilityAnnouncing,
+    IOverlayPlacementConfiguring,
+    IEngineWaitPresenting
 {
-    /// <summary>How far above the bottom of the work area the panel sits.</summary>
-    private const double BottomMargin = 48;
-
     private readonly OverlayModel model;
     private readonly DispatcherTimer redraw;
+    private readonly DispatcherTimer meter;
     private readonly Rectangle[] bars = new Rectangle[OverlayModel.WaveformSampleCount];
+
+    /// <summary>The newest microphone peak, written from the audio thread and read by the meter clock.</summary>
+    private volatile float latestLevel;
+
+    private DictationOverlayPlacement placement = SettingsDefaults.OverlayPlacement;
 
     public OverlayWindow()
     {
@@ -68,6 +76,31 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
             DispatcherPriority.Background,
             (_, _) => Render());
         redraw.Stop();
+
+        // The level meter draws as fast as the screen can show it and no faster. Peaks arrive
+        // from the audio thread tens of times a second; each used to be one hop onto the UI
+        // thread, competing with the dictation it was drawn for. Now the newest peak waits here
+        // and the clock takes it - dropped frames cost nothing visible, because a display cannot
+        // show more than it is given, and the newest value always wins (upstream 0.23.0).
+        meter = new DispatcherTimer(
+            TimeSpan.FromMilliseconds(16),
+            DispatcherPriority.Render,
+            (_, _) => TickMeter());
+        meter.Stop();
+    }
+
+    /// <summary>Where on the screen the panel sits. Applied on the next show, or now if it is up.</summary>
+    public DictationOverlayPlacement Placement
+    {
+        set
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (placement == value) { return; }
+                placement = value;
+                if (IsVisible) { Place(); }
+            });
+        }
     }
 
     public Task Present(DictationState state, TimeSpan elapsed)
@@ -102,8 +135,19 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
         return Task.CompletedTask;
     }
 
-    /// <summary>Live microphone level for the waveform.</summary>
-    public void UpdateInputLevel(float level) => model.UpdateInputLevel(level);
+    /// <summary>
+    /// The take is finished and the model is not resident yet: say "Waking the model…" rather
+    /// than claiming to transcribe half a second of audio for fifteen seconds.
+    /// </summary>
+    public void SetWaitingForEngine(bool waiting) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            model.SetWaitingForEngine(waiting);
+            Render();
+        });
+
+    /// <summary>Live microphone level for the waveform. Called from the audio thread; kept, not drawn.</summary>
+    public void UpdateInputLevel(float level) => latestLevel = level;
 
     /// <summary>
     /// What the recognition engine is doing, for the panel to say while it waits on it.
@@ -139,6 +183,7 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
         if (!visible)
         {
             Hide();
+            meter.Stop();
             return;
         }
 
@@ -146,13 +191,23 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
         // Placed after the show, not before it: until the window has been laid out its size is
         // nothing at all, and the very first press - the one on the try-out page, and the one that
         // decides whether a person believes the product works - would put the panel off-centre.
-        PlaceAboveTaskbar();
+        Place();
     }
 
     private void UpdateTicking()
     {
         if (model.IsTicking && !redraw.IsEnabled) { redraw.Start(); }
         else if (!model.IsTicking && redraw.IsEnabled) { redraw.Stop(); }
+
+        bool recording = model.State == DictationState.Listening && model.Notice is null && model.IsVisible;
+        if (recording && !meter.IsEnabled) { meter.Start(); }
+        else if (!recording && meter.IsEnabled) { meter.Stop(); }
+    }
+
+    private void TickMeter()
+    {
+        model.UpdateInputLevel(latestLevel);
+        if (Waveform.IsVisible) { RenderWaveform(); }
     }
 
     private void Render()
@@ -185,11 +240,12 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
     }
 
     /// <summary>
-    /// Bottom centre of the work area, clear of whatever panel lives at the bottom.
+    /// Top or bottom centre of the work area, clear of whatever panel lives at that edge.
     ///
     /// Not near the cursor and not near the caret: the person is looking at what they are
     /// dictating into, and a panel that followed the caret would cover the very words it is about
-    /// to insert.
+    /// to insert. Which edge is the person's choice in Settings; the geometry is
+    /// <see cref="OverlayPlacementPolicy"/>'s.
     /// </summary>
     /// <remarks>
     /// The work area is in physical pixels and the window's size is in device-independent ones, so
@@ -197,19 +253,21 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
     /// desktop that refuses to place a window where it is asked, this is a no-op and the panel
     /// lands wherever the compositor puts it.
     /// </remarks>
-    private void PlaceAboveTaskbar()
+    private void Place()
     {
         Screen? screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
         if (screen is null) { return; }
 
         PixelRect work = screen.WorkingArea;
         double scale = screen.Scaling;
-        var size = new PixelSize(
-            (int)Math.Round(Bounds.Width * scale),
-            (int)Math.Round(Bounds.Height * scale));
+        var size = new OverlaySize(
+            Math.Round(Bounds.Width * scale),
+            Math.Round(Bounds.Height * scale));
 
-        Position = new PixelPoint(
-            work.X + ((work.Width - size.Width) / 2),
-            work.Y + work.Height - size.Height - (int)Math.Round(BottomMargin * scale));
+        OverlayPoint origin = OverlayPlacementPolicy.Origin(
+            placement,
+            new OverlayFrame(work.X, work.Y, work.Width, work.Height),
+            size);
+        Position = new PixelPoint((int)Math.Round(origin.X), (int)Math.Round(origin.Y));
     }
 }

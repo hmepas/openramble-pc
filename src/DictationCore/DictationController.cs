@@ -103,6 +103,29 @@ public sealed class DictationController
     /// </summary>
     public Action? OnTranscriptionStall { get; set; }
 
+    /// <summary>
+    /// A take that produced text, with the audio still on disk.
+    ///
+    /// Called after insertion is attempted and before the recording is deleted, so an owner
+    /// that keeps a history gets both halves of the take while both still exist. Whether the
+    /// words actually landed is not the question here - a person who watched an insertion fail
+    /// wants that transcript more than anyone, not less.
+    /// </summary>
+    public Action<string, string>? OnTakeFinished { get; set; }
+
+    /// <summary>
+    /// The take is finished and the model is not resident yet, so the words are waiting for a
+    /// load rather than for recognition.
+    ///
+    /// The panel is the only feedback channel during dictation, and until now it said
+    /// "Transcribing…" through the whole wait - up to the preparation deadline. Calling a wait
+    /// work is a small lie that becomes a large one on a short take, which has no speech for the
+    /// load to hide under: the person watches a spinner claim to transcribe half a second of
+    /// audio for fifteen seconds. <c>true</c> opens the wait, <c>false</c> closes it on every
+    /// exit, including a throw.
+    /// </summary>
+    public Action<bool>? OnEnginePreparationWait { get; set; }
+
     private bool isHandsFreeActive;
 
     /// <summary>Whether recording occurs without holding down a key.</summary>
@@ -127,11 +150,43 @@ public sealed class DictationController
     /// </summary>
     private readonly Func<float[], CancellationToken, Task<ASRResult>>? transcribeSamples;
 
+    /// <summary>
+    /// Recognizes the take in pieces while it is still being spoken.
+    ///
+    /// Present only when there is a sample-path recognizer to give it to and a capture willing
+    /// to segment. Absent means the old behaviour exactly: one decode of the whole take once the
+    /// key comes up.
+    /// </summary>
+    private StreamedSegmentRecognizer? streamedSegments;
+
+    /// <summary>
+    /// Sample rate every part of this app agrees on. Named rather than spelled out at the
+    /// places below that need it.
+    /// </summary>
+    private const int SampleRate = 16_000;
+
+    /// <summary>
+    /// Below this a piece of audio is not handed to the engine on its own.
+    ///
+    /// Measured against the shipping model: under about two seconds its output is not merely
+    /// worse but non-monotonic - the same start offset returned text at 0.8 s, nothing at 1.0 s,
+    /// text again at 1.2 s. A tail shorter than this is recognized together with the segment
+    /// before it instead.
+    /// </summary>
+    private const int MinimumTailSamples = 2 * SampleRate;
+
     private readonly ITextInserting inserter;
     private readonly IOverlayPresenting overlay;
     private readonly ISounding sounds;
     private readonly IRecordingRecoveryStoring recordingRecovery;
-    private readonly Func<TextPipeline> pipeline;
+    private readonly Func<ITextProcessing> pipeline;
+
+    /// <summary>
+    /// Key-down destination. Production may supply a pre-populated snapshot so that no system
+    /// query sits between the key going down and the microphone being asked for; the default
+    /// asks the inserter, exactly as before.
+    /// </summary>
+    private readonly Func<TargetApplication?> targetApplicationSnapshot;
 
     /// <summary>Session hours. A separate dependency for exactly the same reason as the microphone.</summary>
     private readonly Func<DateTimeOffset> now;
@@ -167,6 +222,37 @@ public sealed class DictationController
     /// the engine is wedged and flows into the same stall recovery.
     /// </summary>
     private readonly TimeSpan prepareDeadline;
+
+    /// <summary>
+    /// How long a stop-time model wait may stay silent before the panel says so. Injectable so
+    /// suites can prove both the announcement and the silence without sleeping a
+    /// production-scale interval.
+    /// </summary>
+    private readonly TimeSpan enginePreparationNoticeDelay;
+
+    /// <summary>
+    /// Clipboard, window activation and synthesized input are system edges. A
+    /// cancellation-deaf implementation must not leave the controller in
+    /// <see cref="DictationState.Inserting"/> forever; an uncertain result is retained in memory.
+    /// </summary>
+    private readonly TimeSpan insertionDeadline;
+
+    /// <summary>
+    /// Return is a separate irreversible system event after text already landed. It has its own
+    /// shorter confirmation budget.
+    /// </summary>
+    private readonly TimeSpan returnDeadline;
+
+    /// <summary>
+    /// How long a cancellation waits for the microphone to close before freeing the session.
+    /// </summary>
+    /// <remarks>
+    /// A device edge that wedged is the reason Escape exists; Escape waiting on that same edge
+    /// would defeat itself. The abort keeps running in the background and closes the microphone
+    /// whenever the system lets it - this only bounds how long the panel and the next dictation
+    /// wait for it, which for a healthy device is never.
+    /// </remarks>
+    private static readonly TimeSpan AbortForegroundGrace = TimeSpan.FromMilliseconds(50);
 
     /// <summary>
     /// How long closing the take may run before the capture is presumed wedged.
@@ -264,13 +350,20 @@ public sealed class DictationController
         ISounding sounds,
         Func<float[], CancellationToken, Task<ASRResult>>? transcribeSamples = null,
         IRecordingRecoveryStoring? recordingRecovery = null,
-        Func<TextPipeline>? pipeline = null,
+        Func<ITextProcessing>? pipeline = null,
         Func<DateTimeOffset>? now = null,
         Func<MonotonicInstant>? monotonicNow = null,
         Func<TimeSpan, TimeSpan>? transcriptionDeadline = null,
         Func<CancellationToken, Task>? prepareForTranscription = null,
+        // Worst measured cold reload is a handful of seconds of graph specialization plus the
+        // warm-up; 25 s covers it with margin while a genuine wedge still surfaces well before
+        // anyone gives up on the panel.
         TimeSpan? prepareDeadline = null,
-        TimeSpan? captureStopDeadline = null)
+        TimeSpan? captureStopDeadline = null,
+        Func<TargetApplication?>? targetApplicationSnapshot = null,
+        TimeSpan? enginePreparationNoticeDelay = null,
+        TimeSpan? insertionDeadline = null,
+        TimeSpan? returnDeadline = null)
     {
         this.capture = capture;
         this.transcribe = transcribe;
@@ -284,8 +377,12 @@ public sealed class DictationController
         this.monotonicNow = monotonicNow ?? (static () => MonotonicInstant.Now);
         this.transcriptionDeadline = transcriptionDeadline ?? TranscriptionDeadline.Deadline;
         this.prepareForTranscription = prepareForTranscription;
-        this.prepareDeadline = prepareDeadline ?? TimeSpan.FromSeconds(90);
+        this.prepareDeadline = prepareDeadline ?? TimeSpan.FromSeconds(25);
         this.captureStopDeadline = captureStopDeadline ?? DefaultCaptureStopDeadline;
+        this.targetApplicationSnapshot = targetApplicationSnapshot ?? inserter.FrontmostApplication;
+        this.enginePreparationNoticeDelay = enginePreparationNoticeDelay ?? TimeSpan.FromMilliseconds(250);
+        this.insertionDeadline = insertionDeadline ?? TimeSpan.FromSeconds(2);
+        this.returnDeadline = returnDeadline ?? TimeSpan.FromSeconds(1);
     }
 
     // MARK: - Beginning
@@ -309,8 +406,15 @@ public sealed class DictationController
             SetHandsFreeActive(handsFree);
             cancellationRequested = false;
             deferredStopRequested = false;
+            stopRequestedAt = null;
+            // One stream per take. Built here rather than lazily so the sink is in place before
+            // the first frame: a segment cut before anybody was listening would be audio nobody
+            // ever recognizes.
+            streamedSegments = transcribeSamples is { } recognizeSamples
+                ? new StreamedSegmentRecognizer(samples => recognizeSamples(samples, CancellationToken.None))
+                : null;
             // We remember the target right away: the focus will go away later.
-            targetApplication = inserter.FrontmostApplication();
+            targetApplication = targetApplicationSnapshot();
             SetState(DictationState.Preparing);
         }
 
@@ -336,6 +440,13 @@ public sealed class DictationController
 
         try
         {
+            // The sink hops nothing and holds nothing: `Submit` is safe from the capture's own
+            // queue and returns at once. Installed before the device starts, so no cut can be
+            // made while nobody is listening.
+            StreamedSegmentRecognizer? streamed;
+            lock (gate) { streamed = IsCurrent(session) ? streamedSegments : null; }
+
+            await capture.SetSegmentSink(streamed is null ? null : streamed.Submit).ConfigureAwait(false);
             await capture.StartRecording().ConfigureAwait(false);
         }
         catch (Exception error)
@@ -400,10 +511,52 @@ public sealed class DictationController
         lock (gate)
         {
             decision = DictationStopPolicy.DecideStop(state, isHandsFree);
-            if (decision == DeferredStopDecision.DeferUntilListening) { deferredStopRequested = true; }
+            switch (decision)
+            {
+                case DeferredStopDecision.StopNow:
+                    MarkStopRequested();
+                    break;
+                case DeferredStopDecision.DeferUntilListening:
+                    // The release is the person's "stop", whenever the microphone gets round to
+                    // hearing it: a cold or blocked capture start after key release must not be
+                    // hidden from the speed report.
+                    MarkStopRequested();
+                    deferredStopRequested = true;
+                    break;
+            }
         }
 
         if (decision == DeferredStopDecision.StopNow) { Finish(); }
+    }
+
+    /// <summary>
+    /// Capture reached its bounded in-memory limit. Finish the complete retained take through
+    /// the ordinary transcription path, independent of hotkey/hands-free gesture policy. This is
+    /// a graceful capacity stop, not a capture failure.
+    /// </summary>
+    public void StopAtCaptureMemoryLimit()
+    {
+        bool stopNow = false;
+        lock (gate)
+        {
+            switch (state)
+            {
+                case DictationState.Listening:
+                    MarkStopRequested();
+                    stopNow = true;
+                    break;
+                case DictationState.Preparing:
+                    MarkStopRequested();
+                    deferredStopRequested = true;
+                    break;
+                case DictationState.Idle:
+                case DictationState.Transcribing:
+                case DictationState.Inserting:
+                    break;
+            }
+        }
+
+        if (stopNow) { Finish(); }
     }
 
     /// <summary>Stop in the mode without holding - by pressing the key a second time.</summary>
@@ -417,6 +570,7 @@ public sealed class DictationController
             switch (state)
             {
                 case DictationState.Listening:
+                    MarkStopRequested();
                     stopNow = true;
                     break;
                 case DictationState.Preparing:
@@ -425,6 +579,7 @@ public sealed class DictationController
                     // in this mode the key is not held down and nothing else
                     // stops the recording: the microphone would stay on with no
                     // one listening.
+                    MarkStopRequested();
                     deferredStopRequested = true;
                     break;
                 case DictationState.Idle:
@@ -454,9 +609,16 @@ public sealed class DictationController
         {
             if (state != DictationState.Preparing && state != DictationState.Listening) { return; }
 
+            // Commit every internal mode transition before publishing the external hands-free
+            // callback. That callback is reentrant and may immediately stop the session;
+            // clearing its newly accepted stop afterwards would leave the microphone recording
+            // forever.
             isHandsFree = true;
-            SetHandsFreeActive(true);
             deferredStopRequested = false;
+            // The release that promoted the session belonged to the previous gesture, and so
+            // did its "stop" mark: in the new mode the stop is still to come.
+            stopRequestedAt = null;
+            SetHandsFreeActive(true);
         }
     }
 
@@ -471,7 +633,7 @@ public sealed class DictationController
 
             // One entry for all the stop paths: Stop, StopHandsFree and the
             // deferred release - all of them come here.
-            stopRequestedAt = monotonicNow();
+            MarkStopRequested();
             session = currentSession;
             SetState(DictationState.Transcribing);
             finalization = new CancellationTokenSource();
@@ -483,6 +645,47 @@ public sealed class DictationController
             await Finalize(session, token).ConfigureAwait(false);
             ForgetFinalization(session);
         });
+    }
+
+    /// <summary>The gate must be held. The first stop request of a session is its t0; later ones keep it.</summary>
+    private void MarkStopRequested()
+    {
+        stopRequestedAt ??= monotonicNow();
+    }
+
+    /// <summary>
+    /// Whether the panel is currently telling someone that the model is still loading. Kept so
+    /// the retraction is exactly as conditional as the announcement: a <c>false</c> nobody was
+    /// told about would be a lie of its own.
+    /// </summary>
+    private bool isAnnouncingEngineWait;
+
+    private void BeginEngineWaitAnnouncement()
+    {
+        Action<bool>? announce;
+        lock (gate)
+        {
+            if (isAnnouncingEngineWait) { return; }
+
+            isAnnouncingEngineWait = true;
+            announce = OnEnginePreparationWait;
+        }
+
+        announce?.Invoke(true);
+    }
+
+    private void EndEngineWaitAnnouncement()
+    {
+        Action<bool>? announce;
+        lock (gate)
+        {
+            if (!isAnnouncingEngineWait) { return; }
+
+            isAnnouncingEngineWait = false;
+            announce = OnEnginePreparationWait;
+        }
+
+        announce?.Invoke(false);
     }
 
     /// <summary>Forget the completed task - but only if it is still our session.</summary>
@@ -547,6 +750,12 @@ public sealed class DictationController
         // Move the in-memory buffer out immediately so every early-return path
         // releases it. The on-disk take remains available for retry/recovery.
         float[]? bufferedSamples = await capture.TakeBufferedSamples().ConfigureAwait(false);
+        // How much of that buffer already left in segments. Read after the stop, like the
+        // buffer: the stop is the barrier past which the count is exact.
+        int consumedSamples = await capture.ConsumedSampleCount().ConfigureAwait(false);
+        // The capture is behind us. Marking it here, before any branch below, keeps the stage
+        // boundary at the causal event rather than at whatever check happens to run next.
+        MonotonicInstant freezeCompletedAt = monotonicNow();
 
         if (!ShouldContinue(session, token))
         {
@@ -591,46 +800,130 @@ public sealed class DictationController
         }
 
         ASRResult recognized;
+        // Stage boundaries for the speed report. Plain clock reads on the path that already
+        // runs; none of them adds a wait, a lock or a reordered call.
+        MonotonicInstant? preparationCompletedAt = null;
+        // The instant the recognition call is dispatched, and how long the whole call took as
+        // seen from here. Everything between the dispatch and the engine's own clock is
+        // transport: hopping threads, entering the transcriber, waiting for a turn. That span
+        // held the whole of every slow take and had no number.
+        TimeSpan? dispatch = null;
         try
         {
             // A residency-managed engine may be cold here; the reload has been
             // running under the person's voice since the keypress and gets its
             // own budget. Only after the engine is in memory does the
-            // recognition deadline start counting.
+            // recognition deadline start counting. Waiting it out and inserting
+            // the words beats abandoning them.
             if (prepareForTranscription is { } prepare)
             {
-                await TranscriptionDeadline.WithTranscriptionDeadline(
-                    prepareDeadline,
-                    async workToken =>
+                // A resident engine answers this in microseconds, and flipping the panel to a
+                // loading message for every take would be a flicker on the overwhelmingly common
+                // path. The wait is announced only once it is long enough for someone to be
+                // looking at it, and retracted on every exit.
+                using var announcement = new CancellationTokenSource();
+                CancellationToken announcementToken = announcement.Token;
+                _ = Task.Run(async () =>
+                {
+                    try
                     {
-                        await prepare(workToken).ConfigureAwait(false);
-                        return true;
-                    },
-                    token).ConfigureAwait(false);
+                        await Task.Delay(enginePreparationNoticeDelay, announcementToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+
+                    if (!announcementToken.IsCancellationRequested) { BeginEngineWaitAnnouncement(); }
+                });
+
+                try
+                {
+                    await TranscriptionDeadline.WithTranscriptionDeadline(
+                        prepareDeadline,
+                        async workToken =>
+                        {
+                            await prepare(workToken).ConfigureAwait(false);
+                            return true;
+                        },
+                        token).ConfigureAwait(false);
+                }
+                catch (TranscriptionTimeout)
+                {
+                    throw new DictationPreparationTimeout();
+                }
+                finally
+                {
+                    announcement.Cancel();
+                    EndEngineWaitAnnouncement();
+                }
+
+                preparationCompletedAt = monotonicNow();
             }
+
+            // Stamped on this side of the deadline wrapper, so the transport into the engine is
+            // inside the number rather than past every stamp.
+            MonotonicInstant dispatchedAt = monotonicNow();
+            StreamedSegmentRecognizer? streamed;
+            lock (gate) { streamed = streamedSegments; }
 
             // The deadline stands between the person and a wedged engine: an
             // inference call stuck on a dead system service ignores cancellation
             // and would hold "Transcribing…" forever.
             recognized = await TranscriptionDeadline.WithTranscriptionDeadline(
                 transcriptionDeadline(recording.Duration),
-                workToken =>
-                    transcribeSamples is { } samples && bufferedSamples is { Length: > 0 }
-                        ? samples(bufferedSamples, workToken)
-                        : transcribe(recording.Url, workToken),
+                async workToken =>
+                {
+                    if (transcribeSamples is { } samples && bufferedSamples is { Length: > 0 })
+                    {
+                        // Whatever was recognized while the person was still talking. `Finish`
+                        // waits for the segment in flight rather than cancelling it: cancelling
+                        // would save a few tens of milliseconds and cost a full re-decode of
+                        // audio whose text is still needed.
+                        StreamedSegmentRecognizer.Outcome? outcome = streamed is null
+                            ? null
+                            : await streamed.Finish().ConfigureAwait(false);
+                        if (outcome is StreamedSegmentRecognizer.Outcome.Recognized { Texts.Count: > 0 } pieces)
+                        {
+                            return await JoinStreamed(
+                                pieces.Texts,
+                                streamed!.SubmittedSampleCounts,
+                                consumedSamples,
+                                bufferedSamples,
+                                samples,
+                                workToken).ConfigureAwait(false);
+                        }
+
+                        // No cuts were made, or a segment failed. Either way the whole take is
+                        // recognized here exactly as it always was - a stream that could not
+                        // finish costs latency, never words.
+                        return await samples(bufferedSamples, workToken).ConfigureAwait(false);
+                    }
+
+                    return await transcribe(recording.Url, workToken).ConfigureAwait(false);
+                },
                 token).ConfigureAwait(false);
+            dispatch = dispatchedAt.DurationTo(monotonicNow());
         }
-        catch (OperationCanceledException)
+        catch (DictationPreparationTimeout)
         {
-            await Discard(recording.Url).ConfigureAwait(false);
-            await FinishWithoutInsertion(session).ConfigureAwait(false);
-            return;
-        }
-        catch (ASREngineError.Cancelled)
-        {
-            // Cancellation received through the engine: this is not a failure, nothing to report.
-            await Discard(recording.Url).ConfigureAwait(false);
-            await FinishWithoutInsertion(session).ConfigureAwait(false);
+            if (!ShouldContinue(session, token))
+            {
+                await Discard(recording.Url).ConfigureAwait(false);
+                await FinishWithoutInsertion(session).ConfigureAwait(false);
+                return;
+            }
+
+            // A cold engine may still be loading normally. Free the foreground session and keep
+            // the take, but do not signal the inference-stall hook: the owner's own preparation
+            // retry owns recovery if that load is genuinely wedged, and recycling a load that is
+            // about to become ready would only make the next take cold again.
+            (string? saved, string suffix) = await PreserveForRetry(recording.Url).ConfigureAwait(false);
+            await Report(new DictationNotice(
+                kind: DictationNoticeKind.Failure,
+                message: "The speech model is still getting ready; this take was not discarded." + suffix,
+                recoveryAudio: saved)).ConfigureAwait(false);
+            await Cleanup(session).ConfigureAwait(false);
             return;
         }
         catch (TranscriptionTimeout)
@@ -642,15 +935,15 @@ public sealed class DictationController
                 return;
             }
 
+            // Signal containment at the moment the deadline is known. Recovery file I/O and
+            // user feedback must never postpone fencing the engine.
+            lock (gate) { OnTranscriptionStall?.Invoke(); }
+
             (string? saved, string suffix) = await PreserveForRetry(recording.Url).ConfigureAwait(false);
             await Report(new DictationNotice(
                 kind: DictationNoticeKind.Failure,
                 message: "Transcribing took too long and was stopped." + suffix,
                 recoveryAudio: saved)).ConfigureAwait(false);
-            // After the report, so the owner recycles a quiet engine, not one
-            // still being blamed for the current session.
-            lock (gate) { OnTranscriptionStall?.Invoke(); }
-
             await Cleanup(session).ConfigureAwait(false);
             return;
         }
@@ -660,6 +953,11 @@ public sealed class DictationController
             // important than its failure. Otherwise Escape would leave exactly
             // the trace it gets rid of: the voice and the failure message saved
             // for Retry, on top of the session the person started next.
+            //
+            // A cancellation the person did not ask for - a dependency throwing
+            // its own cancellation while the session is still live - is not
+            // Escape. It is a recognition that did not happen, and it is
+            // reported like one rather than swallowed as a quiet exit.
             if (!ShouldContinue(session, token))
             {
                 await Discard(recording.Url).ConfigureAwait(false);
@@ -689,6 +987,38 @@ public sealed class DictationController
         // that the number does not include our own branching.
         MonotonicInstant recognizedAt = monotonicNow();
         TimeSpan? microphoneStartup = await capture.StartupLatency().ConfigureAwait(false);
+
+        // Recognition owns everything after preparation; without a preparation hook it owns
+        // everything after the freeze. `stopRequestedAt` is set on every path that reaches
+        // here, so the freeze stage is never guessed.
+        MonotonicInstant recognitionStartedAt = preparationCompletedAt ?? freezeCompletedAt;
+        // Zero unless the take was actually cut, which is what the log needs to distinguish
+        // "fast because it was short" from "fast because most of it was already done".
+        int streamedSegmentCount;
+        MonotonicInstant? stopMark;
+        lock (gate)
+        {
+            streamedSegmentCount = streamedSegments?.RecognizedCount ?? 0;
+            stopMark = stopRequestedAt;
+        }
+
+        DictationPhaseBreakdown? phases = stopMark is { } stop
+            ? new DictationPhaseBreakdown(
+                CaptureFreeze: stop.DurationTo(freezeCompletedAt),
+                EnginePreparation: preparationCompletedAt is { } prepared
+                    ? freezeCompletedAt.DurationTo(prepared)
+                    : null,
+                Recognition: recognitionStartedAt.DurationTo(recognizedAt),
+                EngineProcessing: Positive(recognized.ProcessingDuration),
+                AudioDuration: recognized.AudioDuration,
+                EngineQueueing: Positive(recognized.QueueingDuration),
+                AudioDecoding: Positive(recognized.DecodingDuration),
+                // What it cost to reach the engine at all, engine time removed. A large number
+                // here means the work was waiting, not working.
+                EngineTransport: dispatch is { } whole ? Positive(whole - recognized.ProcessingDuration) : null,
+                EngineDispatch: Positive(recognized.EngineDispatchDuration),
+                StreamedSegments: streamedSegmentCount)
+            : null;
 
         TextPipeline.RunResult run = pipeline().Run(recognized.Text);
         TextPipeline.Output processed = run.Output;
@@ -720,10 +1050,74 @@ public sealed class DictationController
             run.Provenance,
             recognizedAt,
             microphoneStartup,
+            phases,
             session,
             token).ConfigureAwait(false);
+        // The last moment the take still exists. Whoever keeps a history has to take its copy
+        // now; the next line deletes the original, and that deletion is the promise that a
+        // recording does not outlive its use.
+        Action<string, string>? takeFinished;
+        lock (gate) { takeFinished = OnTakeFinished; }
+
+        takeFinished?.Invoke(processed.Text, recording.Url);
         await Discard(recording.Url).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Put a streamed take together: the pieces already recognized, plus the tail nobody has
+    /// looked at yet.
+    ///
+    /// The tail is the only decode the person actually waits for, which is the whole point of
+    /// the exercise. It is also the one piece that can be too short to trust on its own - when
+    /// the key comes up just after a cut - and in that case the segment before it is taken back
+    /// and the two are recognized together rather than shipping a fragment.
+    /// </summary>
+    private static async Task<ASRResult> JoinStreamed(
+        IReadOnlyList<string> texts,
+        IReadOnlyList<int> segmentSampleCounts,
+        int consumedSamples,
+        float[] samples,
+        Func<float[], CancellationToken, Task<ASRResult>> transcribe,
+        CancellationToken token)
+    {
+        var pieces = new List<string>(texts);
+        int tailStart = Math.Min(Math.Max(0, consumedSamples), samples.Length);
+
+        if (samples.Length - tailStart < MinimumTailSamples
+            && pieces.Count == segmentSampleCounts.Count
+            && segmentSampleCounts.Count > 0)
+        {
+            pieces.RemoveAt(pieces.Count - 1);
+            tailStart = Math.Max(0, tailStart - segmentSampleCounts[^1]);
+        }
+
+        TimeSpan processing = TimeSpan.Zero;
+        TimeSpan dispatch = TimeSpan.Zero;
+        float[] tail = samples[tailStart..];
+        if (tail.Length > 0)
+        {
+            ASRResult result = await transcribe(tail, token).ConfigureAwait(false);
+            pieces.Add(result.Text);
+            processing = result.ProcessingDuration;
+            dispatch = result.EngineDispatchDuration;
+        }
+
+        string text = string.Join(
+            ' ',
+            pieces.Select(static piece => piece.Trim()).Where(static piece => piece.Length > 0));
+
+        // The durations describe the tail, and that is deliberate: they are what the person
+        // waited for after letting go of the key. Reporting the sum of every segment would be
+        // arithmetically true and describe a wait nobody had.
+        return new ASRResult(
+            text,
+            audioDuration: TimeSpan.FromSeconds((double)samples.Length / SampleRate),
+            processingDuration: processing,
+            engineDispatchDuration: dispatch);
+    }
+
+    /// <summary>A stage that did not run is absent, never zero. Zero is a measurement.</summary>
+    private static TimeSpan? Positive(TimeSpan value) => value > TimeSpan.Zero ? value : null;
 
     /// <summary>
     /// The capture never closed its take. Let go of it and free the session.
@@ -778,7 +1172,8 @@ public sealed class DictationController
     private void ReportSpeed(
         MonotonicInstant recognizedAt,
         InsertionMarks marks,
-        TimeSpan? microphoneStartup)
+        TimeSpan? microphoneStartup,
+        DictationPhaseBreakdown? phases)
     {
         if (OnSpeed is not { } onSpeed || stopRequestedAt is not { } releasedAt) { return; }
 
@@ -786,7 +1181,8 @@ public sealed class DictationController
             releasedAt.DurationTo(recognizedAt),
             marks.PasteDispatchedAt is { } paste ? releasedAt.DurationTo(paste) : null,
             marks.ClipboardRestoredAt is { } restored ? releasedAt.DurationTo(restored) : null,
-            microphoneStartup));
+            microphoneStartup,
+            phases));
     }
 
     private async Task Insert(
@@ -794,6 +1190,7 @@ public sealed class DictationController
         PipelineProvenance provenance,
         MonotonicInstant recognizedAt,
         TimeSpan? microphoneStartup,
+        DictationPhaseBreakdown? phases,
         int session,
         CancellationToken token)
     {
@@ -818,13 +1215,28 @@ public sealed class DictationController
         InsertionMarks marks;
         try
         {
-            marks = await inserter.InsertReportingMarks(output.Text, target).ConfigureAwait(false);
+            marks = await TranscriptionDeadline.WithTranscriptionDeadline(
+                insertionDeadline,
+                _ => inserter.InsertReportingMarks(output.Text, target)).ConfigureAwait(false);
+        }
+        catch (TranscriptionTimeout)
+        {
+            if (!ShouldContinue(session, token)) { return; }
+
+            await HandleInsertionTimeout(output.Text, session).ConfigureAwait(false);
+            return;
         }
         catch (Exception error)
         {
+            if (!ShouldContinue(session, token)) { return; }
+
             await HandleInsertionFailure(error, output.Text, session).ConfigureAwait(false);
             return;
         }
+
+        // Paste may already be irreversible, but a late completion from an old session must not
+        // mutate callbacks, history, UI, or the next session.
+        if (!ShouldContinue(session, token)) { return; }
 
         lock (gate)
         {
@@ -832,7 +1244,7 @@ public sealed class DictationController
             // Origin - only after a successful insertion: an unsuccessful one has
             // no "what the person saw" and nothing to give to "copy verbatim".
             OnDictationCompleted?.Invoke(provenance);
-            ReportSpeed(recognizedAt, marks, microphoneStartup);
+            ReportSpeed(recognizedAt, marks, microphoneStartup, phases);
         }
 
         // The keypress is handled separately from the insertion intentionally.
@@ -842,15 +1254,43 @@ public sealed class DictationController
         {
             try
             {
-                await inserter.PressReturn().ConfigureAwait(false);
+                await TranscriptionDeadline.WithTranscriptionDeadline(
+                    returnDeadline,
+                    async _ =>
+                    {
+                        await inserter.PressReturn(target).ConfigureAwait(false);
+                        return true;
+                    }).ConfigureAwait(false);
             }
             catch (Exception)
             {
+                if (!ShouldContinue(session, token)) { return; }
+
                 await ReportReturnFailure(session).ConfigureAwait(false);
                 return;
             }
+
+            if (!ShouldContinue(session, token)) { return; }
         }
 
+        await Cleanup(session).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The system edge did not return, so we cannot truthfully claim either success or failure:
+    /// a synchronous input post may have crossed its irreversible boundary before the watchdog
+    /// fired. Keep a copy and tell the person exactly that, while freeing the next dictation
+    /// immediately.
+    /// </summary>
+    private async Task HandleInsertionTimeout(string text, int session)
+    {
+        lock (gate) { pendingRecovery = new RecoveredDictation(text); }
+
+        await Report(new DictationNotice(
+            kind: DictationNoticeKind.Warning,
+            message: "Insertion couldn't be confirmed in time. The text is saved in the menu and may already have been pasted.",
+            recoverableText: text,
+            wordsDidNotLand: true)).ConfigureAwait(false);
         await Cleanup(session).ConfigureAwait(false);
     }
 
@@ -918,11 +1358,41 @@ public sealed class DictationController
 
         running?.Cancel();
 
+        // Device containment continues in the background. It must never own the controller's
+        // return to idle: a cancellation-deaf device edge cannot hold the panel.
         _ = Task.Run(async () =>
         {
-            await capture.AbortRecording().ConfigureAwait(false);
+            await AbortWithinGrace().ConfigureAwait(false);
             await FinishWithoutInsertion(session).ConfigureAwait(false);
         });
+    }
+
+    /// <summary>
+    /// Start closing the microphone, and wait for it only as long as a healthy device needs.
+    /// </summary>
+    /// <remarks>
+    /// The abort itself keeps running past the grace; what is abandoned is the wait for it, not
+    /// the closing. Its eventual failure has nobody to tell: the session it belonged to is
+    /// ended by the caller either way.
+    /// </remarks>
+    private async Task AbortWithinGrace()
+    {
+        Task abort;
+        try
+        {
+            abort = capture.AbortRecording();
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        _ = abort.ContinueWith(
+            static _ => { },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        await Task.WhenAny(abort, Task.Delay(AbortForegroundGrace)).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -953,7 +1423,7 @@ public sealed class DictationController
             // Through Report: the interruption loses the words, and the person
             // mid-sentence learns of it by ear like any other loss.
             await Report(notice).ConfigureAwait(false);
-            await capture.AbortRecording().ConfigureAwait(false);
+            await AbortWithinGrace().ConfigureAwait(false);
             await FinishWithoutInsertion(session).ConfigureAwait(false);
         });
     }
@@ -1123,6 +1593,16 @@ public sealed class DictationController
         lock (gate)
         {
             if (!IsCurrent(session)) { return; }
+        }
+
+        // The terminal panel command goes out while this session is still current, before any
+        // externally observable idle state: an idle observer is allowed to start the next
+        // session synchronously, and a dismiss issued after that would take its panel away.
+        await overlay.Dismiss().ConfigureAwait(false);
+
+        lock (gate)
+        {
+            if (!IsCurrent(session)) { return; }
 
             finalization = null;
             deferredStopRequested = false;
@@ -1131,16 +1611,16 @@ public sealed class DictationController
             SetHandsFreeActive(false);
             targetApplication = null;
             recordingStartedAt = null;
+            streamedSegments = null;
+            isAnnouncingEngineWait = false;
             // The release mark is reset along with the rest of the session state.
             // Otherwise t0 of a cancelled dictation would flow into the next one,
             // and its report would be about a time that includes someone else's wait.
             stopRequestedAt = null;
+            // The next session starts able to sound again.
+            hasSoundedThisSession = false;
             SetState(DictationState.Idle);
         }
-
-        await overlay.Dismiss().ConfigureAwait(false);
-        // The next session starts able to sound again.
-        lock (gate) { hasSoundedThisSession = false; }
     }
 
     /// <summary>The gate must be held.</summary>
@@ -1200,6 +1680,19 @@ public sealed class DictationController
                 kind: DictationNoticeKind.Failure,
                 message: $"Couldn't delete the local recording: {failure.Message}")).ConfigureAwait(false);
         }
+    }
+}
+
+/// <summary>
+/// Preparation exceeded the foreground stop-to-result budget. This is not an inference stall: a
+/// separately owned model load may still be healthy and must not be killed just as it is about
+/// to become ready.
+/// </summary>
+internal sealed class DictationPreparationTimeout : Exception
+{
+    public DictationPreparationTimeout()
+        : base("the engine did not become ready within the foreground budget")
+    {
     }
 }
 

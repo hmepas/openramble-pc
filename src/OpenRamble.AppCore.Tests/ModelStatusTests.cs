@@ -15,9 +15,10 @@ public class ModelStatusTests
 
     private static ModelStatus Status(
         ModelState state,
-        bool preparing = false,
-        ModelStatus.Place place = ModelStatus.Place.Settings) =>
-        ModelStatus.Make(state, preparing, place);
+        ModelStatus.Place place = ModelStatus.Place.Settings,
+        bool engineReady = true,
+        bool preparing = false) =>
+        ModelStatus.Make(state, place, isEngineReady: engineReady, isPreparingEngine: preparing);
 
     [Fact]
     public void Scenario001()
@@ -80,14 +81,31 @@ public class ModelStatusTests
         Assert.Empty(Status(Ready, place: ModelStatus.Place.Onboarding).Actions);
     }
 
+    /// <summary>
+    /// Downloaded is not the same as usable: while the engine is still loading for this PC the
+    /// card says so plainly instead of claiming readiness the dictation cannot honour yet.
+    /// Preparation shows real milestones, and only while it is genuinely running. Claiming it
+    /// from readiness alone once stranded a fresh install.
+    /// </summary>
     [Fact]
     public void Scenario006()
     {
-        ModelStatus status = Status(Ready, preparing: true);
+        ModelStatus working = ModelStatus.Make(
+            Ready,
+            ModelStatus.Place.Settings,
+            EnginePreparationState.Make(EnginePreparationState.Phase.LoadingRecognizer, TimeSpan.FromSeconds(7)),
+            isEngineReady: false,
+            isPreparingEngine: true);
+        Assert.Equal("Preparing the model", working.Title);
+        Assert.Equal(ModelStatus.Tone.Neutral, working.ToneValue);
+        Assert.Equal("Step 1 of 3 · Loading the recognizer… 7 s", working.ProgressLabel);
+        Assert.Equal(0, working.Progress ?? -1, 3);
 
-        Assert.Equal("Model ready", status.Title);
-        Assert.Contains("20–40 seconds", status.Detail);
-        Assert.Equal("Model ready, preparing for first use", status.Announcement);
+        // Nothing running: the card must not narrate work that does not exist.
+        ModelStatus resting = Status(Ready, engineReady: false);
+        Assert.Equal("Model ready", resting.Title);
+        Assert.Equal(ModelStatus.Tone.Success, resting.ToneValue);
+        Assert.Contains("rests until your next dictation", resting.Detail);
     }
 
     [Fact]
@@ -213,9 +231,9 @@ public class ModelStatusTests
 
         Assert.Equal(
             "Keep going — grant the permission below while it downloads.",
-            ModelStatus.Make(downloading, isPreparingEngine: false, ModelStatus.Place.Onboarding).Detail);
+            ModelStatus.Make(downloading, ModelStatus.Place.Onboarding).Detail);
         Assert.Equal(
             "You can keep working — the download won't be interrupted.",
-            ModelStatus.Make(downloading, isPreparingEngine: false, ModelStatus.Place.Settings).Detail);
+            ModelStatus.Make(downloading, ModelStatus.Place.Settings).Detail);
     }
 }

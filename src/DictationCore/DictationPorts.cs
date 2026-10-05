@@ -12,6 +12,27 @@ namespace DictationCore;
 public interface IAudioCapturing
 {
     /// <summary>
+    /// Ask for finished pieces of the take as it runs, so the engine can start before the person
+    /// stops talking.
+    ///
+    /// Optional, and its default is the behaviour every existing capture already has: no sink,
+    /// no segments, the take recognized whole at the end. A capture that cannot segment does not
+    /// have to pretend it can.
+    /// </summary>
+    Task SetSegmentSink(Action<float[]>? sink) => Task.CompletedTask;
+
+    /// <summary>
+    /// How much of the just-finished take was already recognized while it was running.
+    ///
+    /// Everything before this offset has left in a segment and has a transcript already;
+    /// everything after it is the tail nobody has looked at yet. Zero means the take was not
+    /// segmented and must be recognized whole, which is what every capture that does not
+    /// segment reports. Read after <see cref="StopRecording"/>, like
+    /// <see cref="TakeBufferedSamples"/>.
+    /// </summary>
+    Task<int> ConsumedSampleCount() => Task.FromResult(0);
+
+    /// <summary>
     /// Start recording. Returns the path of the file it goes to.
     ///
     /// The implementation must bring the engine up synchronously: any delay here
@@ -146,6 +167,13 @@ public interface ITextInserting
 
     /// <summary>Press Return - if the user finished the phrase with the command "send".</summary>
     Task PressReturn();
+
+    /// <summary>
+    /// Send Return to the same application captured for this dictation. The default keeps old
+    /// and test inserters source-compatible; production targets the process so a focus change
+    /// in between cannot redirect the command.
+    /// </summary>
+    Task PressReturn(TargetApplication? target) => PressReturn();
 
     /// <summary>
     /// The application that was active at the time the hotkey was pressed.

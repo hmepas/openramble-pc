@@ -33,7 +33,6 @@ public sealed class SettingsStoreTests : IDisposable
         {
             Hotkey = nameof(DictationHotkey.RightShift),
             SoundsEnabled = false,
-            RecognitionLanguage = "ru",
             LearnFromEdits = true,
             OnboardingCompletedRevision = OnboardingRevision.Current,
         };

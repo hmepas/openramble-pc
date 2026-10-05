@@ -105,6 +105,17 @@ public class AudioFileReaderTests : IDisposable
     // MARK: - Long recordings
 
     [Fact]
+    public void DurationLimitRejectsBeforeBuildingFullSampleArray()
+    {
+        string path = WavFixture.WriteFloat32(directory, seconds: 2, sampleRate: 48_000, channels: 2);
+
+        var failure = Assert.Throws<AudioFileReader.Failure.DurationExceeded>(
+            () => reader.Samples(path, maximumDuration: TimeSpan.FromSeconds(1)));
+        Assert.Equal(2, failure.Actual.TotalSeconds, precision: 2);
+        Assert.Equal(TimeSpan.FromSeconds(1), failure.Maximum);
+    }
+
+    [Fact]
     public void ReadsRecordingLongerThanOneConversionChunk()
     {
         // The conversion happens in pieces of 16 384 frames, and gluing the pieces together

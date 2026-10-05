@@ -4,6 +4,55 @@ What this port deliberately does not (yet) do, why, and what each item would
 give if it existed. Cosmetic differences (window chrome, fonts, menu art) are
 not listed.
 
+## Where this port stands against upstream
+
+The port was made from upstream 0.5.1 and then brought up to the behaviour of
+upstream 0.27.0 (`f0cc1b7`): dictation history with audio, stars and
+re-recognition (0.9.0, 0.18.0, 0.19.0); a second shortcut that copies the last
+dictation and a setting that leaves every dictation on the clipboard (0.12.0,
+0.13.0); per-setting revert arrows, a trailing-space option and a theme (0.13.0);
+the microphone picker (0.14.0); no warm-up inference on every key press
+(0.16.0); named stages for every step between key-up and text in the log
+(0.17.1–0.22.0) and an opt-in plain-text log file (0.22.0); hands-free stop on
+silence (0.21.0); the idle "Unload model" policy in place of memory-pressure
+eviction (0.8.0, 0.9.0); a setup screen that never waits for work nobody is
+doing and a preparation that retries with a backoff ladder instead of giving up
+(0.8.1–0.8.3); "Waking the model…" instead of a false "Transcribing…" (0.9.0);
+the panel at the top or bottom of the screen (0.6.0); the 120-second floor on
+the recognition deadline, so a slow machine gets a slow result rather than a
+failure (0.9.0); recognition of long takes in pieces at natural pauses while
+the person is still speaking (0.25.0–0.25.1); the language hint and "Copy Last
+as Spoken" removed with the verbatim copy they needed (0.24.4, 0.25.2).
+
+What upstream did in that range that this port does not carry, and why:
+
+- **Meetings and recordings (0.26.0, 0.27.0).** Upstream records the
+  microphone and, with permission, what the Mac plays, and transcribes both
+  live in a Recordings window. Upstream itself keeps it out of its shared core
+  because it rests on Core Audio process taps. Windows has WASAPI loopback and
+  PipeWire has monitor sources, so a counterpart is possible — it is several
+  thousand lines of new capture, storage, export and window, and it is the one
+  feature deliberately left for a release of its own.
+- **Menu bar, Dock or both (0.20.0).** There is no Dock; the app lives in the
+  notification area on both platforms.
+- **The engine machinery.** Core ML → transcribe.cpp (0.9.0), the private
+  worker process (0.7.0), Neural Engine residency and memory-pressure rules
+  (0.8.x), the Rust shared core and the Tauri desktop app (0.10.0, 0.24.0,
+  reverted in 0.24.1): none of it maps onto sherpa-onnx in this process. The
+  behaviours those mechanisms bought — instant key press with a reload riding
+  under the voice, bounded waits, a take that is never silently dropped — are
+  what was ported, not the mechanisms.
+- **Session tokens and file dispositions (0.7.0).** Upstream fences every
+  late callback with a session identity and a per-recording disposition so a
+  timed-out stop cannot touch the next take. The PC captures are not AVAudio
+  and do not wedge the same way; this port keeps its own `captureStopDeadline`
+  (below) and its simpler session counter.
+- **Liquid Glass, the sidebar settings window (0.11.x), the MCP server
+  (0.6.0, removed in 0.7.0), Sparkle.** Cosmetic, or gone upstream too.
+- **The recovery-storage-fault menu row (0.8.0).** The PC recovery store has
+  no notion of a failed delete-intent lane; a kept recording is announced by
+  its notice and lives in the recovery folder, as before.
+
 ## No automatic updates
 
 Not done. Local builds only, by decision. That's all.
@@ -11,17 +60,19 @@ Not done. Local builds only, by decision. That's all.
 ## No live preview while recording
 
 **What it would give:** partial text appearing in the overlay while you are
-still speaking, so long dictations feel responsive and you can spot a wrong
-start early.
+still speaking, so you can spot a wrong start early.
 
-**Why it's not done:** the mac app gets streaming partials from its Core ML
-engine. The published ONNX export of Parakeet TDT v3 is offline-only —
-sherpa-onnx's streaming recognizer accepts only models exported for
-streaming, and no such export of v3 exists. The only way to fake it would be
-re-running whole-utterance recognition on a growing buffer, which competes
-for the exact CPU the final transcription is about to need and makes the
-result *slower*. The interface seam (`ILivePreviewCapable`) is ported, so a
-streaming export appearing upstream is a drop-in.
+**Why it's not done:** neither app shows partial text any more. Upstream
+0.25.0 replaced the idea with something better for latency: the take is cut at
+natural pauses and each piece is recognized *during* the recording, so at
+key-up only the last few seconds are left to do. That part is ported
+(`SpeechSegmenter`, `StreamedSegmentRecognizer`, the same measured
+parameters: cuts only inside a pause of at least 700 ms, never before the
+take passes fifteen seconds, never a piece under two seconds). Showing the
+pieces as they arrive would be a small addition on top; it is not done because
+the recognized pieces are not final text — the dictionary and typography run
+once over the joined take — and a panel that shows words which then change
+reads as a bug.
 
 ## No acoustic vocabulary boost
 
@@ -89,6 +140,17 @@ work at all.
   physical key* that is still free, still holdable and still on every keyboard;
   before this the only alternatives were AltGr (composes characters), Caps Lock
   (shouts) and F13 (most keyboards cannot send it).
+- **Left Ctrl and Left Shift join it too.** Upstream 0.15.0 offered the
+  left-hand keys on the Mac; here they answer a Linux fact as well. keyd, a
+  common remapper, grabs the physical keyboards exclusively and re-emits every
+  key through its own virtual keyboard — with Right Ctrl and Right Shift folded
+  into the *left* codes. On such a machine the right keys never reach any
+  application, and Left Ctrl is the only Ctrl there is. The shortcuts people
+  type on the left keys are safe for the same reason the original shipped Left
+  Control: a second key while the hotkey is held is a chord, and the hold ends
+  instead of dictating over it. Left Alt is still not offered — a bare Alt tap
+  reaches the menu bar on Windows. `scripts/keyd-keys.py` prints what keyd
+  actually emits for a key, which is the question to ask before choosing one.
 - **F13 is no longer offered.** It was in the picker and is out: sending it
   takes a remapper or a macro key, so it is the one candidate a person cannot
   try on the keyboard they are choosing it with. The enum case survives only so
@@ -121,13 +183,14 @@ the process is killed. This port races it against its own budget
 path, abandons the wedged call, asks the capture to close anyway, and ends the
 session with a failure notice.
 
-The panel also narrates an engine reload. Residency gives the model's memory
-back under pressure, the next keypress starts a full reload, and until it lands
-there is nothing to transcribe with — which is up to 90 seconds of
-"Transcribing…" over a model still coming off disk. The mac HUD has no state
-for this; here the existing `EnginePreparationState` line (which both apps
-already show in Settings and onboarding) goes on the panel instead — silently,
-so a screen reader is not made to read a seconds counter once per second.
+The prepare deadline is also longer here. Upstream waits 25 seconds for a
+cold engine at stop time before it keeps the take and says the model is still
+getting ready; a Mac's reload is a third of a second, so 25 is generous there.
+Loading the int4 model on a slow CPU is not, so this port passes 90 seconds
+from the composition root. Until the load lands the panel says "Waking the
+model… Your words are waiting, not lost." (upstream 0.9.0), announced only
+once the wait has lasted a quarter of a second so the common warm path never
+flickers.
 
 ## A gate the original does not need: punctuation-only transcripts
 
@@ -237,8 +300,16 @@ an application nothing about the rest of the desktop, and what is left is
   suspend stays in "listening" until Escape — the release that happened while
   the machine was down reaches nobody — and a microphone unplugged mid-sentence
   is discovered as an empty recognition rather than as a sentence saying so.
-  Memory pressure is missing with it, so the engine is released on its idle
-  timer only, never early.
+  (The engine's memory is released on the idle "Unload model" timer on both
+  platforms; memory-pressure eviction went away with upstream 0.9.0.)
+- **Our own windows take dictation directly.** Every window of this shell is
+  drawn through XWayland, and `wtype` cannot type into an XWayland window: it
+  names one keycode per character in a keymap of its own, and XWayland reads
+  those keycodes under the seat's real layout instead — a sentence dictated into
+  the try-out box came out as digits and punctuation. So the setup and settings
+  windows are dictation sinks of their own: when one of them is in front the
+  text goes straight into the field at the caret, and "send" is a line break.
+  Every other window still goes through `wtype`, exactly as before.
 - **The panel is an ordinary window, drawn through XWayland.** A dictation panel
   wants `zwlr_layer_shell_v1`: above every application, positioned by anchor,
   never focusable by construction. That is deferred. What ships is a borderless

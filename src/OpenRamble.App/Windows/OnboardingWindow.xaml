@@ -9,7 +9,7 @@
         ResizeMode="NoResize">
     <DockPanel Margin="24">
 
-        <TextBlock x:Name="ProgressText" DockPanel.Dock="Top" Foreground="Gray" />
+        <TextBlock x:Name="ProgressText" DockPanel.Dock="Top" Style="{StaticResource Secondary}" />
 
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
                     Margin="0,16,0,0">
@@ -30,23 +30,23 @@
                            Text="The text appears where your cursor already was — in any application, without switching windows." />
                 <TextBlock Margin="0,12,0,0" TextWrapping="Wrap"
                            Text="Recognition happens on this PC. Nothing you say is sent anywhere, and there is no account to create." />
-                <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="Gray"
+                <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Style="{StaticResource Secondary}"
                            Text="Two things are needed before the first dictation: the microphone, and a recognition model to download once." />
             </StackPanel>
 
             <StackPanel x:Name="SetupPage" Visibility="Collapsed">
                 <TextBlock Text="Microphone" FontSize="18" FontWeight="SemiBold" />
-                <TextBlock x:Name="PermissionDetail" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="Gray" />
+                <TextBlock x:Name="PermissionDetail" Margin="0,6,0,0" TextWrapping="Wrap" Style="{StaticResource Secondary}" />
                 <Button x:Name="PermissionButton" HorizontalAlignment="Left" Padding="12,4" Margin="0,8,0,0"
                         Click="OnPermissionAction" />
 
                 <Separator Margin="0,18" />
 
                 <TextBlock x:Name="ModelTitle" FontSize="18" FontWeight="SemiBold" />
-                <TextBlock x:Name="ModelDetail" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="Gray" />
+                <TextBlock x:Name="ModelDetail" Margin="0,6,0,0" TextWrapping="Wrap" Style="{StaticResource Secondary}" />
                 <ProgressBar x:Name="ModelProgress" Height="6" Margin="0,10,0,0" Minimum="0" Maximum="1"
                              Visibility="Collapsed" />
-                <TextBlock x:Name="ModelProgressLabel" Foreground="Gray" Margin="0,4,0,0" Visibility="Collapsed" />
+                <TextBlock x:Name="ModelProgressLabel" Style="{StaticResource Secondary}" Margin="0,4,0,0" Visibility="Collapsed" />
                 <StackPanel x:Name="ModelActions" Orientation="Horizontal" Margin="0,12,0,0" />
             </StackPanel>
 
@@ -69,6 +69,17 @@
                            Visibility="Collapsed" />
 
                 <TextBlock x:Name="TryInstruction" Margin="0,8,0,0" TextWrapping="Wrap" />
+
+                <!--
+                    The header has just asked for a key press. If the model cannot answer one yet -
+                    the one-time preparation after a fresh install, or a model deleted from Settings
+                    meanwhile - that belongs on this page, with the same live counter the setup step
+                    shows, rather than only in the toast after the person has pressed and seen
+                    nothing happen. A loaded engine, and a resting one whose comeback is that very
+                    press, say nothing.
+                -->
+                <TextBlock x:Name="TryModelLine" Style="{StaticResource Secondary}" Margin="0,8,0,0"
+                           Visibility="Collapsed" AutomationProperties.LiveSetting="Polite" />
 
                 <!--
                     The badge and the line beside it are the step's whole purpose: they change the
@@ -97,7 +108,7 @@
                              Visibility="Collapsed"
                              AutomationProperties.Name="Microphone level" />
 
-                <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="Gray"
+                <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Style="{StaticResource Secondary}"
                            Text="Click into the box below first, so the words have somewhere to land." />
 
                 <!--

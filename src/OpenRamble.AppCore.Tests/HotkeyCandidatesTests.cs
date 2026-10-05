@@ -12,19 +12,23 @@ public sealed class HotkeyCandidatesTests : IDisposable
     public void Dispose() => harness.Dispose();
 
     /// <summary>
-    /// Four keys, in the order the pickers show them: the two that just work, then the two that
-    /// carry a warning.
+    /// Six keys, in the order the pickers show them: the four that just work - right side first,
+    /// then left - then the two that carry a warning. The left pair is what upstream 0.15.0 added
+    /// on the Mac, and what a keyd-remapped Linux keyboard needs, since keyd folds the right
+    /// modifiers into the left codes.
     /// </summary>
     /// <remarks>
     /// Both pickers - the one in Settings and the one on the try-out page - read this list, so
     /// this is where "what can a person choose" is decided, once.
     /// </remarks>
     [Fact]
-    public void ThePickersOfferTheFourKeysAPersonCanActuallyPress() =>
+    public void ThePickersOfferTheSixKeysAPersonCanActuallyPress() =>
         Assert.Equal(
             [
                 DictationHotkey.RightCtrl,
                 DictationHotkey.RightShift,
+                DictationHotkey.LeftCtrl,
+                DictationHotkey.LeftShift,
                 DictationHotkey.RightAlt,
                 DictationHotkey.CapsLock,
             ],

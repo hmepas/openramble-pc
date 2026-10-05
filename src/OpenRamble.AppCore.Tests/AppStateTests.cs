@@ -354,7 +354,7 @@ public sealed class AppStateTests : IDisposable
         state.CancelCurrentDictation();
         await TestWait.For("dictation ended", () => state.DictationStateValue == DictationState.Idle);
 
-        Assert.Equal("Dictation cancelled. The recording was deleted.", state.LastNotice?.Message);
+        Assert.Equal("Dictation cancelled. Its local recording is queued for deletion.", state.LastNotice?.Message);
         Assert.Equal(0, state.SuccessfulDictationCount);
     }
 
@@ -658,7 +658,7 @@ public sealed class AppStateTests : IDisposable
 
         Monitor.OnEscape!();
 
-        Assert.NotEqual("Dictation cancelled. The recording was deleted.", state.LastNotice?.Message);
+        Assert.NotEqual("Dictation cancelled. Its local recording is queued for deletion.", state.LastNotice?.Message);
 
         harness.Inserter.ReleaseInsertions();
         await TestWait.For("dictation ended", () => state.DictationStateValue == DictationState.Idle);
@@ -742,22 +742,6 @@ public sealed class AppStateTests : IDisposable
         await DictateOnce(state);
 
         await TestWait.For("the field was read once", () => harness.FocusedField.Captured == 1);
-    }
-
-    [Fact]
-    public void Scenario042()
-    {
-        AppState state = harness.MakeState();
-        Assert.Null(state.RecognitionLanguage);
-
-        state.RecognitionLanguage = "en";
-        Assert.Equal("en", harness.Settings.Read().RecognitionLanguage);
-
-        AppState restarted = harness.MakeState();
-        Assert.Equal("en", restarted.RecognitionLanguage);
-
-        restarted.RecognitionLanguage = null;
-        Assert.Null(harness.Settings.Read().RecognitionLanguage);
     }
 
     [Fact]

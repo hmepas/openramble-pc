@@ -31,20 +31,40 @@ namespace OpenRamble.App;
 /// </para>
 /// <para>
 /// What is written on it is <see cref="OverlayContent"/>'s decision, and when it appears and
-/// hides is <see cref="OverlayModel"/>'s - both are checked without a screen. This file draws
-/// and nothing else.
+/// hides is <see cref="OverlayModel"/>'s - both are checked without a screen. Where it sits is
+/// <see cref="OverlayPlacementPolicy"/>'s, against the work area of the screen the person is
+/// using. This file draws and nothing else.
 /// </para>
 /// </remarks>
-public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessibilityAnnouncing
+public sealed partial class OverlayWindow : Window,
+    IOverlayPresenting,
+    IAccessibilityAnnouncing,
+    IOverlayPlacementConfiguring,
+    IEngineWaitPresenting
 {
     private const int GwlExStyle = -20;
     private const int WsExNoActivate = 0x08000000;
     private const int WsExToolWindow = 0x00000080;
     private const int WsExTransparent = 0x00000020;
+    private const uint MonitorDefaultToNearest = 2;
 
     private readonly OverlayModel model;
     private readonly DispatcherTimer redraw;
+    private readonly DispatcherTimer meter;
     private readonly Rectangle[] bars = new Rectangle[OverlayModel.WaveformSampleCount];
+    private DictationOverlayPlacement placement = SettingsDefaults.OverlayPlacement;
+
+    /// <summary>
+    /// The newest microphone peak, written from the audio thread and read by the meter clock.
+    /// </summary>
+    /// <remarks>
+    /// The level used to reach the panel once per audio frame - about twenty times a second for
+    /// the whole dictation - and each arrival was a dispatcher hop competing with the dictation it
+    /// was drawn for. The meter now updates as fast as the screen can show it and no faster: the
+    /// audio thread writes here, the clock reads here, and the newest peak always wins, so the
+    /// waveform still tracks the voice rather than lagging.
+    /// </remarks>
+    private volatile float latestLevel;
 
     public OverlayWindow()
     {
@@ -69,7 +89,33 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
         };
         redraw.Tick += (_, _) => Render();
 
+        // The display's own rate, and only while listening: 24 bars at 60 Hz is the last 400 ms
+        // of voice, which is what a level meter is for.
+        meter = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(16),
+        };
+        meter.Tick += (_, _) =>
+        {
+            model.UpdateInputLevel(latestLevel);
+            if (Waveform.Visibility == Visibility.Visible) { RenderWaveform(); }
+        };
+
         SourceInitialized += (_, _) => ApplyNonActivatingStyles();
+    }
+
+    /// <summary>Top or bottom of the active screen. Applied at the next show, or now if visible.</summary>
+    public DictationOverlayPlacement Placement
+    {
+        set
+        {
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (placement == value) { return; }
+                placement = value;
+                if (IsVisible) { Place(); }
+            });
+        }
     }
 
     public Task Present(DictationState state, TimeSpan elapsed)
@@ -104,8 +150,19 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
         return Task.CompletedTask;
     }
 
-    /// <summary>Live microphone level for the waveform.</summary>
-    public void UpdateInputLevel(float level) => model.UpdateInputLevel(level);
+    /// <summary>
+    /// The take is finished and the model is not resident yet: say "Waking the model…" rather
+    /// than claiming to transcribe half a second of audio for fifteen seconds.
+    /// </summary>
+    public void SetWaitingForEngine(bool waiting) =>
+        Dispatcher.BeginInvoke(() =>
+        {
+            model.SetWaitingForEngine(waiting);
+            Render();
+        });
+
+    /// <summary>Live microphone level for the waveform. Called from the audio thread; costs one store.</summary>
+    public void UpdateInputLevel(float level) => latestLevel = level;
 
     /// <summary>
     /// What the recognition engine is doing, for the panel to say while it waits on it.
@@ -153,19 +210,23 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
             return;
         }
 
-        PlaceAboveTaskbar();
+        Place();
         Show();
         // And again, because the first placement of the session was a guess. Until the window has
         // a source it measures as nothing at all, so ActualWidth and ActualHeight are zero and the
         // very first press - the one on the try-out page, and the one that decides whether a
         // person believes the product works - put the panel off-centre and half under the taskbar.
-        PlaceAboveTaskbar();
+        Place();
     }
 
     private void UpdateTicking()
     {
         if (model.IsTicking && !redraw.IsEnabled) { redraw.Start(); }
         else if (!model.IsTicking && redraw.IsEnabled) { redraw.Stop(); }
+
+        bool listening = model.State == DictationState.Listening && model.IsVisible;
+        if (listening && !meter.IsEnabled) { meter.Start(); }
+        else if (!listening && meter.IsEnabled) { meter.Stop(); }
     }
 
     private void Render()
@@ -198,19 +259,47 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
     }
 
     /// <summary>
-    /// Bottom centre of the work area, clear of the taskbar.
+    /// Top or bottom centre of the work area of the screen the person is using, clear of the
+    /// taskbar.
     ///
     /// Not near the cursor and not near the caret: the person is looking at what they are
     /// dictating into, and a panel that follows the caret would cover the very words it is about
-    /// to insert.
+    /// to insert. "The screen the person is using" is the one holding the foreground window -
+    /// where the text is about to land - and the primary screen when nothing is in front.
     /// </summary>
-    private void PlaceAboveTaskbar()
+    private void Place()
     {
-        Rect work = SystemParameters.WorkArea;
         Width = double.NaN;
         UpdateLayout();
-        Left = work.Left + ((work.Width - ActualWidth) / 2);
-        Top = work.Bottom - ActualHeight - 48;
+        Rect work = ActiveWorkArea();
+        OverlayPoint origin = OverlayPlacementPolicy.Origin(
+            placement,
+            new OverlayFrame(work.Left, work.Top, work.Width, work.Height),
+            new OverlaySize(ActualWidth, ActualHeight));
+        Left = origin.X;
+        Top = origin.Y;
+    }
+
+    /// <summary>
+    /// The foreground window's screen, in WPF's device-independent units; the primary work area
+    /// when there is no foreground window or the monitor cannot be read.
+    /// </summary>
+    private Rect ActiveWorkArea()
+    {
+        nint foreground = GetForegroundWindow();
+        nint monitor = foreground == 0 ? 0 : MonitorFromWindow(foreground, MonitorDefaultToNearest);
+        var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+        if (monitor == 0 || !GetMonitorInfoW(monitor, ref info))
+        {
+            return SystemParameters.WorkArea;
+        }
+
+        RectangleInt work = info.Work;
+        var pixels = new Rect(work.Left, work.Top, work.Right - work.Left, work.Bottom - work.Top);
+        // Monitor rectangles are physical pixels; Left and Top are device-independent units.
+        Matrix? toDevice = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice;
+        if (toDevice is null) { return SystemParameters.WorkArea; }
+        return Rect.Transform(pixels, toDevice.Value);
     }
 
     private void ApplyNonActivatingStyles()
@@ -222,9 +311,37 @@ public sealed partial class OverlayWindow : Window, IOverlayPresenting, IAccessi
         _ = SetWindowLongW(handle, GwlExStyle, style | WsExNoActivate | WsExToolWindow | WsExTransparent);
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RectangleInt
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MonitorInfo
+    {
+        public int Size;
+        public RectangleInt Monitor;
+        public RectangleInt Work;
+        public uint Flags;
+    }
+
     [LibraryImport("user32.dll", EntryPoint = "GetWindowLongW")]
     private static partial int GetWindowLongW(nint window, int index);
 
     [LibraryImport("user32.dll", EntryPoint = "SetWindowLongW")]
     private static partial int SetWindowLongW(nint window, int index, int value);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetForegroundWindow")]
+    private static partial nint GetForegroundWindow();
+
+    [LibraryImport("user32.dll", EntryPoint = "MonitorFromWindow")]
+    private static partial nint MonitorFromWindow(nint window, uint flags);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetMonitorInfoW(nint monitor, ref MonitorInfo info);
 }

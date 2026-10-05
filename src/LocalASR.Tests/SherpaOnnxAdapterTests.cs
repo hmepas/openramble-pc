@@ -349,32 +349,6 @@ public class SherpaOnnxAdapterTests
         await Assert.ThrowsAsync<ASREngineError.ModelsNotLoaded>(() => adapter.Transcribe([0.1f, 0.2f]));
     }
 
-    /// <summary>
-    /// An unknown language code is the caller's error, and it is visible immediately, before
-    /// the models are even consulted: it has no right to silently become "auto".
-    /// </summary>
-    [Fact]
-    public async Task UnknownLanguageHintIsAnError()
-    {
-        var adapter = new SherpaOnnxAdapter();
-
-        ASREngineError.InferenceFailed error = await Assert.ThrowsAsync<ASREngineError.InferenceFailed>(
-            () => adapter.Transcribe([0.1f, 0.2f], "xx"));
-
-        Assert.Contains("xx", error.Reason, StringComparison.Ordinal);
-    }
-
-    /// <summary>The list of hints is the source for the language picker in the interface.</summary>
-    [Fact]
-    public void SupportedLanguageHintsAreUsableAsAPicker()
-    {
-        IReadOnlyList<string> hints = SherpaOnnxAdapter.SupportedLanguageHints;
-
-        Assert.Contains("ru", hints);
-        Assert.Contains("en", hints);
-        Assert.Equal(hints.Count, hints.ToHashSet(StringComparer.Ordinal).Count);
-    }
-
     // MARK: - The optional abilities this engine does not have
 
     /// <summary>

@@ -41,7 +41,7 @@ public sealed class PipeWireCaptureTests : IDisposable
     public async Task TheTakeHoldsExactlyWhatTheRecorderProduced()
     {
         var recorder = new FakeRecorderProcess();
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
 
         string path = await capture.StartRecording();
         Assert.True(File.Exists(path));
@@ -67,7 +67,7 @@ public sealed class PipeWireCaptureTests : IDisposable
     public async Task TheLevelIsAPeakAndNeverTheSamples()
     {
         var recorder = new FakeRecorderProcess();
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
         var levels = new List<float>();
         capture.OnInputLevel = level => levels.Add(level);
 
@@ -80,12 +80,56 @@ public sealed class PipeWireCaptureTests : IDisposable
         Assert.Equal(0.75f, levels.Max());
     }
 
+    /// <summary>
+    /// A long take leaves in pieces while it runs, and the count reported at the stop is exactly
+    /// where the tail begins - the number the controller decodes from, so a wrong one either
+    /// loses words or says them twice.
+    /// </summary>
+    [Fact]
+    public async Task SegmentsLeaveDuringTheTakeAndTheCountSaysWhereTheTailBegins()
+    {
+        var recorder = new FakeRecorderProcess();
+        using var capture = new PipeWireCapture(takes, _ => recorder);
+        var segments = new List<float[]>();
+        await capture.SetSegmentSink(piece => { lock (segments) { segments.Add(piece); } });
+
+        await capture.StartRecording();
+        // Sixteen seconds of speech, a pause long enough to earn a cut past the shipped floor,
+        // and a tail that stays pending.
+        float[] speech = [.. Enumerable.Repeat(0.5f, 16 * 16_000)];
+        float[] pause = new float[16_000 * 3 / 2];
+        float[] tail = [.. Enumerable.Repeat(0.5f, 2 * 16_000)];
+        recorder.Feed(speech);
+        recorder.Feed(pause);
+        recorder.Feed(tail);
+        long expected = speech.Length + pause.Length + tail.Length;
+        var patience = Stopwatch.StartNew();
+        while (capture.DeliveredCounts.Samples < expected && patience.Elapsed < Patience)
+        {
+            await Task.Delay(10);
+        }
+
+        await capture.StopRecording();
+        float[]? buffered = await capture.TakeBufferedSamples();
+        int consumed = await capture.ConsumedSampleCount();
+
+        Assert.NotNull(buffered);
+        Assert.Equal(expected, buffered.Length);
+        float[] segment;
+        lock (segments) { segment = Assert.Single(segments); }
+        Assert.Equal(segment.Length, consumed);
+        Assert.True(consumed > speech.Length && consumed < expected, "the seam sits inside the pause");
+        // The segment is the take's own prefix, sample for sample: what left early is exactly
+        // what the tail no longer has to cover.
+        Assert.Equal(buffered.AsSpan(0, consumed).ToArray(), segment);
+    }
+
     [Fact]
     public async Task StartingSaysWhatItStartedAndInWhatFormat()
     {
         using var diagnostics = new DiagnosticRecorder();
         var recorder = new FakeRecorderProcess();
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
 
         await capture.StartRecording();
         await capture.StopRecording();
@@ -105,7 +149,7 @@ public sealed class PipeWireCaptureTests : IDisposable
     {
         using var diagnostics = new DiagnosticRecorder();
         var recorder = new FakeRecorderProcess();
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
 
         await capture.StartRecording();
         Assert.Null(diagnostics.Event("capture.first-frame"));
@@ -124,7 +168,7 @@ public sealed class PipeWireCaptureTests : IDisposable
         using var diagnostics = new DiagnosticRecorder();
         using var capture = new PipeWireCapture(
             takes,
-            () => throw new AudioCaptureError.EngineUnavailable(
+            _ => throw new AudioCaptureError.EngineUnavailable(
                 "pw-record could not be started (No such file or directory)"));
 
         AudioCaptureError.EngineUnavailable error =
@@ -148,7 +192,7 @@ public sealed class PipeWireCaptureTests : IDisposable
         {
             ExitReport = "pw-record exited with status 1: error: pw_context_connect() failed: Host is down",
         };
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
         AudioCaptureError? reported = null;
         capture.Failed = error => reported = error;
 
@@ -169,7 +213,7 @@ public sealed class PipeWireCaptureTests : IDisposable
     public async Task OneDeathRaisesOneAlarm()
     {
         var recorder = new FakeRecorderProcess();
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
         int alarms = 0;
         capture.Failed = _ => alarms += 1;
 
@@ -188,7 +232,7 @@ public sealed class PipeWireCaptureTests : IDisposable
     public async Task AnOrdinaryStopIsNotAFailure()
     {
         var recorder = new FakeRecorderProcess();
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
         AudioCaptureError? reported = null;
         capture.Failed = error => reported = error;
 
@@ -208,7 +252,7 @@ public sealed class PipeWireCaptureTests : IDisposable
     public async Task ARecorderThatIgnoresSigtermIsKilled()
     {
         var recorder = new FakeRecorderProcess { HonoursStop = false, HonoursKill = true };
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
 
         await capture.StartRecording();
         recorder.Feed(0.5f);
@@ -229,7 +273,7 @@ public sealed class PipeWireCaptureTests : IDisposable
     {
         using var diagnostics = new DiagnosticRecorder();
         var recorder = new FakeRecorderProcess { HonoursStop = false, HonoursKill = false };
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
 
         await capture.StartRecording();
         recorder.Feed(0.5f);
@@ -260,7 +304,7 @@ public sealed class PipeWireCaptureTests : IDisposable
     public async Task TwoRecordingsAtOnceAreRefused()
     {
         var recorder = new FakeRecorderProcess();
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
 
         await capture.StartRecording();
         await Assert.ThrowsAsync<AudioCaptureError.EngineUnavailable>(capture.StartRecording);
@@ -271,7 +315,7 @@ public sealed class PipeWireCaptureTests : IDisposable
     [Fact]
     public async Task StoppingWhatIsNotRecordingSaysSo()
     {
-        using var capture = new PipeWireCapture(takes, () => new FakeRecorderProcess());
+        using var capture = new PipeWireCapture(takes, _ => new FakeRecorderProcess());
 
         await Assert.ThrowsAsync<AudioCaptureError.NotRecording>(capture.StopRecording);
     }
@@ -281,7 +325,7 @@ public sealed class PipeWireCaptureTests : IDisposable
     {
         using var diagnostics = new DiagnosticRecorder();
         var recorder = new FakeRecorderProcess();
-        using var capture = new PipeWireCapture(takes, () => recorder);
+        using var capture = new PipeWireCapture(takes, _ => recorder);
 
         string path = await capture.StartRecording();
         recorder.Feed(0.5f);
@@ -301,7 +345,7 @@ public sealed class PipeWireCaptureTests : IDisposable
         var first = new FakeRecorderProcess();
         var second = new FakeRecorderProcess();
         var recorders = new Queue<FakeRecorderProcess>([first, second]);
-        using var capture = new PipeWireCapture(takes, recorders.Dequeue);
+        using var capture = new PipeWireCapture(takes, _ => recorders.Dequeue());
 
         await capture.StartRecording();
         first.Feed([.. Enumerable.Repeat(0.25f, 2_000)]);

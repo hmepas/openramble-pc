@@ -54,27 +54,31 @@ public sealed partial class AppState
     }
 
     /// <summary>
-    /// Put what the person said into the clipboard - before the dictionary and before the
-    /// cosmetics.
+    /// Put the last dictation back on the clipboard.
     ///
-    /// The promise "the verbatim text is always available" rests on the provenance held in
-    /// process memory: no reading of other people's fields and no disk write is needed for it.
+    /// The text as it was inserted, not the raw words: this is the "I need that again" action,
+    /// and what the person saw appear is what they mean.
     ///
     /// The write is host-only, exactly like the insertion: a plain write would hand the dictation
     /// to Clipboard History and Cloud Clipboard.
     /// </summary>
-    public void CopyRawDictation()
+    public void CopyLastDictation()
     {
-        string? raw = LastDictationValue?.Provenance.Raw;
-        if (raw is null || raw.Trim().Length == 0) { return; }
+        string? text = LastDictationValue?.InsertedText;
+        if (text is null || text.Trim().Length == 0)
+        {
+            Notify(new DictationNotice(DictationNoticeKind.Info, "Nothing dictated yet."));
+            return;
+        }
+
         try
         {
-            clipboard?.Copy(raw);
-            Notify(new DictationNotice(DictationNoticeKind.Info, "Copied as spoken — to this PC only."));
+            clipboard?.Copy(text);
+            Notify(new DictationNotice(DictationNoticeKind.Info, "Copied — to this PC only."));
         }
         catch (Exception error) when (error is InvalidOperationException or ExternalException)
         {
-            Notify(new DictationNotice(DictationNoticeKind.Failure, "Couldn't copy the spoken text."));
+            Notify(new DictationNotice(DictationNoticeKind.Failure, "Couldn't copy the dictation."));
         }
     }
 
@@ -108,8 +112,9 @@ public sealed partial class AppState
 
                 // The words already joined Recent Dictations at failure time; appending again
                 // here would duplicate them. The provenance slot is cleared too: it still holds
-                // the PREVIOUS dictation, and "Copy Last as Spoken" must not offer someone else's
-                // raw text after inserting recovered words.
+                // the PREVIOUS dictation, and after inserting recovered words neither "Copy Last
+                // Dictation" nor correction learning may act on it - one would hand back someone
+                // else's text, the other would protect someone else's spans.
                 SuccessfulDictationCount += 1;
                 RecoveredText = null;
                 LastDictationValue = null;

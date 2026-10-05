@@ -72,32 +72,51 @@ public delegate IAudioSampleConverter? AudioSampleConverterFactory(
 internal sealed class RecognitionSampleBuffer
 {
     private readonly int maximumSamples;
+    private readonly bool keepsPrefixAtLimit;
     private List<float>? samples = [];
+    private bool reachedLimit;
 
-    public RecognitionSampleBuffer(int maximumSamples)
+    /// <param name="maximumSamples">The cap.</param>
+    /// <param name="keepsPrefixAtLimit">
+    /// What crossing the cap means. <c>false</c> - the in-memory path is given up for the whole
+    /// take and recognition falls back to the WAV, as it always did. <c>true</c> - the complete
+    /// bounded prefix is kept and the frame that would not fit is refused: for an owner that
+    /// ends the take at the limit and recognizes exactly what was kept, as upstream's
+    /// five-minute cap does. The owner has to actually stop; a buffer that keeps its prefix
+    /// under a recording that goes on would recognize a take missing its end.
+    /// </param>
+    public RecognitionSampleBuffer(int maximumSamples, bool keepsPrefixAtLimit = false)
     {
         this.maximumSamples = maximumSamples;
+        this.keepsPrefixAtLimit = keepsPrefixAtLimit;
     }
 
     public void Reset()
     {
         samples = [];
+        reachedLimit = false;
     }
 
-    public void Append(float[] newSamples)
+    /// <summary>
+    /// Keep the frame. <c>false</c> when it did not fit - the cap was crossed by this frame,
+    /// or by an earlier one.
+    /// </summary>
+    public bool Append(float[] newSamples)
     {
-        if (samples is null)
+        if (samples is null || reachedLimit)
         {
-            return;
+            return false;
         }
 
         if (newSamples.Length > maximumSamples - samples.Count)
         {
-            samples = null;
-            return;
+            reachedLimit = true;
+            if (!keepsPrefixAtLimit) { samples = null; }
+            return false;
         }
 
         samples.AddRange(newSamples);
+        return true;
     }
 
     public float[]? Take()

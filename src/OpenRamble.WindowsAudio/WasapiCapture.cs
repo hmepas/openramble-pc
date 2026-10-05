@@ -71,6 +71,22 @@ public sealed class WasapiCapture : IMicrophoneDevice
     /// <summary>The recording that is accepting frames, if one is.</summary>
     private Session? current;
 
+    /// <summary>Where finished pieces of a running take go, if anyone asked for them.</summary>
+    private Action<float[]>? segmentSink;
+
+    /// <summary>
+    /// The take reached its in-memory cap.
+    /// </summary>
+    /// <remarks>
+    /// While nobody listens, crossing the cap means what it always did: the in-memory copy is
+    /// given up and recognition reads the WAV. With a listener the take is closed at the cap
+    /// instead - the complete bounded prefix stays in memory and the WAV agrees with it - and
+    /// the listener is expected to finish the dictation through the ordinary path, which is
+    /// what <c>DictationController.StopAtCaptureMemoryLimit</c> does. Raised once per take,
+    /// from the frame queue's own thread.
+    /// </remarks>
+    public Action? OnMemoryLimitReached { get; set; }
+
     /// <summary>
     /// The most recent recording, live or just finished.
     /// </summary>
@@ -86,9 +102,31 @@ public sealed class WasapiCapture : IMicrophoneDevice
     /// Where the take is written. The file lives exactly until the end of recognition - a
     /// person's voice has no business staying on disk.
     /// </param>
-    public WasapiCapture(string takesDirectory)
+    /// <param name="preferredDeviceId">The microphone to open, see <see cref="PreferredDeviceId"/>.</param>
+    public WasapiCapture(string takesDirectory, string? preferredDeviceId = null)
     {
         this.takesDirectory = takesDirectory;
+        this.preferredDeviceId = preferredDeviceId;
+    }
+
+    private string? preferredDeviceId;
+
+    /// <summary>
+    /// The endpoint ID of the microphone to record through, or <c>null</c> for whatever the
+    /// system calls default.
+    /// </summary>
+    /// <remarks>
+    /// Read when a recording starts, not when the capture is built, so a microphone chosen in
+    /// Settings is the one the very next dictation opens. A device that is not there any more -
+    /// unplugged, disabled, or an ID from another machine's settings file - falls back to the
+    /// default input rather than failing the dictation: the words matter more than the choice,
+    /// and the notice that says which microphone is actually in use is the settings screen's
+    /// (<see cref="AudioInputDevicePolicy.Notice"/>), computed from the same list this reads.
+    /// </remarks>
+    public string? PreferredDeviceId
+    {
+        get { lock (gate) { return preferredDeviceId; } }
+        set { lock (gate) { preferredDeviceId = value; } }
     }
 
     /// <summary>
@@ -189,6 +227,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
             ("ok", true),
             ("device_rate", session.DeviceFormat.SampleRate),
             ("device_channels", session.DeviceFormat.Channels),
+            ("device_preferred", session.IsPreferredDevice),
             ("resampled", session.IsResampled));
         return Task.FromResult(session.Writer.FilePath);
     }
@@ -332,16 +371,52 @@ public sealed class WasapiCapture : IMicrophoneDevice
     private Session BuildSession()
     {
         MMDevice endpoint;
+        bool preferred = false;
+        bool fellBack = false;
         try
         {
             using var enumerator = new MMDeviceEnumerator();
-            endpoint = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+            MMDevice? chosen = null;
+            if (preferredDeviceId is { Length: > 0 } wanted)
+            {
+                // Asked for by ID and taken only if it can record right now. Anything else -
+                // an ID Windows does not know, a device that is unplugged or disabled - is the
+                // fallback below, never a failed dictation.
+                try
+                {
+                    MMDevice candidate = enumerator.GetDevice(wanted);
+                    if (candidate.State == DeviceState.Active && candidate.DataFlow == DataFlow.Capture)
+                    {
+                        chosen = candidate;
+                    }
+                    else
+                    {
+                        candidate.Dispose();
+                    }
+                }
+                catch (Exception)
+                {
+                    chosen = null;
+                }
+
+                preferred = chosen is not null;
+                fellBack = chosen is null;
+            }
+
+            endpoint = chosen ?? enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
         }
         catch (Exception error)
         {
             // No microphone, or the audio service is down. Both are "the engine is not
             // available", and neither may be reported as an empty recording.
             throw new AudioCaptureError.EngineUnavailable(error.Message);
+        }
+
+        if (fellBack)
+        {
+            // The one line that explains a transcript from the wrong microphone. The ID and
+            // the name stay out of the log; the fact is what matters.
+            DiagnosticLog.Emit("capture.device.fallback", ("session", DiagnosticLog.Session));
         }
 
         var device = new NAudio.CoreAudioApi.WasapiCapture(endpoint)
@@ -378,7 +453,11 @@ public sealed class WasapiCapture : IMicrophoneDevice
         };
 
         var queue = new FrameSink();
-        var memory = new RecognitionSampleBuffer(MaximumBufferedSamples);
+        var memory = new RecognitionSampleBuffer(
+            MaximumBufferedSamples,
+            keepsPrefixAtLimit: OnMemoryLimitReached is not null);
+        var segments = new RecordingSegmentAttachment();
+        segments.SetSink(segmentSink);
         var session = new Session(
             // The dictation the take belongs to, not a counter of our own: the kernel publishes
             // the number before it asks for a recording, and every event of that session - the
@@ -390,14 +469,15 @@ public sealed class WasapiCapture : IMicrophoneDevice
             writer,
             queue,
             memory,
+            segments,
             buffer,
             BuildPipeline(buffer, source),
-            source);
+            source,
+            preferred);
 
         Action<float[]> push = queue.Start(frame =>
         {
-            writer.Append(frame);
-            memory.Append(frame);
+            Commit(session, frame);
             return Task.CompletedTask;
         });
         session.Deliver = push;
@@ -407,6 +487,48 @@ public sealed class WasapiCapture : IMicrophoneDevice
         device.DataAvailable += session.OnData;
         device.RecordingStopped += session.OnStopped;
         return session;
+    }
+
+
+    /// <summary>
+    /// One frame from the queue into the take, the memory and the segmenter, in that order.
+    /// </summary>
+    /// <remarks>
+    /// The segmenter is fed the same committed frames, inside the ordered drain, because order
+    /// is the whole contract: a segmenter fed out of order would place seams in the wrong places.
+    /// The memory cap is judged here too, and with a listener it ends the take: frames past the
+    /// cap are refused so that the WAV and the buffer describe the same recording.
+    /// </remarks>
+    private void Commit(Session session, float[] frame)
+    {
+        session.Writer.Append(frame);
+        bool kept = session.Buffered.Append(frame);
+        session.Segments.Submit(frame);
+        if (kept || OnMemoryLimitReached is not { } limitReached || session.LimitReported) { return; }
+
+        session.LimitReported = true;
+        session.Close();
+        DiagnosticLog.Emit("capture.memory-limit", ("session", session.Number), ("samples", session.Samples));
+        limitReached();
+    }
+
+    public Task SetSegmentSink(Action<float[]>? sink)
+    {
+        lock (gate)
+        {
+            segmentSink = sink;
+            current?.Segments.SetSink(sink);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task<int> ConsumedSampleCount()
+    {
+        Session? session;
+        lock (gate) { session = latest; }
+
+        return Task.FromResult(session?.Segments.DrainConsumedSampleCount() ?? 0);
     }
 
     /// <summary>
@@ -683,15 +805,19 @@ public sealed class WasapiCapture : IMicrophoneDevice
             WAVWriter writer,
             FrameSink sink,
             RecognitionSampleBuffer buffered,
+            RecordingSegmentAttachment segments,
             BufferedWaveProvider incoming,
             ISampleProvider pipeline,
-            AudioStreamFormat deviceFormat)
+            AudioStreamFormat deviceFormat,
+            bool isPreferredDevice)
         {
             Number = number;
+            IsPreferredDevice = isPreferredDevice;
             Device = device;
             Writer = writer;
             Sink = sink;
             Buffered = buffered;
+            Segments = segments;
             Incoming = incoming;
             Pipeline = pipeline;
             DeviceFormat = deviceFormat;
@@ -708,11 +834,19 @@ public sealed class WasapiCapture : IMicrophoneDevice
 
         public RecognitionSampleBuffer Buffered { get; }
 
+        public RecordingSegmentAttachment Segments { get; }
+
+        /// <summary>The memory cap has been announced for this take. Once, never per frame.</summary>
+        public bool LimitReported { get; set; }
+
         public BufferedWaveProvider Incoming { get; }
 
         public ISampleProvider Pipeline { get; }
 
         public AudioStreamFormat DeviceFormat { get; }
+
+        /// <summary>Whether the take records through the microphone the person chose, not the default.</summary>
+        public bool IsPreferredDevice { get; }
 
         public bool IsResampled => DeviceFormat.SampleRate != RecordingFormat.SampleRate
             || DeviceFormat.Channels != RecordingFormat.Channels;

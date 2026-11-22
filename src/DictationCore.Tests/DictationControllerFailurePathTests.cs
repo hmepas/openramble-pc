@@ -225,7 +225,7 @@ public sealed class DictationControllerFailurePathTests
             inserter: inserter,
             overlay: overlay,
             sounds: new SilentSounds(),
-            pipeline: () => new TextPipeline(allowPressReturnCommand: allowPressReturnCommand),
+            pipeline: _ => new TextPipeline(allowPressReturnCommand: allowPressReturnCommand),
             now: () => clock?.Now ?? DateTimeOffset.Now);
     }
 
@@ -319,12 +319,12 @@ public sealed class DictationControllerFailurePathTests
         // nobody needs a second copy of it on disk - a private tool does not
         // stack up dictated text for no reason.
         inserter.SetReturnError(new TextInsertionError.ModifiersStillHeld());
-        var controller = MakeController(recognized: "готово отправь", allowPressReturnCommand: true);
+        var controller = MakeController(recognized: "готово. отправь", allowPressReturnCommand: true);
 
         await RunFullDictation(controller);
 
         // The text must stay inserted.
-        Assert.Equal(["Готово"], inserter.InsertedTexts);
+        Assert.Equal(["Готово."], inserter.InsertedTexts);
         Assert.Equal(DictationNoticeKind.Warning, overlay.Notices[0].Kind);
         // The message must explain that it is the keypress that failed.
         Assert.Contains(overlay.Notices, notice => notice.Message.Contains("Return", StringComparison.Ordinal));
@@ -336,7 +336,7 @@ public sealed class DictationControllerFailurePathTests
     [Fact]
     public async Task TestSuccessfulReturnLeavesNoNotice()
     {
-        var controller = MakeController(recognized: "готово отправь", allowPressReturnCommand: true);
+        var controller = MakeController(recognized: "готово. отправь", allowPressReturnCommand: true);
 
         await RunFullDictation(controller);
 

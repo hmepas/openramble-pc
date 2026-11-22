@@ -1,3 +1,5 @@
+using DictationCore;
+
 namespace OpenRamble.AppCore.Tests;
 
 /// <summary>
@@ -427,5 +429,44 @@ public sealed class KeptHistoryEntryTests : IDisposable
         Assert.Single(loaded);
         Assert.Equal("from an older build", loaded[0].Text);
         Assert.False(loaded[0].IsKept);
+    }
+
+    /// <summary>
+    /// The kind of app a take went to stays with it, so recognizing it again shapes the text
+    /// the same way, and the new text is stored the way a take's text is.
+    /// </summary>
+    [Fact]
+    public void TestTheAppKindStaysWithTheEntryAndReRecognitionIsTrimmedLikeATake()
+    {
+        DictationHistoryStore store = Store();
+        _ = store.Record("Dear John.", null, 10, appCategory: ApplicationCategory.Mail);
+        HistoryEntry entry = new DictationHistoryStore(directory).Load()[0];
+        Assert.Equal(ApplicationCategory.Mail, entry.AppCategory);
+
+        IReadOnlyList<HistoryEntry> updated = store.ReplaceText("Dear John,\n\nthanks. ", entry);
+        HistoryEntry changed = updated.First(candidate => candidate.Id == entry.Id);
+        Assert.Equal(ApplicationCategory.Mail, changed.AppCategory);
+        Assert.Equal("Dear John,\n\nthanks.", changed.Text);
+    }
+
+    /// <summary>
+    /// A history written before the app kind was kept, or by a later version that knows a kind
+    /// this one does not, still loads; such an entry is recognized again verbatim, as it always
+    /// was. The names are the ones the macOS history writes.
+    /// </summary>
+    [Fact]
+    public void TestAHistoryWithoutAKnownAppKindStillLoads()
+    {
+        string older =
+            $$"""
+            [{"id":"{{Guid.NewGuid()}}","date":"2026-08-01T10:00:00+00:00","text":"from an older build","audioFileName":null},
+             {"id":"{{Guid.NewGuid()}}","date":"2026-08-01T10:00:00+00:00","text":"from a newer build","audioFileName":null,"appCategory":"hologram"},
+             {"id":"{{Guid.NewGuid()}}","date":"2026-08-01T10:00:00+00:00","text":"from a mac","audioFileName":null,"appCategory":"codeEditor"}]
+            """;
+        File.WriteAllText(Path.Combine(directory, "history.json"), older);
+
+        IReadOnlyList<HistoryEntry> loaded = Store().Load();
+        Assert.Equal(["from an older build", "from a newer build", "from a mac"], loaded.Select(entry => entry.Text));
+        Assert.Equal([null, null, ApplicationCategory.CodeEditor], loaded.Select(entry => entry.AppCategory));
     }
 }

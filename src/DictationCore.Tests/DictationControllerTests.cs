@@ -248,7 +248,7 @@ public sealed class DictationControllerTests
             inserter: inserter,
             overlay: overlay,
             sounds: sounds,
-            pipeline: () => new TextPipeline(replacements: replacements ?? []));
+            pipeline: _ => new TextPipeline(replacements: replacements ?? []));
 
     /// <summary>Let the controller's background tasks finish their work.</summary>
     private static async Task Settle(int iterations = 12)

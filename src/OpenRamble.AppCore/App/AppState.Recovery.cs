@@ -101,6 +101,10 @@ public sealed partial class AppState
         }
 
         TargetApplication? target = inserter.FrontmostApplication();
+        // The words were shaped for the app they were dictated into; the app in front now may be
+        // a terminal, which never gets a paragraph break. The menu keeps them as they were, for a
+        // retry into a prose app.
+        string fitted = ParagraphBreaks.Fit(text, new PromptModePolicy().Mode(target));
         DictationStateValue = DictationState.Inserting;
 
         _ = Task.Run(async () =>
@@ -108,7 +112,7 @@ public sealed partial class AppState
             try
             {
                 await overlay.Dismiss().ConfigureAwait(false);
-                await inserter.Insert(text, target).ConfigureAwait(false);
+                await inserter.Insert(fitted, target).ConfigureAwait(false);
 
                 // The words already joined Recent Dictations at failure time; appending again
                 // here would duplicate them. The provenance slot is cleared too: it still holds

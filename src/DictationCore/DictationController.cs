@@ -106,7 +106,8 @@ public sealed class DictationController
     public Action? OnTranscriptionStall { get; set; }
 
     /// <summary>
-    /// A take that produced text, with the audio still on disk.
+    /// A take that produced text, with the audio still on disk, and the app the words were
+    /// shaped for.
     ///
     /// Called after insertion is attempted and before the recording is deleted, so an owner
     /// that keeps a history gets both halves of the take while both still exist. Whether the
@@ -120,7 +121,7 @@ public sealed class DictationController
     /// Returns whether the take was kept. With no words, the notice tells the person where the
     /// take went, and only the owner knows.
     /// </summary>
-    public Func<string, string, bool>? OnTakeFinished { get; set; }
+    public Func<string, string, TargetApplication?, bool>? OnTakeFinished { get; set; }
 
     /// <summary>
     /// The name of the microphone the takes are recorded from, for the one message that needs
@@ -199,7 +200,11 @@ public sealed class DictationController
     private readonly IOverlayPresenting overlay;
     private readonly ISounding sounds;
     private readonly IRecordingRecoveryStoring recordingRecovery;
-    private readonly Func<ITextProcessing> pipeline;
+    /// <summary>
+    /// Built per take, for the app the words are going to: a terminal gets verbatim text and may
+    /// honour "Send it.", a mail window gets paragraphs.
+    /// </summary>
+    private readonly Func<TargetApplication?, ITextProcessing> pipeline;
 
     /// <summary>
     /// Key-down destination. Production may supply a pre-populated snapshot so that no system
@@ -399,7 +404,7 @@ public sealed class DictationController
         ISounding sounds,
         Func<float[], CancellationToken, Task<ASRResult>>? transcribeSamples = null,
         IRecordingRecoveryStoring? recordingRecovery = null,
-        Func<ITextProcessing>? pipeline = null,
+        Func<TargetApplication?, ITextProcessing>? pipeline = null,
         Func<DateTimeOffset>? now = null,
         Func<MonotonicInstant>? monotonicNow = null,
         Func<TimeSpan, TimeSpan>? transcriptionDeadline = null,
@@ -429,7 +434,7 @@ public sealed class DictationController
         this.overlay = overlay;
         this.sounds = sounds;
         this.recordingRecovery = recordingRecovery ?? new DiscardingRecordingRecovery();
-        this.pipeline = pipeline ?? (static () => new TextPipeline());
+        this.pipeline = pipeline ?? (static _ => new TextPipeline());
         this.now = now ?? (static () => DateTimeOffset.Now);
         this.monotonicNow = monotonicNow ?? (static () => MonotonicInstant.Now);
         this.transcriptionDeadline = transcriptionDeadline ?? TranscriptionDeadline.Deadline;
@@ -1078,6 +1083,7 @@ public sealed class DictationController
                         {
                             return await JoinStreamed(
                                 pieces.Texts,
+                                streamed!.RecognizedWords,
                                 streamed!.SubmittedSampleCounts,
                                 consumedSamples,
                                 bufferedSamples,
@@ -1112,6 +1118,7 @@ public sealed class DictationController
 
                         return await JoinStreamed(
                             filePieces.Texts,
+                            streamed!.RecognizedWords,
                             streamed!.SubmittedSampleCounts,
                             consumedSamples,
                             fileSamples,
@@ -1240,8 +1247,32 @@ public sealed class DictationController
                 StreamedSegments: streamedSegmentCount)
             : null;
 
-        TextPipeline.RunResult run = pipeline().Run(recognized.Text);
+        TargetApplication? insertionTarget;
+        lock (gate) { insertionTarget = targetApplication; }
+
+        // A long pause after a sentence marks a paragraph; the pipeline decides whether the app
+        // the words are going to wants one.
+        TextPipeline.RunResult run = pipeline(insertionTarget)
+            .Run(ParagraphBreaks.Mark(recognized.Text, recognized.Words));
         TextPipeline.Output processed = run.Output;
+        if (!RecognizedTextPolicy.CarriesWords(processed.Text) && RecognizedTextPolicy.CarriesWords(recognized.Text))
+        {
+            // Words were heard and cleanup left nothing: a take that was only a correction or
+            // only hesitation. That is not a failure, so no alarm - and the take stays in
+            // History with what was heard, so a take-back the person did not mean can be undone.
+            Func<string, string, TargetApplication?, bool>? keep;
+            lock (gate) { keep = OnTakeFinished; }
+
+            _ = keep?.Invoke(recognized.Text, recording.Url, insertionTarget);
+            await Discard(recording.Url).ConfigureAwait(false);
+            await Report(new DictationNotice(
+                kind: DictationNoticeKind.Info,
+                message: "Nothing left to insert after cleanup.",
+                wordsDidNotLand: false)).ConfigureAwait(false);
+            await Cleanup(session).ConfigureAwait(false);
+            return;
+        }
+
         if (!RecognizedTextPolicy.CarriesWords(processed.Text))
         {
             // An empty result is not an error: the person could have stayed silent, spoken too
@@ -1270,10 +1301,10 @@ public sealed class DictationController
         // The last moment the take still exists. Whoever keeps a history has to take its copy
         // now; the next line deletes the original, and that deletion is the promise that a
         // recording does not outlive its use.
-        Func<string, string, bool>? takeFinished;
+        Func<string, string, TargetApplication?, bool>? takeFinished;
         lock (gate) { takeFinished = OnTakeFinished; }
 
-        _ = takeFinished?.Invoke(processed.Text, recording.Url);
+        _ = takeFinished?.Invoke(processed.Text, recording.Url, insertionTarget);
         await Discard(recording.Url).ConfigureAwait(false);
     }
 
@@ -1336,10 +1367,15 @@ public sealed class DictationController
         {
             // Handed over here, and nothing waits between this and the notice, so the person is
             // told where the take went exactly when it got there.
-            Func<string, string, bool>? takeFinished;
-            lock (gate) { takeFinished = OnTakeFinished; }
+            Func<string, string, TargetApplication?, bool>? takeFinished;
+            TargetApplication? target;
+            lock (gate)
+            {
+                takeFinished = OnTakeFinished;
+                target = targetApplication;
+            }
 
-            bool kept = takeFinished?.Invoke(string.Empty, url) == true;
+            bool kept = takeFinished?.Invoke(string.Empty, url, target) == true;
             if (kept) { await Discard(url).ConfigureAwait(false); }
 
             notice = new DictationNotice(
@@ -1366,6 +1402,7 @@ public sealed class DictationController
     /// </summary>
     private static async Task<ASRResult> JoinStreamed(
         IReadOnlyList<string> texts,
+        IReadOnlyList<IReadOnlyList<ASRResult.Word>> segmentWords,
         IReadOnlyList<int> segmentSampleCounts,
         int consumedSamples,
         float[] samples,
@@ -1395,6 +1432,19 @@ public sealed class DictationController
             tailStart = Math.Max(0, tailStart - segmentSampleCounts[^1]);
         }
 
+        // Word timings on the take's own clock, for paragraph breaks. Kept only while every
+        // piece with text brought its words; otherwise none, because a partial list cannot be
+        // matched to the text.
+        List<ASRResult.Word>? words = segmentWords.Count == texts.Count ? [] : null;
+        int offset = 0;
+        for (int index = 0; index < pieces.Count; index += 1)
+        {
+            IReadOnlyList<ASRResult.Word> pieceWords = index < segmentWords.Count ? segmentWords[index] : [];
+            if (pieces[index].Trim().Length != 0 && pieceWords.Count == 0) { words = null; }
+            words?.AddRange(Shift(pieceWords, offset));
+            offset += segmentSampleCounts[index];
+        }
+
         TimeSpan processing = TimeSpan.Zero;
         TimeSpan dispatch = TimeSpan.Zero;
         float[] tail = samples[tailStart..];
@@ -1402,6 +1452,8 @@ public sealed class DictationController
         {
             ASRResult result = await transcribe(tail, token).ConfigureAwait(false);
             pieces.Add(result.Text);
+            if (result.Text.Trim().Length != 0 && result.Words.Count == 0) { words = null; }
+            words?.AddRange(Shift(result.Words, tailStart));
             processing = result.ProcessingDuration;
             dispatch = result.EngineDispatchDuration;
         }
@@ -1415,10 +1467,18 @@ public sealed class DictationController
         // arithmetically true and describe a wait nobody had.
         return new ASRResult(
             text,
+            words: words ?? [],
             audioDuration: TimeSpan.FromSeconds((double)samples.Length / SampleRate),
             processingDuration: processing,
             engineDispatchDuration: dispatch,
             decodingDuration: decodingDuration);
+    }
+
+    /// <summary>Move a piece's word timings onto the take's clock.</summary>
+    private static IEnumerable<ASRResult.Word> Shift(IReadOnlyList<ASRResult.Word> words, int samples)
+    {
+        TimeSpan seconds = TimeSpan.FromSeconds((double)samples / SampleRate);
+        return words.Select(word => word with { Start = word.Start + seconds, End = word.End + seconds });
     }
 
     /// <summary>A stage that did not run is absent, never zero. Zero is a measurement.</summary>

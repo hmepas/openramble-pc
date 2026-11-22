@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace DictationCore;
 
 /// <summary>
@@ -72,8 +74,15 @@ public static class TrailingCommandParser
                 if (!strippedTail.EndsWith(phrase, StringComparison.Ordinal)) { continue; }
 
                 // The command must be a separate word, not the tail of another.
+                // Any whitespace sets it apart: after a long pause in prose the
+                // paragraph mark has already become a blank line. What touches
+                // the command is the last scalar before it: " ́" is one
+                // character that starts with a space and ends with a mark.
                 int cutoff = tailCharacters.Length - GraphemeText.Count(phrase);
-                if (cutoff > 0 && tailCharacters[cutoff - 1] != " ") { continue; }
+                if (cutoff > 0 && !Rune.IsWhiteSpace(tailCharacters[cutoff - 1].EnumerateRunes().Last()))
+                {
+                    continue;
+                }
 
                 string withoutCommand = StripSuffix(phrase, trimmed).Trim(CommandSeparators);
 
@@ -146,16 +155,16 @@ public static class TrailingCommandParser
 /// | 2 | dictionary: exact pass         | literal dictionary entries, with cases                                       |
 /// | 3 | span detection                 | first calculation of protected pieces                                        |
 /// | 4 | dictionary: phonetic selection | guesses - only outside of spans                                              |
-/// | 5 | (language model cleaning)      | reserved, no stage in this wave                                              |
+/// | 5 | Clean Verbatim                 | deletes hesitations, stutters, spoken corrections - never rewords; spans are atomic |
 /// | 6 | (snippets)                     | reserved, no stage in this wave                                              |
 /// | 7 | typography-fold                | 12 characters, no spans                                                      |
 /// | 8 | polisher                       | spaces, punctuation, first letter - outside of spans                         |
 /// | 9 | materialize NewLine            | strictly last: the polisher trims the line break                             |
 /// </code>
 ///
-/// Stages 5 and 6 are reserved <b>as a comment, not as code</b>: a stub that
-/// does nothing is a ceremony, not a contract. When they appear they stand
-/// between 4 and 7, and the span gate will pick them up itself.
+/// Stage 6 is reserved <b>as a comment, not as code</b>: a stub that does
+/// nothing is a ceremony, not a contract. When it appears it stands between
+/// 5 and 7, and the span gate will pick it up itself.
 ///
 /// The key to the entire protection model: <b>exact replacement comes before spans exist
 /// at all</b>. This is the rule "the clear will of a person is higher than the protection of a
@@ -206,11 +215,15 @@ public sealed record TextPipeline : ITextProcessing
     public TextPipeline(
         IReadOnlyList<DictionaryReplacement>? replacements = null,
         bool allowPressReturnCommand = false,
-        bool phoneticMatching = true)
+        bool phoneticMatching = true,
+        bool spokenCorrections = true,
+        PromptMode mode = PromptMode.Verbatim)
     {
         this.replacements = replacements ?? [];
         this.allowPressReturnCommand = allowPressReturnCommand;
         this.phoneticMatching = phoneticMatching;
+        this.spokenCorrections = spokenCorrections;
+        this.mode = mode;
     }
 
     private readonly IReadOnlyList<DictionaryReplacement> replacements;
@@ -221,6 +234,57 @@ public sealed record TextPipeline : ITextProcessing
     /// at all on top of the acoustic prompt" (WAI_EVAL_PIPELINE=exact).
     /// </summary>
     private readonly bool phoneticMatching;
+
+    /// <summary>
+    /// "Scratch that" removes a sentence when dictating; a meeting transcript
+    /// keeps what was said. See <see cref="CleanVerbatim"/>.
+    /// </summary>
+    private readonly bool spokenCorrections;
+
+    /// <summary>
+    /// Where the text is going. Prose apps get paragraph breaks; verbatim apps
+    /// (terminals, editors, anything unknown) never receive a newline they did
+    /// not ask for. See <see cref="PromptModePolicy"/>.
+    /// </summary>
+    private readonly PromptMode mode;
+
+    /// <summary>
+    /// Whether <paramref name="text"/> closes with a full stop, question mark, exclamation or
+    /// ellipsis - what makes a trailing command its own sentence.
+    /// </summary>
+    internal static bool EndsSentence(string text)
+    {
+        string[] characters = GraphemeText.Split(text.Trim());
+        return characters.Length != 0 && CleanVerbatim.SentenceEnding.Contains(characters[^1]);
+    }
+
+    /// <summary>Stages 2-8: everything between the command parser and the newline.</summary>
+    private (string AfterDictionary, string Polished) Transform(string text)
+    {
+        // Stage 2: exact pass - before spans exist.
+        string exact = DictionaryReplacements.ApplyExact(replacements, text);
+        // Stage 3: the first calculation of spans is based on the result of exact replacements.
+        IReadOnlyList<ProtectedSpan> spansAfterExact = ProtectedSpanDetector.Detect(exact);
+        // Stage 4: phonetic selection outside of spans.
+        string afterDictionary = phoneticMatching
+            ? DictionaryReplacements.ApplyPhonetic(replacements, exact, spansAfterExact)
+            : exact;
+
+        // Stage 5: Clean Verbatim - only deletes, so it cannot write a word
+        // that was not said. `afterDictionary` stays the checkpoint before it.
+        string cleaned = CleanVerbatim.Clean(
+            afterDictionary,
+            spokenCorrections: spokenCorrections,
+            protectedWords: CleanVerbatim.ProtectedWords(replacements),
+            mode: mode);
+
+        // Stage 7: collapsing typography outside of spans.
+        string folded = TypographyFold.Fold(
+            cleaned,
+            ProtectedSpanDetector.Detect(cleaned));
+        // Stage 8: polisher (recalculates spans itself).
+        return (afterDictionary, TranscriptPolisher.Polish(folded));
+    }
 
     public Output Process(string recognized) => Run(recognized).Output;
 
@@ -234,30 +298,63 @@ public sealed record TextPipeline : ITextProcessing
     /// </summary>
     public RunResult Run(string recognized)
     {
+        // Stage 0: a paragraph mark (`ParagraphBreaks`) is a blank line where
+        // prose is going and a plain space everywhere else.
+        recognized = recognized.Replace(
+            ParagraphBreaks.Marker.ToString(),
+            mode == PromptMode.Prose ? "\n\n" : " ",
+            StringComparison.Ordinal);
         TrailingCommandParser.Result parsed = TrailingCommandParser.Parse(recognized);
-        // In safe beta, the Send/Return voice command is disabled: one false
-        // trigger irreversibly submits the message or form. The parser itself
-        // remains separately testable for a possible explicit mode later.
-        if (parsed.Command == TrailingCommand.PressReturn && !allowPressReturnCommand)
+        // Return is pressed only where the caller allows it (terminals) and
+        // only for a command said as its own final sentence: "…first. Send it."
+        // One false trigger submits irreversibly, so "…and then we send it"
+        // mid-thought stays words.
+        bool refusedOnlyAsMidSentence = false;
+        if (parsed.Command == TrailingCommand.PressReturn
+            && (!allowPressReturnCommand || !EndsSentence(parsed.Text)))
         {
+            refusedOnlyAsMidSentence = allowPressReturnCommand;
             parsed = new TrailingCommandParser.Result(text: recognized, command: null);
         }
 
-        // Stage 2: exact pass - before spans exist.
-        string exact = DictionaryReplacements.ApplyExact(replacements, parsed.Text);
-        // Stage 3: the first calculation of spans is based on the result of exact replacements.
-        IReadOnlyList<ProtectedSpan> spansAfterExact = ProtectedSpanDetector.Detect(exact);
-        // Stage 4: phonetic selection outside of spans.
-        string afterDictionary = phoneticMatching
-            ? DictionaryReplacements.ApplyPhonetic(replacements, exact, spansAfterExact)
-            : exact;
+        (string AfterDictionary, string Polished) stages = Transform(parsed.Text);
+        // A hesitation or stutter right before "Send it." hides it from the
+        // parser above ("…first. Um, send it.") and is gone once the text is
+        // clean, so Return is decided once more on the cleaned text, by the
+        // same rules: allowed here, and "Send it." as its own final sentence.
+        // Only when "Send it." was the last thing said: words after it that
+        // cleanup removed ("Stop, scratch that.") were taking the send back,
+        // and a dictionary entry that writes "send it" was never the command.
+        // The sentence end has to be said as well, so it is checked again on
+        // what was said, cleaned the same way but without the dictionary: a
+        // full stop an entry writes ("Acme Inc.") is not one.
+        if (refusedOnlyAsMidSentence && parsed.Command is null)
+        {
+            TrailingCommandParser.Result said = TrailingCommandParser.Parse(
+                CleanVerbatim.Clean(recognized, spokenCorrections: spokenCorrections, mode: mode));
+            TrailingCommandParser.Result cleaned = TrailingCommandParser.Parse(stages.Polished);
+            if (said.Command == TrailingCommand.PressReturn && EndsSentence(said.Text)
+                && cleaned.Command == TrailingCommand.PressReturn && EndsSentence(cleaned.Text))
+            {
+                parsed = cleaned;
+                stages.Polished = cleaned.Text.Trim();
+            }
+        }
 
-        // Stage 7: collapsing typography outside of spans.
-        string folded = TypographyFold.Fold(
-            afterDictionary,
-            ProtectedSpanDetector.Detect(afterDictionary));
-        // Stage 8: polisher (recalculates spans itself).
-        string polished = TranscriptPolisher.Polish(folded);
+        // A command with nothing left to act on is just words, as when it is
+        // spoken alone - never an empty insert that reads as "nothing was
+        // recognized" with the command silently gone. Before a Return, nothing
+        // but hesitation is nothing too: "Um. Send it." never sends "Um.".
+        if (parsed.Command is { } command
+            && (stages.Polished.Length == 0
+                || (command == TrailingCommand.PressReturn && CleanVerbatim.IsOnlyHesitation(stages.Polished))))
+        {
+            parsed = new TrailingCommandParser.Result(text: recognized, command: null);
+            stages = Transform(recognized);
+        }
+
+        string afterDictionary = stages.AfterDictionary;
+        string polished = stages.Polished;
 
         // Stage 9: materialization of the "new line" - strictly the last one, otherwise
         // the polisher will cut off the break with its trim.

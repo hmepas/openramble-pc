@@ -53,11 +53,13 @@ public sealed partial class AppState
     /// recording looks exactly like a history of someone who stopped dictating.
     /// </summary>
     /// <returns>Whether History holds the take now - what a wordless take's notice says.</returns>
-    private bool Archive(string text, string audio)
+    private bool Archive(string text, string audio, TargetApplication? target)
     {
         if (historyStore is null) { return false; }
+        // The kind of app, never its name: enough to shape the text again the same way.
+        ApplicationCategory category = PromptModePolicy.Category(target);
         IReadOnlyList<HistoryEntry>? recorded = TryHistory(
-            () => historyStore.Record(text, audio, HistoryLimit, now()),
+            () => historyStore.Record(text, audio, HistoryLimit, now(), category),
             "history.record.failed");
         if (recorded is null) { return false; }
         History = recorded;
@@ -105,6 +107,10 @@ public sealed partial class AppState
     /// than blanking a record of something the person actually said.
     ///
     /// A take that had no words and still has none says so, and keeps its row.
+    ///
+    /// The text is shaped for the kind of app the take went to, exactly as the take was:
+    /// paragraphs (spoken and at pauses) where it went to prose, "Send it." left off where it
+    /// went to a terminal. Only the text is kept; nothing is pressed or inserted.
     /// </summary>
     public void RetranscribeHistoryEntry(HistoryEntry entry)
     {
@@ -128,11 +134,25 @@ public sealed partial class AppState
             try
             {
                 ASRResult result = await transcriber.Transcribe(audio).ConfigureAwait(false);
-                string text = MakePipeline().Run(result.Text).Output.Text;
+                string text = MakePipeline(entry.AppCategory ?? ApplicationCategory.Unknown)
+                    .Run(ParagraphBreaks.Mark(result.Text, result.Words))
+                    .Output.Text;
                 if (historyStore is null) { return; }
                 if (entry.Text.Length == 0 && !RecognizedTextPolicy.CarriesWords(text))
                 {
                     Notify(new DictationNotice(DictationNoticeKind.Info, "Still nothing recognized."));
+                    return;
+                }
+
+                // An empty run keeps the words already there rather than blanking a record of
+                // something the person said.
+                if (text.Length == 0)
+                {
+                    Notify(new DictationNotice(
+                        DictationNoticeKind.Info,
+                        result.Text.Trim().Length != 0
+                            ? "Nothing left after cleanup — the text was kept."
+                            : "Nothing new was recognized — the text was kept."));
                     return;
                 }
 

@@ -41,9 +41,9 @@ public sealed class EmptyTakeTests : IDisposable
             inserter: inserter,
             overlay: overlay,
             sounds: sounds,
-            pipeline: () => new TextPipeline(),
+            pipeline: _ => new TextPipeline(),
             readSamples: readSamples);
-        controller.OnTakeFinished = (text, url) =>
+        controller.OnTakeFinished = (text, url, _) =>
         {
             if (!historyKeeps) { return false; }
             lock (archived) { archived.Add((text, url)); }
@@ -215,7 +215,7 @@ public sealed class EmptyTakeTests : IDisposable
             inserter: inserter,
             overlay: overlay,
             sounds: sounds,
-            pipeline: () => new TextPipeline());
+            pipeline: _ => new TextPipeline());
         controller.MicrophoneName = () => "Test Mic";
 
         await Dictate(controller);

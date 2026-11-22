@@ -11,14 +11,25 @@ public sealed partial class AppState
     /// There used to be two, and they were already diverging - the replay was losing the trailing
     /// command. A shared builder makes "both paths are the same" a property of the code rather
     /// than something to remember while editing one of two places.
+    ///
+    /// <paramref name="category"/> is the kind of app the words are going to. Prose apps get
+    /// paragraph breaks; terminals get verbatim text and may honour a spoken "Send it."; an
+    /// unknown app is treated as verbatim. A take recognized again from History uses the kind
+    /// its take went to.
     /// </summary>
-    private ITextProcessing MakePipeline() =>
+    private ITextProcessing MakePipeline(
+        ApplicationCategory category = ApplicationCategory.Unknown,
+        bool spokenCorrections = true) =>
         // The safe built-in technical vocabulary is part of recognition, not a hidden setup
         // chore. Personal entries win when they use the same heard spelling. The trailing
         // space is a wrapper rather than a stage: a personal preference has no business inside
         // the shared rule set.
         new TrailingSpacePipeline(
-            new TextPipeline([.. StarterDictionary.Missing(Replacements), .. Replacements]),
+            new TextPipeline(
+                [.. StarterDictionary.Missing(Replacements), .. Replacements],
+                allowPressReturnCommand: category == ApplicationCategory.Terminal,
+                spokenCorrections: spokenCorrections,
+                mode: category.DefaultMode()),
             AppendsTrailingSpace);
 
     /// <summary>

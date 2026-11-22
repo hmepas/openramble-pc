@@ -142,7 +142,7 @@ internal static class ProtectedSpanDetector
         int cursor = openEnd;
         while (cursor < characters.Length)
         {
-            if (characters[cursor] == "\n") { return null; }
+            if (characters[cursor].Contains('\n', StringComparison.Ordinal)) { return null; }
             if (characters[cursor] != "`") { cursor += 1; continue; }
 
             int closeEnd = cursor;

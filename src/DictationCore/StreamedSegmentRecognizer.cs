@@ -47,6 +47,11 @@ public sealed class StreamedSegmentRecognizer
     /// segment and re-recognize it with the tail.
     /// </summary>
     private readonly List<string> texts = [];
+
+    /// <summary>
+    /// Each segment's word timings, on the segment's own clock. Aligned with <see cref="texts"/>.
+    /// </summary>
+    private readonly List<IReadOnlyList<ASRResult.Word>> words = [];
     private readonly List<int> sampleCounts = [];
     private Exception? failure;
     private bool stopped;
@@ -86,7 +91,7 @@ public sealed class StreamedSegmentRecognizer
         try
         {
             ASRResult result = await transcribe(samples).ConfigureAwait(false);
-            Append(result.Text.Trim());
+            Append(result.Text.Trim(), result.Words);
         }
         catch (Exception error)
         {
@@ -96,7 +101,7 @@ public sealed class StreamedSegmentRecognizer
 
     private bool IsAbandoned { get { lock (gate) { return failure is not null || cancelled; } } }
 
-    private void Append(string text)
+    private void Append(string text, IReadOnlyList<ASRResult.Word> segmentWords)
     {
         lock (gate)
         {
@@ -107,6 +112,7 @@ public sealed class StreamedSegmentRecognizer
             // what the owner uses to take the last segment back when the tail turns out too short
             // to stand alone. The blanks are filtered where the pieces are joined.
             texts.Add(text);
+            words.Add(segmentWords);
         }
     }
 
@@ -168,6 +174,12 @@ public sealed class StreamedSegmentRecognizer
     /// the stream actually ran.
     /// </summary>
     public int RecognizedCount { get { lock (gate) { return texts.Count; } } }
+
+    /// <summary>
+    /// Word timings of the recognized segments, each on its segment's own clock, aligned with
+    /// the texts <see cref="Finish"/> returns.
+    /// </summary>
+    public IReadOnlyList<IReadOnlyList<ASRResult.Word>> RecognizedWords { get { lock (gate) { return words.ToArray(); } } }
 
     /// <summary>
     /// Sample counts of the segments handed over, in order.

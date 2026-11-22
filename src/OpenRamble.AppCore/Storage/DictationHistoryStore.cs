@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DictationCore;
 
 namespace OpenRamble.AppCore;
 
@@ -16,18 +17,72 @@ namespace OpenRamble.AppCore;
 /// load. A store that refused its own older files would lose the very dictations this flag
 /// exists to protect.
 /// </param>
+/// <param name="AppCategory">
+/// The kind of app the take went to, so recognizing it again shapes the text the same way:
+/// paragraphs where it went to prose, "Send it." left off where it went to a terminal.
+///
+/// Absent on entries written before it was kept, and on a kind a later version added; those
+/// are recognized again verbatim, as they always were, rather than failing the whole history.
+/// The kind, never the app's name.
+/// </param>
 [method: JsonConstructor]
 public sealed record HistoryEntry(
     Guid Id,
     DateTimeOffset Date,
     string Text,
     string? AudioFileName,
-    bool IsKept = false)
+    bool IsKept = false,
+    [property: JsonConverter(typeof(LenientApplicationCategoryConverter))] ApplicationCategory? AppCategory = null)
 {
-    public HistoryEntry(DateTimeOffset date, string text, string? audioFileName, bool isKept = false)
-        : this(Guid.NewGuid(), date, text, audioFileName, isKept)
+    public HistoryEntry(
+        DateTimeOffset date,
+        string text,
+        string? audioFileName,
+        bool isKept = false,
+        ApplicationCategory? appCategory = null)
+        : this(Guid.NewGuid(), date, text, audioFileName, isKept, appCategory)
     {
     }
+}
+
+/// <summary>
+/// <see cref="ApplicationCategory"/> under the names the macOS history writes ("terminal",
+/// "codeEditor"), and nothing - rather than a failed history - for a name this build does not
+/// know.
+/// </summary>
+internal sealed class LenientApplicationCategoryConverter : JsonConverter<ApplicationCategory?>
+{
+    public override ApplicationCategory? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String)
+        {
+            reader.Skip();
+            return null;
+        }
+
+        string? name = reader.GetString();
+        foreach (ApplicationCategory category in Enum.GetValues<ApplicationCategory>())
+        {
+            if (Name(category) == name) { return category; }
+        }
+
+        return null;
+    }
+
+    public override void Write(Utf8JsonWriter writer, ApplicationCategory? value, JsonSerializerOptions options)
+    {
+        if (value is { } category)
+        {
+            writer.WriteStringValue(Name(category));
+        }
+        else
+        {
+            writer.WriteNullValue();
+        }
+    }
+
+    private static string Name(ApplicationCategory category) =>
+        JsonNamingPolicy.CamelCase.ConvertName(category.ToString());
 }
 
 /// <summary>
@@ -150,7 +205,8 @@ public sealed class DictationHistoryStore
         string text,
         string? audio,
         int limit,
-        DateTimeOffset? date = null)
+        DateTimeOffset? date = null,
+        ApplicationCategory? appCategory = null)
     {
         string trimmedText = text.Trim();
         if (trimmedText.Length == 0 && audio is null) { return Load(); }
@@ -175,7 +231,7 @@ public sealed class DictationHistoryStore
         }
 
         var entries = new List<HistoryEntry>(Load());
-        entries.Insert(0, new HistoryEntry(date ?? DateTimeOffset.Now, trimmedText, storedName));
+        entries.Insert(0, new HistoryEntry(date ?? DateTimeOffset.Now, trimmedText, storedName, appCategory: appCategory));
         List<HistoryEntry> kept = Trimmed(entries, limit);
         Write(kept);
         return kept;
@@ -240,7 +296,7 @@ public sealed class DictationHistoryStore
     }
 
     /// <summary>
-    /// Put new text on an entry, leaving its audio and star alone.
+    /// Put new text on an entry, leaving its audio, star and app kind alone.
     ///
     /// Trimmed exactly as <see cref="Record"/> trims, so recognizing a take again stores what
     /// the take itself would have stored.

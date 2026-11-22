@@ -47,9 +47,6 @@ public sealed record AppSettings
     /// <summary>Where the dictation panel sits. Stored spelling: <see cref="DictationOverlayPlacements"/>.</summary>
     public string? OverlayPlacement { get; init; }
 
-    /// <summary>When an idle engine gives its memory back. Stored spelling: <see cref="IdleUnloadPolicies"/>.</summary>
-    public string? ModelUnloadTimeout { get; init; }
-
     /// <summary>How many dictations the history keeps; <c>null</c> - the default.</summary>
     public int? HistoryLimit { get; init; }
 

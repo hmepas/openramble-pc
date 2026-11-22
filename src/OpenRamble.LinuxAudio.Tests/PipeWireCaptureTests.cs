@@ -37,6 +37,32 @@ public sealed class PipeWireCaptureTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// A healthy disk lets a dictation outlive the in-memory cap: memory is given up, the file
+    /// keeps every sample, and nothing stops the take (upstream 0.30.4).
+    /// </summary>
+    [Fact]
+    public async Task AHealthyDiskCarriesTheTakePastTheMemoryCap()
+    {
+        var recorder = new FakeRecorderProcess();
+        using var capture = new PipeWireCapture(takes, _ => recorder, maximumBufferedSamples: 1_000);
+        bool limitReached = false;
+        AudioCaptureError? failure = null;
+        capture.OnMemoryLimitReached = () => limitReached = true;
+        capture.Failed = error => failure = error;
+
+        await capture.StartRecording();
+        recorder.Feed(new float[4_000]);
+        Assert.True(await capture.WaitForFirstFrame().WaitAsync(Patience));
+        (string url, TimeSpan duration) = await capture.StopRecording();
+
+        Assert.Equal(TimeSpan.FromSeconds(4_000 / 16_000.0), duration);
+        Assert.Null(await capture.TakeBufferedSamples());
+        Assert.False(limitReached, "a take with a healthy file is never stopped at the cap");
+        Assert.Null(failure);
+        Assert.Equal(44 + (4_000 * 2), new FileInfo(url).Length);
+    }
+
     [Fact]
     public async Task TheTakeHoldsExactlyWhatTheRecorderProduced()
     {

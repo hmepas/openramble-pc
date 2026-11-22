@@ -65,18 +65,19 @@ public sealed class MicrophoneCaptureFormatTests
     }
 
     /// <summary>
-    /// With an owner that ends the take at the cap, the complete bounded prefix is what
-    /// recognition reads - and the frame that did not fit is refused, so the WAV can be closed
-    /// at the same point and the two describe the same recording.
+    /// Without a disk copy to fall back to, the complete bounded prefix is what recognition
+    /// reads - and the frame that did not fit is refused, so the take ends at the same point and
+    /// nothing is recognized with a hole in it.
     /// </summary>
     [Fact]
     public void TestRecognitionBufferKeepsItsPrefixAtTheCapWhenAskedTo()
     {
-        var buffer = new RecognitionSampleBuffer(maximumSamples: 3, keepsPrefixAtLimit: true);
-        Assert.True(buffer.Append([0.1f, 0.2f]));
-        Assert.False(buffer.Append([0.3f, 0.4f]));
+        var buffer = new RecognitionSampleBuffer(maximumSamples: 3);
+        Assert.True(buffer.Append([0.1f, 0.2f], preserveAtLimit: true));
+        Assert.False(buffer.Append([0.3f, 0.4f], preserveAtLimit: true));
         // Once crossed, nothing more is kept: a late frame must not slip in behind the limit.
-        Assert.False(buffer.Append([0.5f]));
+        Assert.False(buffer.Append([0.5f], preserveAtLimit: true));
+        Assert.True(buffer.HoldsTake);
 
         float[]? kept = buffer.Take();
         Assert.NotNull(kept);

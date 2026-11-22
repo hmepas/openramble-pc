@@ -50,6 +50,7 @@ public sealed class StreamedSegmentRecognizer
     private readonly List<int> sampleCounts = [];
     private Exception? failure;
     private bool stopped;
+    private bool cancelled;
 
     public StreamedSegmentRecognizer(Func<float[], Task<ASRResult>> transcribe)
     {
@@ -79,8 +80,8 @@ public sealed class StreamedSegmentRecognizer
         if (previous is not null) { await previous.ConfigureAwait(false); }
 
         // A failure earlier in the chain makes every later segment pointless: the take is going
-        // to be recognized whole regardless.
-        if (HasFailed) { return; }
+        // to be recognized whole regardless. A cancelled take has no use for any of them.
+        if (IsAbandoned) { return; }
 
         try
         {
@@ -93,13 +94,13 @@ public sealed class StreamedSegmentRecognizer
         }
     }
 
-    private bool HasFailed { get { lock (gate) { return failure is not null; } } }
+    private bool IsAbandoned { get { lock (gate) { return failure is not null || cancelled; } } }
 
     private void Append(string text)
     {
         lock (gate)
         {
-            if (failure is not null) { return; }
+            if (failure is not null || cancelled) { return; }
 
             // Appended even when empty. A segment of pure breath recognizes as nothing, and
             // dropping it here would misalign the transcripts from the sample counts - which is
@@ -111,7 +112,29 @@ public sealed class StreamedSegmentRecognizer
 
     private void RecordFailure(Exception error)
     {
-        lock (gate) { failure ??= error; }
+        lock (gate)
+        {
+            if (!cancelled) { failure ??= error; }
+        }
+    }
+
+    /// <summary>
+    /// Unlike <see cref="Finish"/>, abandon queued work. Inference already in flight may finish,
+    /// but it cannot publish its text or start the next old segment.
+    /// </summary>
+    /// <remarks>
+    /// Escape, a microphone that never started, a session that ended: the segments still queued
+    /// belong to a take nobody will insert, and running them would hold the engine against the
+    /// next dictation - and could hand a late result to it.
+    /// </remarks>
+    public void Cancel()
+    {
+        lock (gate)
+        {
+            stopped = true;
+            cancelled = true;
+            texts.Clear();
+        }
     }
 
     /// <summary>
@@ -133,6 +156,7 @@ public sealed class StreamedSegmentRecognizer
 
         lock (gate)
         {
+            if (cancelled) { return new Outcome.Failed(new OperationCanceledException()); }
             if (failure is { } error) { return new Outcome.Failed(error); }
 
             return new Outcome.Recognized(texts.ToArray());

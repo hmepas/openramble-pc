@@ -300,8 +300,9 @@ an application nothing about the rest of the desktop, and what is left is
   suspend stays in "listening" until Escape — the release that happened while
   the machine was down reaches nobody — and a microphone unplugged mid-sentence
   is discovered as an empty recognition rather than as a sentence saying so.
-  (The engine's memory is released on the idle "Unload model" timer on both
-  platforms; memory-pressure eviction went away with upstream 0.9.0.)
+  (The engine's memory is released an hour after the last dictation on both
+  platforms, as upstream 0.33.1 does; memory-pressure eviction went away with
+  upstream 0.9.0.)
 - **Our own windows take dictation directly.** Every window of this shell is
   drawn through XWayland, and `wtype` cannot type into an XWayland window: it
   names one keycode per character in a keymap of its own, and XWayland reads

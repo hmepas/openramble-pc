@@ -194,3 +194,32 @@ public static class DictationDurationPolicy
     // to disk; the transcription deadline scales with the recording; there
     // is no engineering reason left to interrupt anyone mid-sentence.
 }
+
+/// <summary>
+/// Whether a take that the model found no words in heard anything at all.
+/// </summary>
+/// <remarks>
+/// Asked only after recognition came back empty, so quiet speech never gets here: upstream's
+/// model wrote a spoken sentence out at peaks of 0.015, 0.01 and 0.005, while zeros, noise and a
+/// lone click came back empty. A take that came back empty and never reached the floor heard
+/// silence - a muted, dead or wrong microphone, or a person who said nothing - and keeping it
+/// would fill History with rows of nothing.
+/// </remarks>
+public static class SilentTakePolicy
+{
+    /// <summary>The same floor the segmenter uses; reaching it counts as sound.</summary>
+    public const float Floor = SpeechSegmenter.Parameters.DefaultSpeechPeak;
+
+    /// <summary><c>null</c> or empty samples cannot prove silence, so the take is kept.</summary>
+    public static bool HeardOnlySilence(float[]? samples)
+    {
+        if (samples is null || samples.Length == 0) { return false; }
+
+        foreach (float sample in samples)
+        {
+            if (Math.Abs(sample) >= Floor) { return false; }
+        }
+
+        return true;
+    }
+}

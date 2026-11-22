@@ -107,7 +107,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
         HotkeyPicker.ItemsSource = DictationHotkeyInfo.AllCases.Select(hotkey => hotkey.Title).ToArray();
         PlacementPicker.ItemsSource = DictationOverlayPlacements.AllCases.Select(placement => placement.Title).ToArray();
-        UnloadPicker.ItemsSource = IdleUnloadPolicies.AllCases.Select(policy => policy.Label).ToArray();
         ThemePicker.ItemsSource = AppAppearances.AllCases.Select(appearance => appearance.Title).ToArray();
         HistoryLimitPicker.ItemsSource = HistoryLimits.Select(count => $"Last {count}").ToArray();
         CopyShortcutRecorder.Keymap = LinuxShortcutKeymap.Instance;
@@ -115,7 +114,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
         HotkeyPicker.SelectionChanged += (_, _) => Pick(HotkeyPicker, DictationHotkeyInfo.AllCases, hotkey => state.Hotkey = hotkey);
         PlacementPicker.SelectionChanged += (_, _) => Pick(PlacementPicker, DictationOverlayPlacements.AllCases, placement => state.OverlayPlacement = placement);
-        UnloadPicker.SelectionChanged += (_, _) => Pick(UnloadPicker, IdleUnloadPolicies.AllCases, policy => state.ModelUnloadTimeout = policy);
         ThemePicker.SelectionChanged += (_, _) => Pick(ThemePicker, AppAppearances.AllCases, appearance => state.Appearance = appearance);
         HistoryLimitPicker.SelectionChanged += (_, _) => Pick(HistoryLimitPicker, HistoryLimits, limit => state.HistoryLimit = limit);
         DevicePicker.SelectionChanged += OnDeviceChanged;
@@ -231,8 +229,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
         PlacementPicker.SelectedIndex = DictationOverlayPlacements.AllCases.ToList().IndexOf(state.OverlayPlacement);
         Changed(RevertPlacement, state.OverlayPlacement != SettingsDefaults.OverlayPlacement);
-        UnloadPicker.SelectedIndex = IdleUnloadPolicies.AllCases.ToList().IndexOf(state.ModelUnloadTimeout);
-        Changed(RevertUnload, state.ModelUnloadTimeout != SettingsDefaults.ModelUnloadTimeout);
     }
 
     /// <summary>
@@ -322,7 +318,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
     private void OnRevertPlacement(object? sender, RoutedEventArgs args) => state.OverlayPlacement = SettingsDefaults.OverlayPlacement;
 
-    private void OnRevertUnload(object? sender, RoutedEventArgs args) => state.ModelUnloadTimeout = SettingsDefaults.ModelUnloadTimeout;
 
     private void OnRevertTheme(object? sender, RoutedEventArgs args) => state.Appearance = SettingsDefaults.Appearance;
 
@@ -491,7 +486,18 @@ public sealed partial class SettingsWindow : Window, IDictationSink
             header.Children.Add(again);
         }
 
+        // A take with no words has nothing to copy: the button is hidden rather than removed, so
+        // the star, the re-run and Delete stay in their columns on every row.
+        bool hasWords = entry.Text.Length > 0;
         Button copy = RowButton("Copy", "Copy this dictation", () => state.CopyHistoryEntry(entry));
+        if (!hasWords)
+        {
+            copy.Opacity = 0;
+            copy.IsEnabled = false;
+            copy.IsHitTestVisible = false;
+            copy.Focusable = false;
+        }
+
         Grid.SetColumn(copy, 3);
         header.Children.Add(copy);
 
@@ -505,12 +511,21 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
         var row = new StackPanel { Margin = new Thickness(4, 8) };
         row.Children.Add(header);
-        row.Children.Add(new SelectableTextBlock
-        {
-            Text = entry.Text,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 6, 0, 6),
-        });
+        row.Children.Add(hasWords
+            ? new SelectableTextBlock
+            {
+                Text = entry.Text,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 6, 0, 6),
+            }
+            : new TextBlock
+            {
+                // Kept for its audio: play it, or recognise it again.
+                Text = "Nothing recognized",
+                Foreground = Brushes.Gray,
+                FontStyle = FontStyle.Italic,
+                Margin = new Thickness(0, 6, 0, 6),
+            });
 
         if (audio is not null)
         {

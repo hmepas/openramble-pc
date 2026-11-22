@@ -31,7 +31,6 @@ public static class SettingsDefaults
     public const AppAppearance Appearance = AppAppearance.System;
     public const bool DetailedLogging = false;
     public const bool StopsOnSilence = false;
-    public const IdleUnloadPolicy ModelUnloadTimeout = IdleUnloadPolicies.Default;
 
     /// <summary>No microphone chosen: the system default, as before the setting existed.</summary>
     public const string? InputDeviceUid = null;

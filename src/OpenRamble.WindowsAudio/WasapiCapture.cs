@@ -75,15 +75,16 @@ public sealed class WasapiCapture : IMicrophoneDevice
     private Action<float[]>? segmentSink;
 
     /// <summary>
-    /// The take reached its in-memory cap.
+    /// The take reached its in-memory cap with no disk copy to carry it on.
     /// </summary>
     /// <remarks>
-    /// While nobody listens, crossing the cap means what it always did: the in-memory copy is
-    /// given up and recognition reads the WAV. With a listener the take is closed at the cap
-    /// instead - the complete bounded prefix stays in memory and the WAV agrees with it - and
-    /// the listener is expected to finish the dictation through the ordinary path, which is
-    /// what <c>DictationController.StopAtCaptureMemoryLimit</c> does. Raised once per take,
-    /// from the frame queue's own thread.
+    /// A healthy WAV lets a dictation outlive the cap: the in-memory copy is given up and
+    /// recognition reads the file, so this is never raised for it. Only when the file could not
+    /// be written is the take closed at the cap - the complete bounded prefix stays in memory -
+    /// and the listener is expected to finish the dictation through the ordinary path, which is
+    /// what <c>DictationController.StopAtCaptureMemoryLimit</c> does. Without a listener the
+    /// take is reported as failed instead. Raised once per take, from the frame queue's own
+    /// thread.
     /// </remarks>
     public Action? OnMemoryLimitReached { get; set; }
 
@@ -304,8 +305,12 @@ public sealed class WasapiCapture : IMicrophoneDevice
                 ("budget_ms", CaptureStopBudget.Drain));
         }
 
-        TimeSpan duration = session.Writer.Duration;
-        string path = session.Writer.Close();
+        // A take whose file failed lives in memory; its duration is what memory holds, and a
+        // writer that already failed may fail its close too without costing the words.
+        TimeSpan duration = session.DiskFailed
+            ? TimeSpan.FromSeconds(session.Buffered.Count / RecordingFormat.SampleRate)
+            : session.Writer.Duration;
+        string path = session.DiskFailed ? session.CloseFailedWriter() : session.Writer.Close();
 
         bool released = await ReleaseDevice(session).ConfigureAwait(false);
         (string peakDbfs, string rmsDbfs) = session.LevelsDbfs;
@@ -453,9 +458,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
         };
 
         var queue = new FrameSink();
-        var memory = new RecognitionSampleBuffer(
-            MaximumBufferedSamples,
-            keepsPrefixAtLimit: OnMemoryLimitReached is not null);
+        var memory = new RecognitionSampleBuffer(MaximumBufferedSamples);
         var segments = new RecordingSegmentAttachment();
         segments.SetSink(segmentSink);
         var session = new Session(
@@ -496,20 +499,30 @@ public sealed class WasapiCapture : IMicrophoneDevice
     /// <remarks>
     /// The segmenter is fed the same committed frames, inside the ordered drain, because order
     /// is the whole contract: a segmenter fed out of order would place seams in the wrong places.
-    /// The memory cap is judged here too, and with a listener it ends the take: frames past the
-    /// cap are refused so that the WAV and the buffer describe the same recording.
+    /// The memory cap is judged here too, and what it means depends on the disk: a healthy WAV
+    /// carries the take past it, so dictation goes on for as long as the person speaks. A WAV
+    /// that could not be written leaves memory as the only copy, so the take ends at the cap
+    /// with its complete prefix kept for recognition.
     /// </remarks>
     private void Commit(Session session, float[] frame)
     {
-        session.Writer.Append(frame);
-        bool kept = session.Buffered.Append(frame);
+        session.AppendToDisk(frame);
+        bool kept = session.Buffered.Append(frame, preserveAtLimit: session.DiskFailed);
         session.Segments.Submit(frame);
-        if (kept || OnMemoryLimitReached is not { } limitReached || session.LimitReported) { return; }
+        if (kept || !session.DiskFailed || session.LimitReported) { return; }
 
         session.LimitReported = true;
         session.Close();
-        DiagnosticLog.Emit("capture.memory-limit", ("session", session.Number), ("samples", session.Samples));
-        limitReached();
+        if (session.Buffered.HoldsTake && OnMemoryLimitReached is { } limitReached)
+        {
+            DiagnosticLog.Emit("capture.memory-limit", ("session", session.Number), ("samples", session.Samples));
+            limitReached();
+            return;
+        }
+
+        // The file failed after memory had already been given up: neither copy holds the take
+        // any more, and the person has to hear it now rather than at the release.
+        ReportFailure(session, new AudioCaptureError.DiskFull());
     }
 
     public Task SetSegmentSink(Action<float[]>? sink)
@@ -838,6 +851,44 @@ public sealed class WasapiCapture : IMicrophoneDevice
 
         /// <summary>The memory cap has been announced for this take. Once, never per frame.</summary>
         public bool LimitReported { get; set; }
+
+        /// <summary>
+        /// Writing the take's file failed. From then on memory is the only copy; the frame queue's
+        /// single consumer is the only writer of this flag.
+        /// </summary>
+        public bool DiskFailed { get; private set; }
+
+        /// <summary>
+        /// One frame into the WAV, unless the WAV has already failed. A failure is recorded
+        /// rather than thrown: it must not stop the queue that also feeds the memory copy.
+        /// </summary>
+        public void AppendToDisk(float[] frame)
+        {
+            if (DiskFailed) { return; }
+
+            try
+            {
+                Writer.Append(frame);
+            }
+            catch (WAVWriter.Failure error)
+            {
+                DiskFailed = true;
+                DiagnosticLog.Emit("capture.disk-failed", ("session", Number), ("kind", error.GetType().Name));
+            }
+        }
+
+        /// <summary>Close a writer that failed mid-take, keeping whatever reached the file.</summary>
+        public string CloseFailedWriter()
+        {
+            try
+            {
+                return Writer.Close();
+            }
+            catch (WAVWriter.Failure)
+            {
+                return Writer.FilePath;
+            }
+        }
 
         public BufferedWaveProvider Incoming { get; }
 

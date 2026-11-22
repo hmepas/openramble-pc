@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace DictationCore.Tests;
 
 // MARK: - False edges that can break in parts
@@ -104,6 +106,51 @@ internal sealed class CollectingOverlay : IOverlayPresenting
     public Task PresentNotice(DictationNotice notice)
     {
         lock (gate) { notices.Add(notice); }
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// A microphone that opens only when the test says so, and records exactly as long as it was
+/// open: a take released before it opened holds nothing, the way the real device behaves.
+/// </summary>
+internal sealed class SlowOpeningMicrophone : IAudioCapturing
+{
+    private readonly Lock gate = new();
+    private readonly Gate opening;
+    private readonly string file = Path.Combine(Path.GetTempPath(), "slow-opening-take.wav");
+    private long? openedAt;
+    private int abortCount;
+
+    public SlowOpeningMicrophone(Gate opening) { this.opening = opening; }
+
+    public int AbortCount { get { lock (gate) { return abortCount; } } }
+
+    public async Task<string> StartRecording()
+    {
+        await opening.Pass();
+        lock (gate) { openedAt = Stopwatch.GetTimestamp(); }
+        return file;
+    }
+
+    public Task<(string Url, TimeSpan Duration)> StopRecording()
+    {
+        lock (gate)
+        {
+            TimeSpan open = openedAt is { } at ? Stopwatch.GetElapsedTime(at) : TimeSpan.Zero;
+            openedAt = null;
+            return Task.FromResult((file, open));
+        }
+    }
+
+    public Task AbortRecording()
+    {
+        lock (gate)
+        {
+            abortCount += 1;
+            openedAt = null;
+        }
+
         return Task.CompletedTask;
     }
 }
@@ -531,6 +578,278 @@ public sealed class DictationControllerFailurePathTests
 
         Assert.Equal(["Привет мир"], inserter.InsertedTexts);
         Assert.Equal(DictationState.Idle, controller.State);
+    }
+
+    // MARK: - A microphone that is slow to start
+
+    private const string SlowStartMessage = "Starting the microphone took too long. Dictation was stopped.";
+
+    private DictationController MakeSlowStartController(
+        SlowOpeningMicrophone microphone,
+        FakeSounds sounds,
+        TimeSpan? microphoneStartDeadline = null,
+        TimeSpan? preparingStopDeadline = null)
+    {
+        TranscribeCounter counter = transcribeCalls;
+        return new DictationController(
+            capture: microphone,
+            transcribe: (_, _) =>
+            {
+                counter.Increment();
+                return Task.FromResult(new ASRResult(
+                    "words",
+                    audioDuration: TimeSpan.FromSeconds(2),
+                    processingDuration: TimeSpan.FromSeconds(0.1)));
+            },
+            inserter: inserter,
+            overlay: overlay,
+            sounds: sounds,
+            preparingStopDeadline: preparingStopDeadline ?? TimeSpan.FromMilliseconds(500),
+            microphoneStartDeadline: microphoneStartDeadline ?? TimeSpan.FromSeconds(5));
+    }
+
+    private static async Task WaitUntilIdle(DictationController controller, TimeSpan? timeout = null)
+    {
+        var deadline = Stopwatch.StartNew();
+        TimeSpan limit = timeout ?? TimeSpan.FromSeconds(2);
+        while (controller.State != DictationState.Idle && deadline.Elapsed < limit)
+        {
+            await Task.Yield();
+            await Task.Delay(2);
+        }
+    }
+
+    /// <summary>
+    /// The key is still held and the microphone has not opened. Waiting for the release to say
+    /// so meant a person could talk for many seconds into nothing; they hear about it while they
+    /// are still holding the key.
+    /// </summary>
+    [Fact]
+    public async Task TestAMicrophoneThatNeverStartsIsReportedWhileTheKeyIsHeld()
+    {
+        var gate = new Gate();
+        var microphone = new SlowOpeningMicrophone(gate);
+        var sounds = new FakeSounds();
+        var controller = MakeSlowStartController(
+            microphone,
+            sounds,
+            microphoneStartDeadline: TimeSpan.FromMilliseconds(50));
+        var notices = new List<DictationNotice>();
+        controller.OnNotice = notice => { lock (notices) { notices.Add(notice); } };
+
+        var began = Stopwatch.StartNew();
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await WaitUntilIdle(controller);
+        TimeSpan ended = began.Elapsed;
+        await Settle();
+
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.True(ended >= TimeSpan.FromMilliseconds(50), "not before the deadline");
+        Assert.True(ended < TimeSpan.FromSeconds(1), "while the key is still held, not at its release");
+        Assert.Equal([SlowStartMessage], notices.Select(notice => notice.Message));
+        Assert.Equal(DictationNoticeKind.Failure, notices[0].Kind);
+        Assert.True(notices[0].WordsDidNotLand);
+        Assert.Equal(1, sounds.AttentionPlays);
+
+        // The microphone comes back; the next press dictates normally.
+        gate.Open();
+        await Settle();
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        Assert.Equal(DictationState.Listening, controller.State);
+        controller.Cancel();
+        await WaitUntilIdle(controller);
+    }
+
+    /// <summary>
+    /// A microphone that opens inside the deadline is the normal take. A tap released while it
+    /// was opening still finishes once it is listening.
+    /// </summary>
+    [Fact]
+    public async Task TestAStartWithinTheDeadlineIsNotReported()
+    {
+        var gate = new Gate();
+        var microphone = new SlowOpeningMicrophone(gate);
+        var sounds = new FakeSounds();
+        var controller = MakeSlowStartController(
+            microphone,
+            sounds,
+            microphoneStartDeadline: TimeSpan.FromMilliseconds(300));
+        var notices = new List<DictationNotice>();
+        controller.OnNotice = notice => { lock (notices) { notices.Add(notice); } };
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Task.Delay(20);
+        gate.Open();
+        await Settle();
+        Assert.Equal(DictationState.Listening, controller.State);
+        await Task.Delay(400);
+        Assert.Equal(DictationState.Listening, controller.State);
+        Assert.Empty(notices);
+        controller.Cancel();
+        await WaitUntilIdle(controller);
+
+        // A tap released while the microphone is still opening.
+        var second = new SlowOpeningMicrophone(new Gate());
+        var tapController = MakeSlowStartController(second, sounds);
+        var tapNotices = new List<DictationNotice>();
+        tapController.OnNotice = notice => { lock (tapNotices) { tapNotices.Add(notice); } };
+        tapController.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Task.Yield();
+        tapController.Stop();
+        Assert.True(tapController.State == DictationState.Preparing, "a tap waits for the microphone");
+        tapController.Cancel();
+        await WaitUntilIdle(tapController);
+        Assert.Empty(tapNotices);
+    }
+
+    /// <summary>
+    /// When the controller sees a tap end. The hotkey holds back the release of any press
+    /// shorter than its double-tap window (0.35 s) until that window has passed, so every tap
+    /// reaches <c>Stop()</c> about 0.35 s after its key-down, never sooner.
+    /// </summary>
+    private static readonly TimeSpan TapReleaseDelivery = TimeSpan.FromMilliseconds(360);
+
+    /// <summary>
+    /// A key held long enough to have spoken, released before the microphone opened. Nothing was
+    /// recorded and nothing can be: finishing when the microphone finally opens recognized an
+    /// empty take and dropped it without a word. The person spoke, so the person is told, at
+    /// once.
+    ///
+    /// "Long enough" is the same hold that turns any empty take from a change of mind into a
+    /// broken microphone, <see cref="DictationDurationPolicy.MinimumHoldForSilentInput"/>.
+    /// </summary>
+    [Fact]
+    public async Task TestAHeldReleaseBeforeTheMicrophoneOpensIsReportedNotDropped()
+    {
+        var gate = new Gate();
+        var microphone = new SlowOpeningMicrophone(gate);
+        var sounds = new FakeSounds();
+        var controller = MakeSlowStartController(microphone, sounds);
+        var notices = new List<DictationNotice>();
+        controller.OnNotice = notice => { lock (notices) { notices.Add(notice); } };
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Task.Delay(DictationDurationPolicy.MinimumHoldForSilentInput + TimeSpan.FromMilliseconds(100));
+        Assert.Equal(DictationState.Preparing, controller.State);
+        controller.Stop();
+        Assert.True(
+            controller.State != DictationState.Preparing,
+            "told at the release, not when the microphone opens");
+        // Inside the short bound a tap would have waited for.
+        await Task.Delay(300);
+        gate.Open();
+        await WaitUntilIdle(controller);
+        await Settle();
+
+        Assert.Equal([SlowStartMessage], notices.Select(notice => notice.Message));
+        Assert.Equal(1, sounds.AttentionPlays);
+        Assert.Empty(inserter.InsertedTexts);
+        Assert.Equal(DictationState.Idle, controller.State);
+    }
+
+    /// <summary>
+    /// A tap is a change of mind, even when the microphone is slow. Its release arrives at the
+    /// end of the double-tap window, and a microphone that opens 0.1 s after that is still
+    /// inside the short bound: the empty take ends without a notice and without the attention
+    /// sound.
+    /// </summary>
+    [Fact]
+    public async Task TestATapStaysQuietWhenTheMicrophoneOpensJustAfterItsRelease()
+    {
+        var gate = new Gate();
+        var microphone = new SlowOpeningMicrophone(gate);
+        var sounds = new FakeSounds();
+        var controller = MakeSlowStartController(microphone, sounds);
+        var notices = new List<DictationNotice>();
+        controller.OnNotice = notice => { lock (notices) { notices.Add(notice); } };
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Task.Delay(TapReleaseDelivery);
+        controller.Stop();
+        await Task.Delay(100);
+        gate.Open();
+        await WaitUntilIdle(controller);
+        await Settle();
+
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.Empty(notices);
+        Assert.Equal(0, sounds.AttentionPlays);
+        Assert.Empty(inserter.InsertedTexts);
+    }
+
+    /// <summary>
+    /// A tap is a change of mind, not a lost take: it stays quiet, and a microphone that never
+    /// opens still ends it within the short bound after the release rather than the long one
+    /// after the key-down.
+    /// </summary>
+    [Fact]
+    public async Task TestATapReleasedBeforeTheMicrophoneOpensKeepsTheShortBound()
+    {
+        var gate = new Gate();
+        var microphone = new SlowOpeningMicrophone(gate);
+        var sounds = new FakeSounds();
+        var controller = MakeSlowStartController(
+            microphone,
+            sounds,
+            microphoneStartDeadline: TimeSpan.FromSeconds(5),
+            preparingStopDeadline: TimeSpan.FromMilliseconds(60));
+        var notices = new List<DictationNotice>();
+        controller.OnNotice = notice => { lock (notices) { notices.Add(notice); } };
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Task.Delay(TapReleaseDelivery);
+        var released = Stopwatch.StartNew();
+        controller.Stop();
+        Assert.True(controller.State == DictationState.Preparing, "a tap waits for the microphone");
+        // Two seconds rather than upstream's one: still well inside the five-second bound from
+        // the key-down, and a loaded test runner is not a microphone that never opened.
+        await WaitUntilIdle(controller, TimeSpan.FromSeconds(2));
+
+        Assert.True(controller.State == DictationState.Idle, "the short bound after release still holds");
+        Assert.True(released.Elapsed >= TimeSpan.FromMilliseconds(60));
+        Assert.Equal([SlowStartMessage], notices.Select(notice => notice.Message));
+        gate.Open();
+        await Settle();
+    }
+
+    /// <summary>
+    /// A double tap promotes the take to hands-free while the microphone is still opening.
+    /// Nobody will release a key now, so the deadline from the key-down is the only thing that
+    /// can end a microphone that never opens.
+    /// </summary>
+    [Fact]
+    public async Task TestAHandsFreeTakeKeepsTheStartDeadline()
+    {
+        var gate = new Gate();
+        var microphone = new SlowOpeningMicrophone(gate);
+        var sounds = new FakeSounds();
+        var controller = MakeSlowStartController(
+            microphone,
+            sounds,
+            microphoneStartDeadline: TimeSpan.FromMilliseconds(300),
+            preparingStopDeadline: TimeSpan.FromMilliseconds(30));
+        var notices = new List<DictationNotice>();
+        controller.OnNotice = notice => { lock (notices) { notices.Add(notice); } };
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Task.Delay(5);
+        // The double tap: the first release, then the second press.
+        controller.Stop();
+        controller.PromoteToHandsFree();
+        await Task.Delay(120);
+        Assert.True(
+            controller.State == DictationState.Preparing,
+            "the release bound belonged to the tap, not to hands-free");
+        Assert.Empty(notices);
+
+        await WaitUntilIdle(controller);
+        await Settle();
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.Equal([SlowStartMessage], notices.Select(notice => notice.Message));
+        Assert.Equal(1, sounds.AttentionPlays);
+        gate.Open();
+        await Settle();
     }
 
     // MARK: - State flow

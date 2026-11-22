@@ -127,7 +127,6 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         logFile.IsEnabled = detailedLogging;
         stopsOnSilence = settings.StopsOnSilence;
         overlayPlacement = DictationOverlayPlacements.Parse(settings.OverlayPlacement);
-        modelUnloadTimeout = IdleUnloadPolicies.Parse(settings.ModelUnloadTimeout);
         historyLimit = DictationHistoryStore.ClampLimit(settings.HistoryLimit);
         launchAtLogin = launchAtLoginService?.IsEnabled ?? false;
         // Test environments substitute a ready-made ASR closure and need no engine warm-up.
@@ -184,7 +183,20 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 // Disk spill never gates the microphone. If it remained unavailable until the
                 // bounded PCM buffer became full, finish the complete retained take normally
                 // instead of dropping history or continuing into unrecoverable audio.
-                device.OnMemoryLimitReached = () => controller?.StopAtCaptureMemoryLimit();
+                device.OnMemoryLimitReached = () =>
+                {
+                    if (controller?.StopAtCaptureMemoryLimit() != true) { return; }
+
+                    // Said after the session, so it does not cover "Transcribing…", and without a
+                    // sound: the words are about to land, only the end of the take is missing.
+                    lock (gate)
+                    {
+                        noticeAfterSession = new DictationNotice(
+                            DictationNoticeKind.Warning,
+                            "Recording stopped because audio couldn't be saved to disk. "
+                                + "The audio held in memory was kept for transcription.");
+                    }
+                };
             }
 
             recordingRecovery = new RecordingRecoveryStore(paths.AudioRecovery());
@@ -250,7 +262,10 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                     : token => transcriber.Prepare(layout.EngineDirectory),
                 // Ninety seconds rather than the kernel's 25: the reload rides under the voice
                 // either way, and on a slow PC the CPU load can outlast a short take.
-                prepareDeadline: environment.PrepareDeadline ?? TimeSpan.FromSeconds(90));
+                prepareDeadline: environment.PrepareDeadline ?? TimeSpan.FromSeconds(90),
+                // A take past the memory cap lives in its file; reading it back is what lets the
+                // pieces recognized while the person spoke be reused instead of redone.
+                readSamples: (url, token) => new AudioFileReader().SamplesOnDiskThread(url, token));
 
             built.OnStateChange = state =>
             {
@@ -363,6 +378,11 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             // The last moment the take still exists: whoever keeps a history has to take its
             // copy now; the kernel deletes the original right after.
             built.OnTakeFinished = Archive;
+            // Named for the one notice that needs it: a take that heard only silence. The
+            // microphone chosen in Settings, when it is plugged in; the system default has no
+            // name this app can read, and the notice then says what it always said.
+            built.MicrophoneName = () =>
+                AudioInputDevicePolicy.Preferred(InputDeviceUid, AvailableInputDevices)?.Name;
             built.OnEnginePreparationWait = waiting =>
                 (overlay as IEngineWaitPresenting)?.SetWaitingForEngine(waiting);
 

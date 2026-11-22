@@ -72,24 +72,20 @@ public delegate IAudioSampleConverter? AudioSampleConverterFactory(
 internal sealed class RecognitionSampleBuffer
 {
     private readonly int maximumSamples;
-    private readonly bool keepsPrefixAtLimit;
     private List<float>? samples = [];
     private bool reachedLimit;
 
     /// <param name="maximumSamples">The cap.</param>
-    /// <param name="keepsPrefixAtLimit">
-    /// What crossing the cap means. <c>false</c> - the in-memory path is given up for the whole
-    /// take and recognition falls back to the WAV, as it always did. <c>true</c> - the complete
-    /// bounded prefix is kept and the frame that would not fit is refused: for an owner that
-    /// ends the take at the limit and recognizes exactly what was kept, as upstream's
-    /// five-minute cap does. The owner has to actually stop; a buffer that keeps its prefix
-    /// under a recording that goes on would recognize a take missing its end.
-    /// </param>
-    public RecognitionSampleBuffer(int maximumSamples, bool keepsPrefixAtLimit = false)
+    public RecognitionSampleBuffer(int maximumSamples)
     {
         this.maximumSamples = maximumSamples;
-        this.keepsPrefixAtLimit = keepsPrefixAtLimit;
     }
+
+    /// <summary>Samples held so far; zero once the in-memory copy was given up.</summary>
+    public int Count => samples?.Count ?? 0;
+
+    /// <summary>Whether the buffer still holds the take from its first sample.</summary>
+    public bool HoldsTake => samples is not null;
 
     public void Reset()
     {
@@ -101,7 +97,15 @@ internal sealed class RecognitionSampleBuffer
     /// Keep the frame. <c>false</c> when it did not fit - the cap was crossed by this frame,
     /// or by an earlier one.
     /// </summary>
-    public bool Append(float[] newSamples)
+    /// <param name="newSamples">One committed frame.</param>
+    /// <param name="preserveAtLimit">
+    /// What crossing the cap by this frame means. <c>false</c> - a healthy disk copy carries the
+    /// take on, so the in-memory path is given up for the whole take and recognition falls back
+    /// to the WAV. <c>true</c> - there is no disk copy to fall back to, so the complete bounded
+    /// prefix is kept and the frame that would not fit is refused: the owner has to end the take
+    /// there and recognize exactly what was kept.
+    /// </param>
+    public bool Append(float[] newSamples, bool preserveAtLimit = false)
     {
         if (samples is null || reachedLimit)
         {
@@ -111,7 +115,7 @@ internal sealed class RecognitionSampleBuffer
         if (newSamples.Length > maximumSamples - samples.Count)
         {
             reachedLimit = true;
-            if (!keepsPrefixAtLimit) { samples = null; }
+            if (!preserveAtLimit) { samples = null; }
             return false;
         }
 

@@ -124,9 +124,8 @@ public sealed class AppEnvironment
     public Func<DateTimeOffset>? Now { get; init; }
 
     /// <summary>
-    /// Test-only override for the idle-unload countdown: the policy's real options start at two
-    /// minutes, and suites never sleep that long. The decision itself always belongs to the
-    /// policy.
+    /// Test-only override for the one-hour idle-unload countdown, which suites never sleep
+    /// through.
     /// </summary>
     public TimeSpan? IdleUnloadDelayOverride { get; init; }
 

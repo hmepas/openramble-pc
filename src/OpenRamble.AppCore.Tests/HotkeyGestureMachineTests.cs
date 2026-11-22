@@ -136,6 +136,59 @@ public sealed class HotkeyGestureMachineTests
         Assert.Equal(HotkeyAction.None, machine.Handle(Foreign(Vk.LetterC, HotkeyModifiers.None)));
     }
 
+    /// <summary>
+    /// A key that lands well into the hold is not a shortcut: a brushed key or a reflex in the
+    /// middle of a sentence. Ending the take on it would throw away everything said so far, so the
+    /// take goes on and the release finishes it like any other.
+    /// </summary>
+    [Fact]
+    public void Scenario025()
+    {
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
+
+        Assert.Equal(HotkeyAction.Press, machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control)));
+        Assert.Equal(
+            HotkeyAction.None,
+            machine.Handle(Foreign(Vk.LetterC, HotkeyModifiers.Control, after: 0.8)));
+        Assert.Equal(
+            ReleaseAfter(0),
+            machine.Handle(Up(DictationHotkey.RightCtrl, HotkeyModifiers.None, after: 2.0)));
+        // The finished take opens no double-tap window for the next press.
+        Assert.Equal(
+            HotkeyAction.Press,
+            machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control, after: 2.1)));
+    }
+
+    /// <summary>Just inside the window it is still Ctrl+C.</summary>
+    [Fact]
+    public void Scenario026()
+    {
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
+
+        machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control));
+        Assert.Equal(
+            HotkeyAction.AbortShortcut,
+            machine.Handle(Foreign(Vk.LetterC, HotkeyModifiers.Control, after: 0.79)));
+        Assert.Equal(
+            HotkeyAction.None,
+            machine.Handle(Up(DictationHotkey.RightCtrl, HotkeyModifiers.None, after: 1.0)));
+    }
+
+    /// <summary>A modifier joining late in the hold does not end it either.</summary>
+    [Fact]
+    public void Scenario027()
+    {
+        var machine = new HotkeyGestureMachine(DictationHotkey.RightCtrl, Keymap);
+
+        machine.Handle(Down(DictationHotkey.RightCtrl, HotkeyModifiers.Control));
+        Assert.Equal(
+            HotkeyAction.None,
+            machine.Handle(Foreign(Vk.LeftMenu, HotkeyModifiers.Control | HotkeyModifiers.Alt, after: 1.0)));
+        Assert.Equal(
+            ReleaseAfter(0),
+            machine.Handle(Up(DictationHotkey.RightCtrl, HotkeyModifiers.Alt, after: 1.5)));
+    }
+
     // MARK: - Hold
 
     [Fact]

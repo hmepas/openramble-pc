@@ -83,6 +83,23 @@ public sealed class AudioFileReader
         }
     }
 
+    /// <summary>
+    /// <see cref="Samples"/> on a thread of its own.
+    /// </summary>
+    /// <remarks>
+    /// The app's file-backed dictation path must not block a pool thread while restoring PCM
+    /// whose in-memory copy was released during capture: a pool thread blocked on a disk is not
+    /// yielded but lost, and the whole dictation waits behind it.
+    /// </remarks>
+    public async Task<float[]> SamplesOnDiskThread(string path, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        float[] samples = await DedicatedThread.Run(() => Samples(path), "OpenRamble recording read")
+            .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return samples;
+    }
+
     /// <summary>Read the entire file, resulting in 16 kHz mono.</summary>
     /// <param name="maximumDuration">
     /// Refuse a recording longer than this, judged by its header, before the sample buffer is

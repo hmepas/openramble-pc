@@ -31,10 +31,8 @@ public sealed partial class AppState
     /// </summary>
     private bool shouldStayUnloadedUntilUse;
 
-    private IdleUnloadPolicy modelUnloadTimeout;
-
     /// <summary>Test-only idle-unload countdown override (see <see cref="AppEnvironment"/>).</summary>
-    private readonly TimeSpan? idleUnloadDelayOverride;
+    private TimeSpan? idleUnloadDelayOverride;
 
     /// <summary>One pending idle-unload timer at most; any dictation activity replaces it.</summary>
     private Timer? idleUnloadTimer;
@@ -785,19 +783,31 @@ public sealed partial class AppState
         });
     }
 
-    // MARK: - Idle unload (the person's own control)
+    // MARK: - Idle unload
 
     /// <summary>
-    /// When to give the engine's memory back after dictation goes idle. Mirrors Handy's "Unload
-    /// Model" row; <see cref="IdleUnloadPolicy.Never"/> is the always-resident behaviour.
+    /// How long the engine stays loaded after the last dictation: an hour, for everyone, with no
+    /// setting (upstream 0.33.1).
     /// </summary>
-    public IdleUnloadPolicy ModelUnloadTimeout
+    /// <remarks>
+    /// Five minutes, the old default, made a third of upstream's measured week of key presses
+    /// cold (106 of 303); the gaps in that same week project about one in ten for an hour. A
+    /// cold take still keeps its words: the reload runs under the voice. A stored choice from
+    /// the old "Unload model" picker, "Never" included, is ignored and dropped from the settings
+    /// file on its next write.
+    /// </remarks>
+    public static TimeSpan EngineIdleUnloadDelay { get; } = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// Test-only override for the one-hour countdown, which suites never sleep through. Setting
+    /// it re-arms the countdown, so a test can rest the engine now and keep it awake after.
+    /// </summary>
+    public TimeSpan? IdleUnloadDelayOverride
     {
-        get { lock (gate) { return modelUnloadTimeout; } }
+        get { lock (gate) { return idleUnloadDelayOverride; } }
         set
         {
-            if (!Set(ref modelUnloadTimeout, value)) { return; }
-            UpdateSettings(current => current with { ModelUnloadTimeout = value.RawValue });
+            lock (gate) { idleUnloadDelayOverride = value; }
             RescheduleIdleUnload();
         }
     }
@@ -813,7 +823,6 @@ public sealed partial class AppState
     {
         CancelIdleUnload();
         if (transcriber is null) { return; }
-        TimeSpan? policyDelay = ModelUnloadTimeout.IdleDelay;
         if (DictationStateValue != DictationState.Idle
             || !IsEngineReady
             // Setup is not idleness: the person is granting permissions, not resting from
@@ -821,15 +830,13 @@ public sealed partial class AppState
             // dictation is instant. Nothing depends on this any more - the setup screen no
             // longer waits for a loaded engine, and a resting one is woken by the same key press
             // as everywhere else - so it is a courtesy, not a guard.
-            || !OnboardingCompleted
-            || policyDelay is null)
+            || !OnboardingCompleted)
         {
             return;
         }
 
-        // The override shortens the countdown for tests; the decision itself (never keeps the
-        // engine forever) always belongs to the policy.
-        TimeSpan delay = idleUnloadDelayOverride ?? policyDelay.Value;
+        // The override shortens the countdown for tests.
+        TimeSpan delay = IdleUnloadDelayOverride ?? EngineIdleUnloadDelay;
         lock (gate)
         {
             if (disposed) { return; }
@@ -874,7 +881,7 @@ public sealed partial class AppState
             }
         }
 
-        DiagnosticLog.Emit("engine.idle.unload", ("policy", ModelUnloadTimeout.RawValue));
+        DiagnosticLog.Emit("engine.idle.unload", ("idle_ms", IdleUnloadDelayOverride ?? EngineIdleUnloadDelay));
         _ = Task.Run(async () =>
         {
             if (!await transcriber.UnloadIfIdle().ConfigureAwait(false)) { return; }

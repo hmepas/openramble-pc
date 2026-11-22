@@ -139,7 +139,13 @@ public sealed class DictationHistoryStore
     /// Returns the list as it now stands. Audio for evicted entries is removed here rather than
     /// by a sweep: the moment an entry leaves the list is the only moment its file is provably
     /// unreferenced.
+    ///
+    /// Empty text is a take the model found no words in. It is kept for its audio, to be played
+    /// and recognized again, so without the audio there is nothing to keep, and an audio copy
+    /// that fails is thrown rather than quietly kept as nothing.
     /// </summary>
+    /// <exception cref="IOException">A wordless take's audio could not be copied.</exception>
+    /// <exception cref="UnauthorizedAccessException">A wordless take's audio could not be copied.</exception>
     public IReadOnlyList<HistoryEntry> Record(
         string text,
         string? audio,
@@ -147,7 +153,7 @@ public sealed class DictationHistoryStore
         DateTimeOffset? date = null)
     {
         string trimmedText = text.Trim();
-        if (trimmedText.Length == 0) { return Load(); }
+        if (trimmedText.Length == 0 && audio is null) { return Load(); }
 
         Directory.CreateDirectory(directory);
 
@@ -156,28 +162,21 @@ public sealed class DictationHistoryStore
         {
             string name = $"{Guid.NewGuid()}.wav";
             string destination = Path.Combine(directory, name);
-            // A missing or unreadable take must not cost the person the text.
             try
             {
                 File.Copy(audio, destination, overwrite: false);
                 storedName = name;
             }
-            catch (IOException)
+            catch (Exception error) when (trimmedText.Length > 0
+                && error is IOException or UnauthorizedAccessException)
             {
-            }
-            catch (UnauthorizedAccessException)
-            {
+                // A missing or unreadable take must not cost the person the text.
             }
         }
 
         var entries = new List<HistoryEntry>(Load());
         entries.Insert(0, new HistoryEntry(date ?? DateTimeOffset.Now, trimmedText, storedName));
-        List<HistoryEntry> kept = entries.Take(Math.Max(1, limit)).ToList();
-        foreach (HistoryEntry evicted in entries.Skip(kept.Count))
-        {
-            RemoveAudio(evicted);
-        }
-
+        List<HistoryEntry> kept = Trimmed(entries, limit);
         Write(kept);
         return kept;
     }
@@ -186,11 +185,28 @@ public sealed class DictationHistoryStore
     public IReadOnlyList<HistoryEntry> ApplyLimit(int limit)
     {
         IReadOnlyList<HistoryEntry> entries = Load();
-        // The limit counts ordinary dictations. A starred one is a promise that it stays, and a
-        // promise that a later dictation can break is not one - so starred entries neither count
-        // against the limit nor fall out of it. Order is untouched, so the list still reads by
-        // date.
-        int budget = Math.Max(1, limit);
+        List<HistoryEntry> kept = Trimmed(entries, limit);
+        if (kept.Count == entries.Count) { return entries; }
+        Write(kept);
+        return kept;
+    }
+
+    /// <summary>
+    /// <paramref name="entries"/> within <paramref name="limit"/>, with the audio of every
+    /// evicted entry deleted.
+    /// </summary>
+    /// <remarks>
+    /// The limit counts ordinary dictations. A starred one is a promise that it stays, and a
+    /// promise that the next dictation can break is not one, so starred entries neither count
+    /// against the limit nor fall out of it. A take with no words is kept to be heard again,
+    /// beside the dictations rather than instead of one: takes with no words count against the
+    /// same limit among themselves, so they never push a dictation out. Order is untouched, so
+    /// the list still reads by date.
+    /// </remarks>
+    private List<HistoryEntry> Trimmed(IReadOnlyList<HistoryEntry> entries, int limit)
+    {
+        int dictations = Math.Max(1, limit);
+        int wordless = Math.Max(1, limit);
         var kept = new List<HistoryEntry>(entries.Count);
         foreach (HistoryEntry entry in entries)
         {
@@ -200,29 +216,41 @@ public sealed class DictationHistoryStore
                 continue;
             }
 
-            if (budget <= 0) { continue; }
-            budget--;
+            if (entry.Text.Length == 0)
+            {
+                if (wordless <= 0) { continue; }
+                wordless--;
+            }
+            else
+            {
+                if (dictations <= 0) { continue; }
+                dictations--;
+            }
+
             kept.Add(entry);
         }
 
-        if (kept.Count == entries.Count) { return entries; }
         var keptIds = kept.Select(entry => entry.Id).ToHashSet();
         foreach (HistoryEntry evicted in entries)
         {
             if (!keptIds.Contains(evicted.Id)) { RemoveAudio(evicted); }
         }
 
-        Write(kept);
         return kept;
     }
 
-    /// <summary>Put new text on an entry, leaving its audio and star alone.</summary>
+    /// <summary>
+    /// Put new text on an entry, leaving its audio and star alone.
+    ///
+    /// Trimmed exactly as <see cref="Record"/> trims, so recognizing a take again stores what
+    /// the take itself would have stored.
+    /// </summary>
     public IReadOnlyList<HistoryEntry> ReplaceText(string text, HistoryEntry entry)
     {
         var entries = new List<HistoryEntry>(Load());
         int index = entries.FindIndex(candidate => candidate.Id == entry.Id);
         if (index < 0) { return entries; }
-        entries[index] = entries[index] with { Text = text };
+        entries[index] = entries[index] with { Text = text.Trim() };
         Write(entries);
         return entries;
     }

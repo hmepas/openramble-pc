@@ -408,6 +408,78 @@ public sealed class LocalTranscriber
             queueingDuration: queued > TimeSpan.Zero ? queued : TimeSpan.Zero);
     }
 
+    /// <summary>
+    /// A whole file owns one residency, including the gaps between its pieces: a polite unload
+    /// refuses until the operation is done. A forced unload invalidates the generation; no later
+    /// piece may use its replacement.
+    /// </summary>
+    internal async Task<T> WithPreparedModel<T>(
+        Func<int, Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        Task? warmup;
+        int expectedGeneration;
+        lock (gate)
+        {
+            if (loadedDirectory is null)
+            {
+                throw new ASREngineError.ModelsNotLoaded();
+            }
+
+            activeOperations++;
+            expectedGeneration = generation;
+            warmup = inferenceWarmupTask;
+        }
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (warmup is not null)
+            {
+                await warmup.ConfigureAwait(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureGeneration(expectedGeneration);
+            T result = await operation(expectedGeneration).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureGeneration(expectedGeneration);
+            return result;
+        }
+        finally
+        {
+            lock (gate)
+            {
+                activeOperations--;
+            }
+        }
+    }
+
+    /// <summary>
+    /// One piece of a file under <see cref="WithPreparedModel"/>, levelled on its own as the
+    /// pieces of a long dictation are (<see cref="InputGain"/>, in place: the piece is a copy).
+    /// </summary>
+    /// <remarks>
+    /// Swift's <c>transcribeChunk</c> also hands the engine a <c>shouldYield</c> probe that aborts
+    /// the native run the moment dictation starts. This port's engines take no abort (see
+    /// <see cref="TranscribeCppAdapter"/>), so a file yields between pieces instead, and the
+    /// piece in flight - at most twenty seconds of audio - finishes first.
+    /// </remarks>
+    internal async Task<ASRResult> TranscribeChunk(
+        float[] samples,
+        int expectedGeneration,
+        CancellationToken cancellationToken)
+    {
+        EnsureGeneration(expectedGeneration);
+        _ = InputGain.Normalize(samples);
+        ASRResult result = await engine.Transcribe(samples).ConfigureAwait(false);
+        // A result that arrives after the request was given up on, or after the model it ran on
+        // was unloaded, is not published.
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureGeneration(expectedGeneration);
+        return result;
+    }
+
     private void EnsureGeneration(int expectedGeneration)
     {
         lock (gate)

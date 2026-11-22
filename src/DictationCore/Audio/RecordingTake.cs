@@ -291,7 +291,21 @@ internal sealed class RecordingTake
         if (final is Storage.DiskAndMemory or Storage.DiskOnly)
         {
             TimeSpan length = writer.Duration;
-            return new Stopped(writer.Close(), length, drained, final);
+            try
+            {
+                return new Stopped(writer.Close(), length, drained, final);
+            }
+            catch (WAVWriter.Failure) when (final == Storage.DiskAndMemory)
+            {
+                // The file failed at its very end - the last flush, the header with the sizes -
+                // after every frame had reached it. Memory still holds the whole take, so this is
+                // the disk failing like any other time: the take becomes memory's, recognition
+                // reads it from there, and the words are not lost for a header. A take that had
+                // already given memory up has nothing to fall back on, and its failure is the
+                // stop's to throw.
+                lock (gate) { storage = Storage.MemoryOnly; }
+                final = Storage.MemoryOnly;
+            }
         }
 
         // A take whose file failed lives in memory; its duration is what memory holds, and a

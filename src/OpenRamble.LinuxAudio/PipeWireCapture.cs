@@ -386,7 +386,20 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         // exceed it. A drain that overruns is abandoned by the take itself, which refuses
         // whatever it still delivers - see RecordingTake.Stop.
         TimeSpan left = CaptureStopBudget.Drain - Stopwatch.GetElapsedTime(began);
-        RecordingTake.Stopped stopped = await session.Take.Stop(left).ConfigureAwait(false);
+        RecordingTake.Stopped stopped;
+        bool released;
+        try
+        {
+            stopped = await session.Take.Stop(left).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Whatever the take's close says - a broken queue, a file that has nothing behind it -
+            // is the stop's to report, and the recorder is not its to keep: a stop that threw
+            // here used to leave pw-record running, holding the microphone, for nobody.
+            released = await ReleaseDevice(session).ConfigureAwait(false);
+        }
+
         bool drained = tailRead && stopped.Drained;
         if (!stopped.Drained)
         {
@@ -399,7 +412,6 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         TimeSpan duration = stopped.Duration;
         string path = stopped.Path;
 
-        bool released = await ReleaseDevice(session).ConfigureAwait(false);
         DiagnosticLog.Emit(
             "capture.stop.end",
             ("session", session.Number),

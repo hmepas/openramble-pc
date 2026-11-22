@@ -215,6 +215,31 @@ public sealed class RecordingTakeTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// A WAV that fails at its very end - the header, the last flush - does not cost the take
+    /// when memory still holds all of it: the stop answers from memory, as for any failed file.
+    /// </summary>
+    [Fact]
+    public async Task TestAWriterThatCannotCloseLeavesTheTakeToMemory()
+    {
+        var events = new Events();
+        WAVWriter writer = OpenWriter();
+        var take = new RecordingTake(writer, maximumBufferedSamples: 16_000, segmentSink: null, events.Record);
+        take.Deliver(Enumerable.Repeat(0.25f, Frame).ToArray());
+        await WaitFor(() => writer.Duration >= TimeSpan.FromSeconds((double)Frame / 16_000));
+        // Every frame is in; only the close is left to fail.
+        writer.Close();
+
+        RecordingTake.Stopped stopped = await take.Stop(TimeSpan.FromSeconds(5));
+
+        Assert.True(stopped.Drained);
+        Assert.Equal(RecordingTake.Storage.MemoryOnly, stopped.Storage);
+        Assert.Equal(TimeSpan.FromSeconds((double)Frame / 16_000), stopped.Duration);
+        Assert.Equal(writer.FilePath, stopped.Path);
+        Assert.Equal(Frame, take.TakeSamples()?.Length);
+        Assert.Empty(events.Raised);
+    }
+
     [Fact]
     public async Task TestAHealthyTakeStopsWithBothCopies()
     {

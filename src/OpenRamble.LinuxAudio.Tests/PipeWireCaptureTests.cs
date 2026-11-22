@@ -150,6 +150,35 @@ public sealed class PipeWireCaptureTests : IDisposable
         Assert.Equal(buffered.AsSpan(0, consumed).ToArray(), segment);
     }
 
+    /// <summary>
+    /// A stop whose take cannot be closed still lets go of the recorder: the failure is the
+    /// stop's to report, the microphone is not its to keep.
+    /// </summary>
+    [Fact]
+    public async Task AStopThatFailsStillReleasesTheRecorder()
+    {
+        var recorder = new FakeRecorderProcess();
+        using var capture = new PipeWireCapture(takes, _ => recorder);
+        // A segment sink that breaks the frame queue at the first cut.
+        await capture.SetSegmentSink(_ => throw new InvalidOperationException("segment sink broke"));
+
+        await capture.StartRecording();
+        float[] speech = [.. Enumerable.Repeat(0.5f, 16 * 16_000)];
+        float[] pause = new float[16_000 * 3 / 2];
+        recorder.Feed(speech);
+        recorder.Feed(pause);
+        long expected = speech.Length + pause.Length;
+        var patience = Stopwatch.StartNew();
+        while (capture.DeliveredCounts.Samples < expected && patience.Elapsed < Patience)
+        {
+            await Task.Delay(10);
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(capture.StopRecording);
+
+        Assert.True(recorder.Disposed, "a failed stop must not keep the microphone");
+    }
+
     [Fact]
     public async Task StartingSaysWhatItStartedAndInWhatFormat()
     {

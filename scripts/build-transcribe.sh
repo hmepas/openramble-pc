@@ -22,7 +22,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 COMMIT=dacdba09be2b8d4dfe97a9d7464c51f462d5f622
-# GitHub's archive of $COMMIT, as fetched on 2026-11-22.
+# GitHub's archive of $COMMIT, as fetched on 2026-11-22. GitHub generates these archives on demand
+# and does not promise stable bytes: a change on its side (compression, tar layout) fails the
+# check below with the same commit. If that happens, compare the new tarball's tree with the old
+# one (or with a `git archive` of $COMMIT) and, only if the contents are the same, pin the new hash.
 SHA256=34aa022cf5c9062b08a45c4ef78053e43a627d63bc783df239070ec404cd2f53
 REPOSITORY=https://github.com/mikwiseman/transcribe.cpp
 OUT=artifacts/native/linux-x64
@@ -50,21 +53,23 @@ if [ -f "$OUT/.build" ] && [ "$(cat "$OUT/.build")" = "$STAMP" ] && [ -f "$OUT/l
     exit 0
 fi
 
+# Every build that is not already stamped starts from a verified tarball and a fresh tree: a tree
+# left from before the pin, or from a tarball that no longer matches it, is never trusted.
 mkdir -p "$WORK"
 SOURCE="$WORK/transcribe.cpp-$COMMIT"
 TARBALL="$WORK/$COMMIT.tar.gz"
-if [ ! -f "$SOURCE/CMakeLists.txt" ]; then
-    if [ ! -f "$TARBALL" ]; then
-        curl -fL --retry 3 -o "$TARBALL.part" "$REPOSITORY/archive/$COMMIT.tar.gz"
-        mv "$TARBALL.part" "$TARBALL"
-    fi
-    if ! echo "$SHA256  $TARBALL" | sha256sum --check --quiet -; then
-        echo "$TARBALL does not match its pinned SHA-256; removed, nothing was built" >&2
-        rm -f "$TARBALL"
-        exit 1
-    fi
-    tar -xzf "$TARBALL" -C "$WORK"
+if [ ! -f "$TARBALL" ]; then
+    curl -fL --retry 3 -o "$TARBALL.part" "$REPOSITORY/archive/$COMMIT.tar.gz"
+    mv "$TARBALL.part" "$TARBALL"
 fi
+VERIFIED=$(sha256sum "$TARBALL" | cut -d' ' -f1)
+if [ "$VERIFIED" != "$SHA256" ]; then
+    echo "$TARBALL does not match its pinned SHA-256; removed, nothing was built" >&2
+    rm -f "$TARBALL"
+    exit 1
+fi
+rm -rf "$SOURCE"
+tar -xzf "$TARBALL" -C "$WORK"
 
 BUILD="$WORK/build-$COMMIT"
 STAGE="$WORK/install-$COMMIT"
@@ -92,7 +97,8 @@ cp "$SOURCE/LICENSE" "$OUT/transcribe-cpp-MIT.txt"
 cp "$SOURCE/ggml/LICENSE" "$OUT/ggml-MIT.txt"
 cp "$SOURCE/src/third_party/miniz/LICENSE" "$OUT/miniz-MIT.txt"
 cp "$SOURCE/src/third_party/silero_vad/LICENSE" "$OUT/silero-vad-MIT.txt"
-echo "$STAMP" > "$OUT/.build"
+# The hash of the tarball actually verified above, which the check made equal to the pinned one.
+echo "$COMMIT $VERIFIED ${FLAGS[*]}" > "$OUT/.build"
 
 echo "transcribe.cpp $COMMIT built into $OUT:"
 ls -la "$OUT"

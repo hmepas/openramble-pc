@@ -540,12 +540,15 @@ public sealed class AppStateTests : IDisposable
     {
         AppState state = harness.MakeState();
         var changed = new List<string?>();
-        state.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+        // Launch work raises its own changes from background threads while this test reads.
+        state.PropertyChanged += (_, args) => { lock (changed) { changed.Add(args.PropertyName); } };
 
         Monitor.Tap();
 
-        Assert.Contains(nameof(AppState.IsHotkeyHeld), changed);
-        Assert.Contains(nameof(AppState.HotkeyPressCount), changed);
+        string?[] seen;
+        lock (changed) { seen = [.. changed]; }
+        Assert.Contains(nameof(AppState.IsHotkeyHeld), seen);
+        Assert.Contains(nameof(AppState.HotkeyPressCount), seen);
     }
 
     /// <summary>

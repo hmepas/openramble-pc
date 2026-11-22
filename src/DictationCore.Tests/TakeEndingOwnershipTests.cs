@@ -32,6 +32,10 @@ public sealed class TakeEndingOwnershipTests
 
         public Gate? DismissGate { get; set; }
 
+        public Gate? NoticeGate { get; set; }
+
+        public bool ThrowsOnNotice { get; set; }
+
         public IReadOnlyList<DictationState> Presented { get { lock (gate) { return presented.ToArray(); } } }
 
         public IReadOnlyList<DictationNotice> Notices { get { lock (gate) { return notices.ToArray(); } } }
@@ -50,10 +54,11 @@ public sealed class TakeEndingOwnershipTests
             if (DismissGate is { } held) { await held.Pass(); }
         }
 
-        public Task PresentNotice(DictationNotice notice)
+        public async Task PresentNotice(DictationNotice notice)
         {
             lock (gate) { notices.Add(notice); }
-            return Task.CompletedTask;
+            if (ThrowsOnNotice) { throw new InvalidOperationException("the panel is gone"); }
+            if (NoticeGate is { } held) { await held.Pass(); }
         }
     }
 
@@ -210,5 +215,70 @@ public sealed class TakeEndingOwnershipTests
         Assert.Single(overlay.Notices);
         Assert.Equal(1, sounds.AttentionPlays);
         Assert.False(capture.IsRecording);
+    }
+
+    /// <summary>
+    /// An interruption whose notice never finishes presenting: the microphone is closed before
+    /// the notice is said, not after, so a stuck panel cannot keep it open.
+    /// </summary>
+    [Fact]
+    public async Task TestInterruptionWhoseNoticeHangsStillClosesTheMicrophone()
+    {
+        var capture = new TrackedCapture();
+        var overlay = new HeldOverlay();
+        var sounds = new CountingSounds();
+        var controller = MakeController(capture, overlay, sounds);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        Assert.Equal(DictationState.Listening, controller.State);
+
+        var noticing = new Gate();
+        overlay.NoticeGate = noticing;
+        controller.Interrupt("The disk is full.");
+        await Settle();
+        Assert.False(capture.IsRecording);
+
+        noticing.Open();
+        await Settle();
+        Assert.Equal(DictationState.Idle, controller.State);
+    }
+
+    /// <summary>An interruption whose notice throws still ends its take.</summary>
+    [Fact]
+    public async Task TestInterruptionWhoseNoticeThrowsStillEndsTheTake()
+    {
+        var capture = new TrackedCapture();
+        var overlay = new HeldOverlay { ThrowsOnNotice = true };
+        var sounds = new CountingSounds();
+        var controller = MakeController(capture, overlay, sounds);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Interrupt("The disk is full.");
+        await Settle();
+
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.False(capture.IsRecording);
+        Assert.Equal(1, overlay.DismissCount);
+    }
+
+    /// <summary>A rescue whose notice throws still ends its take.</summary>
+    [Fact]
+    public async Task TestRescueWhoseNoticeThrowsStillEndsTheTake()
+    {
+        var capture = new TrackedCapture();
+        var overlay = new HeldOverlay { ThrowsOnNotice = true };
+        var sounds = new CountingSounds();
+        var controller = MakeController(capture, overlay, sounds);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.PreserveActiveRecording("The microphone was disconnected.");
+        await Settle();
+
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.False(capture.IsRecording);
+        Assert.Equal(1, overlay.DismissCount);
     }
 }

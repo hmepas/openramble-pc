@@ -1863,11 +1863,20 @@ public sealed class DictationController
         var notice = new DictationNotice(kind: DictationNoticeKind.Failure, message: reason);
         _ = Task.Run(async () =>
         {
-            // Through Report: the interruption loses the words, and the person
-            // mid-sentence learns of it by ear like any other loss.
-            await Report(interrupted, EndingOwner.Interrupt, notice).ConfigureAwait(false);
-            await AbortWithinGrace(interrupted).ConfigureAwait(false);
-            await FinishWithoutInsertion(interrupted, EndingOwner.Interrupt).ConfigureAwait(false);
+            // The microphone closes first: Escape cannot take over an interruption's ending, so
+            // a notice that throws or never finishes presenting must not be what keeps it open.
+            // The cleanup runs whatever the notice did.
+            try
+            {
+                await AbortWithinGrace(interrupted).ConfigureAwait(false);
+                // Through Report: the interruption loses the words, and the person
+                // mid-sentence learns of it by ear like any other loss.
+                await Report(interrupted, EndingOwner.Interrupt, notice).ConfigureAwait(false);
+            }
+            finally
+            {
+                await FinishWithoutInsertion(interrupted, EndingOwner.Interrupt).ConfigureAwait(false);
+            }
         });
     }
 
@@ -1890,7 +1899,18 @@ public sealed class DictationController
                 SetState(DictationState.Transcribing);
                 preserved.Finalization = new CancellationTokenSource();
                 CancellationToken token = preserved.Finalization.Token;
-                _ = Task.Run(() => Rescue(reason, preserved, token));
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Rescue(reason, preserved, token).ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // A notice or a panel that threw must not leave the take ending forever.
+                        await Cleanup(preserved, EndingOwner.Rescue).ConfigureAwait(false);
+                    }
+                });
                 return;
             }
 

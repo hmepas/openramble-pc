@@ -225,9 +225,10 @@ public interface ITextInserting
     /// <summary>
     /// Insert and tell when exactly the text went into someone else's window.
     ///
-    /// A separate method is needed because insertion returns only after a
-    /// second of clipboard protection: from the outside the moment of insertion cannot be caught,
-    /// from the inside it is trivial.
+    /// A separate method is needed because insertion returns only after the target has read the
+    /// paste and the clipboard is back (or, where nothing can tell a read, after a fixed spell of
+    /// clipboard protection): from the outside the moment of insertion cannot be caught, from the
+    /// inside it is trivial.
     ///
     /// The default is a normal insert without marks. Test doubles do not measure
     /// anything and should not pretend to measure anything.
@@ -236,6 +237,17 @@ public interface ITextInserting
     {
         await Insert(text, target).ConfigureAwait(false);
         return new InsertionMarks();
+    }
+
+    /// <summary>
+    /// The person pressed the dictation key while the insertion waits for the target to read the
+    /// paste. Nothing has appeared, so they are trying again: stop waiting as soon as a real
+    /// application would have read. A paste nobody read by then throws
+    /// <see cref="TextInsertionError.PasteNotRead"/>, so it is said out loud.
+    /// </summary>
+    /// <remarks>Inserters that do not wait for a read have nothing to end.</remarks>
+    void EndTheReadWait()
+    {
     }
 }
 
@@ -265,8 +277,9 @@ public abstract class TextInsertionError : Exception
     }
 
     /// <summary>
-    /// Protected input is active - a password field or a terminal with keyboard protection.
-    /// You cannot insert there, and this is not a failure, but a normal situation.
+    /// Typing is protected and our paste cannot get through: on Windows, a window that runs with
+    /// more rights than this app, where UIPI drops synthetic keys. Not a failure, but a normal
+    /// situation - and the person's own Ctrl+V gets through, so the app offers a copy.
     /// </summary>
     public sealed class SecureInputActive : TextInsertionError
     {
@@ -293,7 +306,10 @@ public abstract class TextInsertionError : Exception
         }
     }
 
-    /// <summary>Paste has already been sent, but the old clipboard could not be returned.</summary>
+    /// <summary>
+    /// Paste has already been sent, but the old clipboard could not be returned. The words landed,
+    /// so this is reported on the side, not as the insertion's failure.
+    /// </summary>
     public sealed class InsertedButClipboardRestoreFailed : TextInsertionError
     {
         public InsertedButClipboardRestoreFailed()
@@ -327,6 +343,55 @@ public abstract class TextInsertionError : Exception
         {
         }
     }
+
+    /// <summary>
+    /// Ctrl+V was sent, but no application read the clipboard within the limit, so nothing was
+    /// pasted.
+    /// </summary>
+    public sealed class PasteNotRead : TextInsertionError
+    {
+        public PasteNotRead()
+            : base("nobody read the paste")
+        {
+        }
+    }
+
+    /// <summary>The journal's name for this failure.</summary>
+    public DictationFailureReason FailureReason => this switch
+    {
+        PasteNotRead => DictationFailureReason.PasteUnread,
+        SecureInputActive => DictationFailureReason.PasteUnreadWhileTypingProtected,
+        TargetChanged => DictationFailureReason.PasteTargetChanged,
+        TargetUnavailable => DictationFailureReason.PasteTargetGone,
+        ModifiersStillHeld => DictationFailureReason.PasteModifiersHeld,
+        AccessibilityPermissionDenied => DictationFailureReason.PasteWithoutAccessibility,
+        ClipboardWriteFailed or ClipboardRestoreFailed or InsertedButClipboardRestoreFailed =>
+            DictationFailureReason.PasteClipboardFailed,
+        _ => DictationFailureReason.PasteFailed,
+    };
+}
+
+/// <summary>
+/// Why a paste did not land, for the local journal.
+/// </summary>
+/// <remarks>
+/// An allowlist: the journal stores the case name, never the message, which can carry an error
+/// description, a path or dictated words. "It did not paste" is the report people send, and the
+/// journal could not say which kind it was. Upstream's enum also names every other failure the
+/// app reports; this port's notices carry a reason for a paste only, so only those cases exist
+/// here. <c>pasteBehindAnotherPaste</c> is left out too: no inserter here refuses a paste because
+/// another one is under way.
+/// </remarks>
+public enum DictationFailureReason
+{
+    PasteUnread,
+    PasteUnreadWhileTypingProtected,
+    PasteTargetChanged,
+    PasteTargetGone,
+    PasteModifiersHeld,
+    PasteWithoutAccessibility,
+    PasteClipboardFailed,
+    PasteFailed,
 }
 
 // MARK: - Feedback
@@ -362,12 +427,16 @@ public sealed record DictationNotice
         string message,
         string? recoverableText = null,
         string? recoveryAudio = null,
-        bool? wordsDidNotLand = null)
+        bool? wordsDidNotLand = null,
+        DictationFailureReason? reason = null,
+        TextInsertionError? insertionFailure = null)
     {
         Kind = kind;
         Message = message;
         RecoverableText = recoverableText;
         RecoveryAudio = recoveryAudio;
+        Reason = reason;
+        InsertionFailure = insertionFailure;
         // Failures lose the words by definition; anything else says so
         // explicitly at the site that knows.
         WordsDidNotLand = wordsDidNotLand ?? (kind == DictationNoticeKind.Failure);
@@ -407,6 +476,19 @@ public sealed record DictationNotice
     /// A person watching their editor needs the ear only for the second.
     /// </summary>
     public bool WordsDidNotLand { get; }
+
+    /// <summary>
+    /// Why a paste did not land, for the local journal. The message is for the person and never
+    /// reaches the journal; this case name is all it keeps.
+    /// </summary>
+    public DictationFailureReason? Reason { get; }
+
+    /// <summary>
+    /// What the paste reported, when that is known. The interface reads it to offer the action
+    /// that works now: copy while typing is protected, paste once focus is in a field.
+    /// <c>null</c> for every other notice.
+    /// </summary>
+    public TextInsertionError? InsertionFailure { get; }
 }
 
 /// <summary>

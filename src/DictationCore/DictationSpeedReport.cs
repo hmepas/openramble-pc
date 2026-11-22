@@ -41,8 +41,12 @@ public readonly record struct MonotonicInstant(long Timestamp)
 /// <item><description><c>ToClipboardRestored</c> - the previous contents of the buffer are returned to their place.</description></item>
 /// </list>
 ///
+/// <c>ToFirstRead</c> sits beside them as evidence, not as a promise: when the target
+/// application first read the pasted text. It is the number that says whether the clipboard
+/// comes back too soon for a slow application.
+///
 /// There is no forbidden metric here intentionally: "time until the text inserter
-/// returns" is not a speed - it is a thousand milliseconds inside
+/// returns" is not a speed - it is the wait for the target to read the paste plus
 /// clipboard protection. It is waiting, not working.
 ///
 /// <c>null</c> means "not measured", and never "zero". An edge that cannot
@@ -56,12 +60,17 @@ public readonly record struct MonotonicInstant(long Timestamp)
 /// Where <paramref name="ToRecognizedText"/> actually went. <c>null</c> only for a report built
 /// without the breakdown; a stage that did not run is absent inside it.
 /// </param>
+/// <param name="ToFirstRead">
+/// Key-up → the pasted text first read off the clipboard. Last rather than beside the other
+/// marks, as upstream has it, so the positional callers stay as they were.
+/// </param>
 public sealed record DictationSpeedReport(
     TimeSpan ToRecognizedText,
     TimeSpan? ToPasteDispatched = null,
     TimeSpan? ToClipboardRestored = null,
     TimeSpan? MicrophoneStartup = null,
-    DictationPhaseBreakdown? Phases = null);
+    DictationPhaseBreakdown? Phases = null,
+    TimeSpan? ToFirstRead = null);
 
 /// <summary>
 /// Which causal stage of a finished take owned the wait.
@@ -136,8 +145,10 @@ public sealed record DictationPhaseBreakdown(
 /// When the insertion has done something that is visible to a human.
 ///
 /// The inserter itself takes the marks: they cannot be taken from outside, because insertion
-/// returns only after a second of clipboard protection.
+/// returns only after the target read the paste and the clipboard came back.
 /// </summary>
+/// <param name="FirstReadAt">When an application first read the pasted text off the clipboard.</param>
 public sealed record InsertionMarks(
     MonotonicInstant? PasteDispatchedAt = null,
-    MonotonicInstant? ClipboardRestoredAt = null);
+    MonotonicInstant? ClipboardRestoredAt = null,
+    MonotonicInstant? FirstReadAt = null);

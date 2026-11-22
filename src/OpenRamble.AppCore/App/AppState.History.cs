@@ -208,9 +208,12 @@ public sealed partial class AppState
     ///
     /// Host-only, exactly like every other copy this app makes: a transcript must not travel
     /// into clipboard history just because it came from a list rather than from a live dictation.
+    /// A wordless take has nothing to copy, and copying it anyway would put an empty string over
+    /// whatever the person had on the clipboard - so it is a no-op, whatever a row's button offers.
     /// </summary>
     public void CopyHistoryEntry(HistoryEntry entry)
     {
+        if (entry.Text.Length == 0) { return; }
         try
         {
             clipboard?.Copy(entry.Text);

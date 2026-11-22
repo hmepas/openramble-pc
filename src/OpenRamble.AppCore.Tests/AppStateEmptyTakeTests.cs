@@ -95,6 +95,20 @@ public sealed class AppStateEmptyTakeTests : IDisposable
         return harness.MakeState();
     }
 
+    /// <summary>
+    /// A wordless row has nothing to copy: copying it must leave whatever the person had on the
+    /// clipboard alone rather than replacing it with an empty string.
+    /// </summary>
+    [Fact]
+    public void CopyingAWordlessTakeLeavesTheClipboardAlone()
+    {
+        AppState state = SeedWordlessTake();
+
+        state.CopyHistoryEntry(state.History[0]);
+
+        Assert.Empty(harness.Clipboard.Copied);
+    }
+
     [Fact]
     public async Task RecognizingAWordlessTakeAgainToNothingSaysSoAndKeepsIt()
     {

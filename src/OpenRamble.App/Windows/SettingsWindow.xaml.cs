@@ -472,7 +472,12 @@ public sealed partial class SettingsWindow : Window
             actions.Children.Add(again);
         }
 
-        actions.Children.Add(RowButton("Copy", "Copy", "Copy this dictation", () => state.CopyHistoryEntry(entry)));
+        // A take with no words has nothing to copy: the button is hidden rather than collapsed, so
+        // Delete stays in its place on every row.
+        bool hasWords = entry.Text.Length > 0;
+        var copy = RowButton("Copy", "Copy", "Copy this dictation", () => state.CopyHistoryEntry(entry));
+        if (!hasWords) { copy.Visibility = Visibility.Hidden; }
+        actions.Children.Add(copy);
         actions.Children.Add(RowButton("Delete", "Delete", "Delete this dictation", () =>
         {
             if (playing == entry.Id) { StopPlayback(); }
@@ -488,16 +493,25 @@ public sealed partial class SettingsWindow : Window
         });
         panel.Children.Add(header);
 
-        panel.Children.Add(new TextBox
-        {
-            Text = entry.Text,
-            IsReadOnly = true,
-            TextWrapping = TextWrapping.Wrap,
-            BorderThickness = new Thickness(0),
-            Background = System.Windows.Media.Brushes.Transparent,
-            Foreground = (System.Windows.Media.Brush)Application.Current.Resources["WindowForegroundBrush"],
-            Margin = new Thickness(0, 4, 0, 4),
-        });
+        panel.Children.Add(hasWords
+            ? new TextBox
+            {
+                Text = entry.Text,
+                IsReadOnly = true,
+                TextWrapping = TextWrapping.Wrap,
+                BorderThickness = new Thickness(0),
+                Background = System.Windows.Media.Brushes.Transparent,
+                Foreground = (System.Windows.Media.Brush)Application.Current.Resources["WindowForegroundBrush"],
+                Margin = new Thickness(0, 4, 0, 4),
+            }
+            : new TextBlock
+            {
+                // Kept for its audio: play it, or recognize it again.
+                Text = "Nothing recognized",
+                Style = (Style)Application.Current.Resources["Secondary"],
+                FontStyle = FontStyles.Italic,
+                Margin = new Thickness(0, 4, 0, 4),
+            });
 
         if (audio is not null)
         {

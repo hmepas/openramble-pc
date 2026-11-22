@@ -856,6 +856,46 @@ public sealed class DictationControllerFailurePathTests
         await Settle();
     }
 
+    /// <summary>
+    /// The tap's deadline expires at the very instant the second press promotes the take: its
+    /// timer has already fired, and cancelling it no longer recalls the callback. A callback for
+    /// a deadline that is no longer the take's must end nothing.
+    /// </summary>
+    [Fact]
+    public async Task TestATapDeadlineReplacedByHandsFreeEndsNothing()
+    {
+        int promoted = 0;
+        for (int attempt = 0; attempt < 20; attempt += 1)
+        {
+            var gate = new Gate();
+            var microphone = new SlowOpeningMicrophone(gate);
+            var controller = MakeSlowStartController(
+                microphone,
+                new FakeSounds(),
+                microphoneStartDeadline: TimeSpan.FromSeconds(5),
+                preparingStopDeadline: TimeSpan.Zero);
+
+            controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+            await Task.Delay(5);
+            controller.Stop();
+            controller.PromoteToHandsFree();
+            // The watchdog may legitimately have ended the tap first; only a take the second
+            // press did promote is the hands-free one that must keep waiting.
+            if (controller.IsHandsFreeActive)
+            {
+                promoted += 1;
+                await Task.Delay(30);
+                Assert.Equal(DictationState.Preparing, controller.State);
+            }
+
+            controller.Cancel();
+            gate.Open();
+            await WaitUntilIdle(controller);
+        }
+
+        Assert.True(promoted > 0, "the second press never won the race");
+    }
+
     // MARK: - State flow
 
     [Fact]

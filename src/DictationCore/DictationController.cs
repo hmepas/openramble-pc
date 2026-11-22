@@ -785,7 +785,7 @@ public sealed class DictationController
         // A timer, not a task started now: nothing runs until the deadline, so arming this at the
         // key-down takes no thread away from the capture start it is watching.
         _ = Task.Delay(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, watchdog.Token).ContinueWith(
-            _ => MicrophoneStartTookTooLong(watched),
+            _ => MicrophoneStartTookTooLong(watched, watchdog),
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnRanToCompletion,
             TaskScheduler.Default);
@@ -800,10 +800,17 @@ public sealed class DictationController
     /// finds its session no longer preparing and closes the microphone itself - the same path a
     /// cancellation during the start already takes.
     /// </remarks>
-    private void MicrophoneStartTookTooLong(Take late)
+    /// <param name="watchdog">
+    /// The watchdog that fired, or null when the take is ended directly. A timer that has already
+    /// fired is not recalled by cancelling it, so a watchdog that was replaced or cancelled in the
+    /// meantime - a tap's deadline that hands-free took away at the same instant - ends nothing.
+    /// </param>
+    private void MicrophoneStartTookTooLong(Take late, CancellationTokenSource? watchdog = null)
     {
         lock (gate)
         {
+            if (watchdog is not null && !ReferenceEquals(late.MicrophoneStartWatchdog, watchdog)) { return; }
+
             // Claims the ending, so neither a stop nor the late start can finish it.
             if (!late.TryClaimEnding(EndingOwner.Watchdog)) { return; }
 

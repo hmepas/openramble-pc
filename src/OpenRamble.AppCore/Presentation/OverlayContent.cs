@@ -50,6 +50,22 @@ public sealed record OverlayContent
     /// <summary>An urgent announcement interrupts whatever the screen reader is reading.</summary>
     public required bool IsAnnouncementUrgent { get; init; }
 
+    /// <summary>
+    /// Words that could not land. The panel grows to hold them, with the reason and the action;
+    /// <see cref="Title"/> and <see cref="Subtitle"/> carry the words and the reason for a panel
+    /// that draws nothing else.
+    /// </summary>
+    public WaitingWords? Waiting { get; init; }
+
+    /// <summary>How a waiting take ended, said once before the panel leaves.</summary>
+    public TakeOutcome? Outcome { get; init; }
+
+    /// <summary>
+    /// Whether the panel shows what the person said. Upstream keeps it out of screen captures
+    /// while it does; see the Linux panel for why this one cannot.
+    /// </summary>
+    public bool ShowsDictatedWords => Waiting is not null;
+
     /// <param name="enginePreparation">
     /// What the recognition engine is doing right now; <c>null</c> when nobody manages its
     /// residency and it is simply always there.
@@ -58,13 +74,56 @@ public sealed record OverlayContent
     /// The take is finished and the model is not resident yet, so the words are waiting for a
     /// load rather than for recognition.
     /// </param>
+    /// <param name="waiting">Words that could not land.</param>
+    /// <param name="outcome">How a waiting take just ended.</param>
+    /// <param name="key">The dictation key, as the panel names it.</param>
     public static OverlayContent Make(
         DictationState state,
         DictationNotice? notice,
         TimeSpan elapsed,
         EnginePreparationState? enginePreparation = null,
-        bool isWaitingForEngine = false)
+        bool isWaitingForEngine = false,
+        WaitingWords? waiting = null,
+        TakeOutcome? outcome = null,
+        DictationHotkey key = SettingsDefaults.Hotkey)
     {
+        // How the waiting ended is the last word on it.
+        if (outcome is not null)
+        {
+            return new OverlayContent
+            {
+                Title = outcome.Message,
+                Subtitle = null,
+                // Green is for the paste alone; kept is not success and not waiting.
+                Tone = outcome is TakeOutcome.Pasted ? OverlayTone.Idle : OverlayTone.Info,
+                AccessibilityLabel = outcome.Message,
+                Announcement = outcome.Message,
+                IsAnnouncementUrgent = false,
+                Outcome = outcome,
+            };
+        }
+
+        // Words that did not land are not a four-second notice: they wait, in full, with their
+        // action - and only at rest. A new take files them in History before its microphone opens.
+        // A notice shown meanwhile still goes first, as it does over a take.
+        if (waiting is not null && notice is null && state is DictationState.Idle or DictationState.Inserting)
+        {
+            string label = waiting.AccessibilityLabel(key.Title);
+            return new OverlayContent
+            {
+                Title = waiting.Words,
+                Subtitle = waiting.Note is { } note ? $"{note} {waiting.Reason(key.Title)}" : waiting.Reason(key.Title),
+                // Copied words wait too, but nothing about them is an alarm.
+                Tone = waiting.IsCopied ? OverlayTone.Info : OverlayTone.Warning,
+                AccessibilityLabel = label,
+                // The person is looking at the app the words were meant for, so this interrupts,
+                // like every other failed landing.
+                Announcement = label,
+                IsAnnouncementUrgent = true,
+                Waiting = waiting,
+            };
+        }
+
         // The message is more important than the state: it is shown instead.
         if (notice is not null)
         {
@@ -110,13 +169,13 @@ public sealed record OverlayContent
             // can last a minute and a half - the exact minute and a half in which a person
             // decides the product is broken and reaches for Task Manager.
             string title = enginePreparation!.Title;
-            const string waiting = "Your words are recorded and waiting.";
+            const string recorded = "Your words are recorded and waiting.";
             return new OverlayContent
             {
                 Title = title,
-                Subtitle = waiting,
+                Subtitle = recorded,
                 Tone = OverlayTone.Working,
-                AccessibilityLabel = $"{title}. {waiting}",
+                AccessibilityLabel = $"{title}. {recorded}",
                 // Deliberately silent. The title carries a seconds counter, so announcing it
                 // would interrupt the screen reader once per second for as long as the load
                 // lasts; entering "Transcribing" has already been announced once.

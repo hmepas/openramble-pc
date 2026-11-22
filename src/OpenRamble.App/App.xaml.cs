@@ -73,7 +73,7 @@ public partial class App : Application
             Settings = SettingsStore.Under(paths),
             Permissions = new MicrophonePermissions(),
             HotkeyMonitor = hotkeys,
-            CopyShortcutMonitor = copyShortcut,
+            LastTakeShortcutMonitor = copyShortcut,
             // Labels asked of the live keyboard layout, so a shortcut recorded on a Latin layout
             // still names a real key after switching to Cyrillic.
             ShortcutKeymap = LiveWindowsShortcutKeymap.Instance,

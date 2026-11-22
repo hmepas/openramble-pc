@@ -40,7 +40,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly SettingsStore settingsStore;
     private readonly IPermissionReading permissions;
     private readonly IHotkeyMonitoring hotkeyMonitor;
-    private readonly IShortcutMonitoring? copyShortcutMonitor;
+    private readonly IShortcutMonitoring? lastTakeShortcutMonitor;
     private readonly IShortcutKeymap shortcutKeymap;
     private readonly IAudioInputDeviceSource? inputDevices;
     private readonly ITextInserting inserter;
@@ -90,7 +90,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         bundledModelDirectory = environment.BundledModelDirectory;
         permissions = environment.Permissions;
         hotkeyMonitor = environment.HotkeyMonitor;
-        copyShortcutMonitor = environment.CopyShortcutMonitor;
+        lastTakeShortcutMonitor = environment.LastTakeShortcutMonitor;
         shortcutKeymap = environment.ShortcutKeymap ?? WindowsShortcutKeymap.Instance;
         inputDevices = environment.InputDevices;
         inserter = environment.Inserter;
@@ -122,7 +122,10 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // Every one of these reads through the defaults the revert arrow uses, so what the app
         // starts with and what the arrow gives back cannot be two different values.
         copiesToClipboard = settings.CopiesToClipboard;
-        copyShortcut = KeyCombination.Parse(settings.CopyShortcut);
+        defaultLastTakeShortcut = environment.DefaultLastTakeShortcut;
+        copyShortcut = settings.CopyShortcut is null
+            ? defaultLastTakeShortcut
+            : KeyCombination.Parse(settings.CopyShortcut);
         appendsTrailingSpace = settings.AppendsTrailingSpace;
         appearance = AppAppearances.Parse(settings.Appearance);
         inputDeviceUid = string.IsNullOrEmpty(settings.InputDeviceUid) ? null : settings.InputDeviceUid;
@@ -286,7 +289,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 prepareDeadline: environment.PrepareDeadline ?? TimeSpan.FromSeconds(90),
                 // A take past the memory cap lives in its file; reading it back is what lets the
                 // pieces recognized while the person spoke be reused instead of redone.
-                readSamples: (url, token) => new AudioFileReader().SamplesOnDiskThread(url, token));
+                readSamples: (url, token) => new AudioFileReader().SamplesOnDiskThread(url, token),
+                insertionDeadline: environment.InsertionDeadline);
 
             built.OnStateChange = state =>
             {
@@ -440,7 +444,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // Unlike macOS, the hook needs no permission - it starts once and stays for the life of
         // the process. Nothing about a revoked microphone makes the keyboard hook invalid.
         hotkeyMonitor.Start();
-        ApplyCopyShortcut();
+        ApplyLastTakeShortcut();
         RefreshPermissions();
 
         _ = Task.Run(async () =>
@@ -540,7 +544,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
     private void WireHotkey()
     {
-        if (copyShortcutMonitor is not null) { copyShortcutMonitor.OnPress = CopyLastDictation; }
+        if (lastTakeShortcutMonitor is not null) { lastTakeShortcutMonitor.OnPress = CopyLastDictation; }
         hotkeyMonitor.SetHotkey(Hotkey);
         hotkeyMonitor.OnPress = BeginHoldToDictate;
         hotkeyMonitor.OnRelease = EndHoldToDictate;
@@ -889,12 +893,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     {
         journal.Record(DiagnosticEvent.SystemWoke);
         hotkeyMonitor.Stop();
-        copyShortcutMonitor?.Stop();
+        lastTakeShortcutMonitor?.Stop();
         // The release never arrived, so nothing will ever say the key came up. Restarting
         // tracking erases the gesture; this erases the same memory on our side.
         IsHotkeyHeld = false;
         hotkeyMonitor.Start();
-        ApplyCopyShortcut();
+        ApplyLastTakeShortcut();
         RefreshPermissions();
         RevalidateEngineAfterWake();
     }
@@ -1158,10 +1162,10 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // Drains the queue: every event recorded so far reaches the disk.
         journal.Dispose();
         hotkeyMonitor.Stop();
-        if (copyShortcutMonitor is not null)
+        if (lastTakeShortcutMonitor is not null)
         {
-            copyShortcutMonitor.Stop();
-            copyShortcutMonitor.OnPress = null;
+            lastTakeShortcutMonitor.Stop();
+            lastTakeShortcutMonitor.OnPress = null;
         }
 
         // The monitor outlives us - it owns an OS hook. Leaving our callbacks on it would keep

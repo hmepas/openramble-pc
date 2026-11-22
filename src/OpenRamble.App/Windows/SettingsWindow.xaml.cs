@@ -104,7 +104,7 @@ public sealed partial class SettingsWindow : Window
             copyRecorder,
             "Press this shortcut to put the last dictation back on the clipboard",
             out copyRevert,
-            () => state.CopyShortcut = SettingsDefaults.CopyShortcut));
+            () => state.CopyShortcut = state.DefaultLastTakeShortcut));
 
         // MARK: - Behavior
 
@@ -274,7 +274,7 @@ public sealed partial class SettingsWindow : Window
             HotkeyWarning.Visibility = state.HotkeyWarning is null ? Visibility.Collapsed : Visibility.Visible;
 
             if (copyRecorder.Shortcut != state.CopyShortcut) { copyRecorder.Shortcut = state.CopyShortcut; }
-            ShowRevert(copyRevert, state.CopyShortcut != SettingsDefaults.CopyShortcut);
+            ShowRevert(copyRevert, state.CopyShortcut != state.DefaultLastTakeShortcut);
 
             launchToggle.IsChecked = state.LaunchAtLogin;
             ShowRevert(launchRevert, state.LaunchAtLogin != SettingsDefaults.LaunchAtLogin);

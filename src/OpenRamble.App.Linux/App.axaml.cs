@@ -124,12 +124,14 @@ public sealed partial class App : Application
             PreviousModelManifest = ModelManifest.Bundled(),
             Permissions = microphone,
             HotkeyMonitor = monitor,
-            CopyShortcutMonitor = chord,
+            LastTakeShortcutMonitor = chord,
             ShortcutKeymap = LinuxShortcutKeymap.Instance,
             InputDevices = new PipeWireInputDevices(),
             // Our own windows are XWayland, where wtype's keymap does not apply; they take the
             // text directly. Everything else still goes through the inserter above.
             Inserter = new OwnWindowTextInserter(inserter, ActiveOwnSink),
+            // The inserter waits up to three seconds for the paste to be read.
+            InsertionDeadline = LinuxTextInserter.InsertionDeadline,
             Overlay = panel,
             Sounds = new SoundPlayer(),
             MakeCapture = (takes, onFailure, onSamples, preferredDeviceUid) =>

@@ -41,7 +41,7 @@ public sealed class AppStatePreferencesTests : IDisposable
         AppState state = harness.MakeState();
 
         Assert.Equal(SettingsDefaults.Hotkey, state.Hotkey);
-        Assert.Equal(SettingsDefaults.CopyShortcut, state.CopyShortcut);
+        Assert.Equal(state.DefaultLastTakeShortcut, state.CopyShortcut);
         Assert.Equal(SettingsDefaults.SoundsEnabled, state.SoundsEnabled);
         Assert.Equal(SettingsDefaults.CopiesToClipboard, state.CopiesToClipboard);
         Assert.Equal(SettingsDefaults.AppendsTrailingSpace, state.AppendsTrailingSpace);

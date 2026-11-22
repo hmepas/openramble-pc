@@ -8,6 +8,13 @@ public sealed partial class AppState
 {
     private bool copiesToClipboard;
     private KeyCombination? copyShortcut;
+    private readonly KeyCombination? defaultLastTakeShortcut;
+
+    /// <summary>
+    /// The chord a person has before choosing one - the platform's, from the composition root -
+    /// and what the revert arrow gives back.
+    /// </summary>
+    public KeyCombination? DefaultLastTakeShortcut => defaultLastTakeShortcut;
     private bool appendsTrailingSpace;
     private AppAppearance appearance;
     private string? inputDeviceUid;
@@ -48,8 +55,9 @@ public sealed partial class AppState
         set
         {
             if (!Set(ref copyShortcut, value)) { return; }
-            UpdateSettings(current => current with { CopyShortcut = value?.RawValue });
-            ApplyCopyShortcut();
+            // Cleared is stored as empty, not null: null is "never chosen", which reads as the default.
+            UpdateSettings(current => current with { CopyShortcut = value?.RawValue ?? string.Empty });
+            ApplyLastTakeShortcut();
             Raise(nameof(CopyLastMenuTitle));
         }
     }
@@ -217,13 +225,13 @@ public sealed partial class AppState
     /// no permission and starts once at assembly, so the one rule left is the monitor's own: a
     /// monitor with nothing to look for is a monitor that only costs.
     /// </remarks>
-    private void ApplyCopyShortcut()
+    private void ApplyLastTakeShortcut()
     {
-        if (copyShortcutMonitor is null) { return; }
+        if (lastTakeShortcutMonitor is null) { return; }
         KeyCombination? shortcut = CopyShortcut;
-        copyShortcutMonitor.SetShortcut(shortcut);
+        lastTakeShortcutMonitor.SetShortcut(shortcut);
         if (shortcut is null) { return; }
-        if (!copyShortcutMonitor.IsRunning) { copyShortcutMonitor.Start(); }
+        if (!lastTakeShortcutMonitor.IsRunning) { lastTakeShortcutMonitor.Start(); }
     }
 
     /// <summary>

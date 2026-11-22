@@ -26,9 +26,13 @@ public sealed record AppSettings
     public bool CopiesToClipboard { get; init; }
 
     /// <summary>
-    /// The chord that copies the last dictation, stored as <see cref="KeyCombination.RawValue"/>;
-    /// <c>null</c> or unparsable - no shortcut.
+    /// The chord that pastes the last take, stored as <see cref="KeyCombination.RawValue"/>;
+    /// <c>null</c> - never chosen, so the platform's default; empty or unparsable - cleared.
     /// </summary>
+    /// <remarks>
+    /// The stored name is the one it had when the chord copied the last dictation, as upstream
+    /// kept its <c>copyShortcut</c> key: a chord someone chose then is theirs now, pasting.
+    /// </remarks>
     public string? CopyShortcut { get; init; }
 
     /// <summary>End every dictation with a space. For dictating in runs.</summary>

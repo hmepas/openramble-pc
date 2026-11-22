@@ -212,7 +212,7 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         HotkeyWarning.IsVisible = state.HotkeyWarning is not null;
 
         CopyShortcutRecorder.Shortcut = state.CopyShortcut;
-        Changed(RevertCopyShortcut, state.CopyShortcut != SettingsDefaults.CopyShortcut);
+        Changed(RevertCopyShortcut, state.CopyShortcut != state.DefaultLastTakeShortcut);
 
         LaunchToggle.IsChecked = state.LaunchAtLogin;
         Changed(RevertLaunch, state.LaunchAtLogin != SettingsDefaults.LaunchAtLogin);
@@ -302,7 +302,7 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
     private void OnRevertHotkey(object? sender, RoutedEventArgs args) => state.Hotkey = SettingsDefaults.Hotkey;
 
-    private void OnRevertCopyShortcut(object? sender, RoutedEventArgs args) => state.CopyShortcut = SettingsDefaults.CopyShortcut;
+    private void OnRevertCopyShortcut(object? sender, RoutedEventArgs args) => state.CopyShortcut = state.DefaultLastTakeShortcut;
 
     private void OnRevertLaunch(object? sender, RoutedEventArgs args) => state.LaunchAtLogin = SettingsDefaults.LaunchAtLogin;
 

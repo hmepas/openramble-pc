@@ -888,7 +888,7 @@ public sealed class AppHarness : IDisposable
             PreviousModelManifest = PreviousModel,
             Permissions = Permissions,
             HotkeyMonitor = Monitor,
-            CopyShortcutMonitor = CopyMonitor,
+            LastTakeShortcutMonitor = CopyMonitor,
             InputDevices = InputDevices,
             MonotonicNow = () => MonotonicNow,
             Inserter = Inserter,

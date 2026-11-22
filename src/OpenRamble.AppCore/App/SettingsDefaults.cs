@@ -13,14 +13,15 @@ namespace OpenRamble.AppCore;
 /// The macOS list also carries <c>presence</c> (menu bar, Dock, or both) and a default
 /// recording shortcut. Neither exists here: a PC tray application has no Dock to move to, and
 /// the recorder is not part of this port.
+///
+/// The paste-last-take chord is not here either: a key code is a platform's number, so its default
+/// comes from the composition root (<see cref="AppEnvironment.DefaultLastTakeShortcut"/>) and the
+/// revert arrow reads it back from <see cref="AppState.DefaultLastTakeShortcut"/>.
 /// </remarks>
 public static class SettingsDefaults
 {
     /// <summary>Right Ctrl: free on every layout, present on every keyboard.</summary>
     public const DictationHotkey Hotkey = DictationHotkey.RightCtrl;
-
-    /// <summary>Off unless chosen: a shortcut nobody asked for collides with one they use.</summary>
-    public static readonly KeyCombination? CopyShortcut = null;
 
     public const bool SoundsEnabled = true;
     public const bool CopiesToClipboard = false;

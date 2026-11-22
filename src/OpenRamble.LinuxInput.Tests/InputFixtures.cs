@@ -297,6 +297,21 @@ internal sealed class FakeWaylandDesktop : ICommandRunner
     /// <summary>Whether the last write asked for the do-not-record marker.</summary>
     public bool LastWriteWasSensitive { get; private set; }
 
+    /// <summary>Whether the application in front reads the clipboard when Ctrl+V reaches it.</summary>
+    public bool TargetReadsPaste { get; set; } = true;
+
+    /// <summary>A clipboard history that reads every new offer the moment it appears.</summary>
+    public bool WatcherReadsEveryOffer { get; set; }
+
+    /// <summary>
+    /// Whether wl-copy serves its reads through the <c>cat</c> on the PATH it was given - the
+    /// detail the read receipt rests on. <c>false</c> is a wl-clipboard that serves some other way.
+    /// </summary>
+    public bool ServesThroughCat { get; set; } = true;
+
+    /// <summary>The receipt the offer on the clipboard counts its reads on, if it has one.</summary>
+    private string? offerReceipt;
+
     /// <summary>Put something on the clipboard the way another application would.</summary>
     public void SomebodyCopies(string text)
     {
@@ -304,7 +319,16 @@ internal sealed class FakeWaylandDesktop : ICommandRunner
         {
             ClipboardText = text;
             ClipboardHasImage = false;
+            offerReceipt = null;
         }
+    }
+
+    /// <summary>One read of the offer, the way the shim notes it.</summary>
+    private void NoteRead()
+    {
+        if (!ServesThroughCat || offerReceipt is null || !File.Exists(offerReceipt)) { return; }
+
+        File.AppendAllText(offerReceipt, ".");
     }
 
     public CommandResult Run(CommandRequest request)
@@ -334,6 +358,7 @@ internal sealed class FakeWaylandDesktop : ICommandRunner
         {
             ClipboardText = null;
             ClipboardHasImage = false;
+            offerReceipt = null;
             return Ok();
         }
 
@@ -346,6 +371,8 @@ internal sealed class FakeWaylandDesktop : ICommandRunner
         ClipboardText = request.Input;
         ClipboardHasImage = false;
         LastWriteWasSensitive = sensitive;
+        offerReceipt = request.Environment?.GetValueOrDefault(PasteReadReceipts.ReceiptVariable);
+        if (WatcherReadsEveryOffer) { NoteRead(); }
         return Ok();
     }
 
@@ -370,6 +397,7 @@ internal sealed class FakeWaylandDesktop : ICommandRunner
             return new CommandResult(true, 1, string.Empty, "not available as requested type");
         }
 
+        NoteRead();
         return new CommandResult(true, 0, ClipboardText ?? string.Empty, string.Empty);
     }
 
@@ -399,6 +427,7 @@ internal sealed class FakeWaylandDesktop : ICommandRunner
         else
         {
             Pastes += 1;
+            if (TargetReadsPaste) { NoteRead(); }
         }
 
         return Ok();

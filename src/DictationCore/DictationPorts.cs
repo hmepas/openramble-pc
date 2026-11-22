@@ -373,9 +373,24 @@ public sealed record DictationNotice
         WordsDidNotLand = wordsDidNotLand ?? (kind == DictationNoticeKind.Failure);
     }
 
+    /// <summary>
+    /// A notice that ends in an exception's own message. The person sees it whole; the
+    /// diagnostic log gets <paramref name="what"/> and the exception's type name only, because a
+    /// message the runtime wrote can carry file paths.
+    /// </summary>
+    public static DictationNotice ForException(DictationNoticeKind kind, string what, Exception error) =>
+        new(kind, $"{what}: {error.Message}") { LogMessage = $"{what}: {error.GetType().Name}" };
+
     public DictationNoticeKind Kind { get; }
 
     public string Message { get; }
+
+    /// <summary>
+    /// What the diagnostic log writes in place of <see cref="Message"/>, or <c>null</c> when the
+    /// message is a fixed template and may be written as it is. Set wherever the message carries
+    /// text that is not ours, such as an exception's message.
+    /// </summary>
+    public string? LogMessage { get; init; }
 
     /// <summary>Recognized text that could not be inserted. Process memory only.</summary>
     public string? RecoverableText { get; }

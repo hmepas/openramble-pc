@@ -719,7 +719,7 @@ public sealed partial class SettingsWindow : Window
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            state.ReportDictionaryFileProblem($"The dictionary file couldn't be read: {error.Message}");
+            state.ReportDictionaryFileProblem("The dictionary file couldn't be read", error);
         }
 
         RenderDictionary();
@@ -741,7 +741,7 @@ public sealed partial class SettingsWindow : Window
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            state.ReportDictionaryFileProblem($"The dictionary couldn't be saved: {error.Message}");
+            state.ReportDictionaryFileProblem("The dictionary couldn't be saved", error);
         }
     }
 }

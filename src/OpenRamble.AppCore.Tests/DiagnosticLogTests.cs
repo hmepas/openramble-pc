@@ -240,6 +240,34 @@ public sealed class DiagnosticLogTests
     }
 
     /// <summary>
+    /// A notice that ends in an exception's message shows it to the person and logs only the
+    /// template and the exception's type: a message the runtime wrote can name a file path.
+    /// </summary>
+    [Fact]
+    public void ANoticeLogsTheExceptionTypeNotItsMessage()
+    {
+        using var harness = new AppHarness();
+        harness.LaunchAtLogin.Failure = new UnauthorizedAccessException(
+            "Access to the path '/home/someone/.config/autostart/openramble.desktop' is denied.");
+        var sink = new FlushCountingWriter();
+        using (DiagnosticLog.Install(new DiagnosticLog(sink, () => DateTimeOffset.UnixEpoch)))
+        {
+            AppState state = harness.MakeState();
+            state.LaunchAtLogin = true;
+            Assert.Contains("/home/someone/", state.LastNotice!.Message, StringComparison.Ordinal);
+        }
+
+        string line = Assert.Single(
+            sink.Lines,
+            written => written.Contains("login_item", StringComparison.Ordinal));
+        Assert.Contains(
+            "message=Could_not_update_the_login_item:_UnauthorizedAccessException",
+            line,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("someone", line, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A sink that fails takes the log down, never the dictation.
     /// </summary>
     /// <remarks>

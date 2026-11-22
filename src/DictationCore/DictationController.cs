@@ -885,22 +885,30 @@ public sealed class DictationController
         announce?.Invoke(false);
     }
 
-    /// <summary>Move the take into safekeeping and word the outcome for the notice.</summary>
-    private async Task<(string? Saved, string Suffix)> PreserveForRetry(string url)
+    /// <summary>Move the take into safekeeping and word the failure notice around the outcome.</summary>
+    /// <param name="lead">What went wrong; the notice adds where the recording is.</param>
+    private async Task<DictationNotice> PreserveForRetry(string url, string lead)
     {
         try
         {
             string? saved = await recordingRecovery.Preserve(url).ConfigureAwait(false);
-            return (
-                saved,
-                saved is null
+            return new DictationNotice(
+                kind: DictationNoticeKind.Failure,
+                message: lead + (saved is null
                     ? " The recording couldn't be kept."
                     : " The recording is kept on this PC for a few days"
-                        + " (Settings → Privacy → Open recordings folder).");
+                        + " (Settings → Privacy → Open recordings folder)."),
+                recoveryAudio: saved);
         }
         catch (Exception error)
         {
-            return (null, $" The recording is still on disk, but safekeeping failed: {error.Message}");
+            const string kept = " The recording is still on disk, but safekeeping failed";
+            return new DictationNotice(
+                kind: DictationNoticeKind.Failure,
+                message: $"{lead}{kept}: {error.Message}")
+            {
+                LogMessage = $"{lead}{kept}: {error.GetType().Name}",
+            };
         }
     }
 
@@ -1205,11 +1213,10 @@ public sealed class DictationController
             // the take, but do not signal the inference-stall hook: the owner's own preparation
             // retry owns recovery if that load is genuinely wedged, and recycling a load that is
             // about to become ready would only make the next take cold again.
-            (string? saved, string suffix) = await PreserveForRetry(recording.Url).ConfigureAwait(false);
-            await Report(take, new DictationNotice(
-                kind: DictationNoticeKind.Failure,
-                message: "The speech model is still getting ready; this take was not discarded." + suffix,
-                recoveryAudio: saved)).ConfigureAwait(false);
+            DictationNotice failed = await PreserveForRetry(
+                recording.Url,
+                "The speech model is still getting ready; this take was not discarded.").ConfigureAwait(false);
+            await Report(take, failed).ConfigureAwait(false);
             await Cleanup(take).ConfigureAwait(false);
             return;
         }
@@ -1228,11 +1235,10 @@ public sealed class DictationController
             // user feedback must never postpone fencing the engine.
             lock (gate) { OnTranscriptionStall?.Invoke(); }
 
-            (string? saved, string suffix) = await PreserveForRetry(recording.Url).ConfigureAwait(false);
-            await Report(take, new DictationNotice(
-                kind: DictationNoticeKind.Failure,
-                message: "Transcribing took too long and was stopped." + suffix,
-                recoveryAudio: saved)).ConfigureAwait(false);
+            DictationNotice failed = await PreserveForRetry(
+                recording.Url,
+                "Transcribing took too long and was stopped.").ConfigureAwait(false);
+            await Report(take, failed).ConfigureAwait(false);
             await Cleanup(take).ConfigureAwait(false);
             return;
         }
@@ -1257,11 +1263,10 @@ public sealed class DictationController
 
             OnRecognitionFailure?.Invoke(error);
             RecordStageFailure(false);
-            (string? saved, string suffix) = await PreserveForRetry(recording.Url).ConfigureAwait(false);
-            await Report(take, new DictationNotice(
-                kind: DictationNoticeKind.Failure,
-                message: new DictationError.Recognition(error.ToString()).UserMessage + suffix,
-                recoveryAudio: saved)).ConfigureAwait(false);
+            DictationNotice failed = await PreserveForRetry(
+                recording.Url,
+                new DictationError.Recognition(error.ToString()).UserMessage).ConfigureAwait(false);
+            await Report(take, failed).ConfigureAwait(false);
             await Cleanup(take).ConfigureAwait(false);
             return;
         }
@@ -1324,11 +1329,10 @@ public sealed class DictationController
         catch (Exception error)
         {
             OnRecognitionFailure?.Invoke(error);
-            (string? saved, string suffix) = await PreserveForRetry(recording.Url).ConfigureAwait(false);
-            await Report(take, new DictationNotice(
-                kind: DictationNoticeKind.Failure,
-                message: "The recognized text couldn't be prepared for insertion." + suffix,
-                recoveryAudio: saved)).ConfigureAwait(false);
+            DictationNotice failed = await PreserveForRetry(
+                recording.Url,
+                "The recognized text couldn't be prepared for insertion.").ConfigureAwait(false);
+            await Report(take, failed).ConfigureAwait(false);
             await Cleanup(take).ConfigureAwait(false);
             return;
         }
@@ -2138,9 +2142,10 @@ public sealed class DictationController
 
         if (failure is not null)
         {
-            await Report(take, new DictationNotice(
-                kind: DictationNoticeKind.Failure,
-                message: $"Couldn't delete the local recording: {failure.Message}")).ConfigureAwait(false);
+            await Report(take, DictationNotice.ForException(
+                DictationNoticeKind.Failure,
+                "Couldn't delete the local recording",
+                failure)).ConfigureAwait(false);
         }
     }
 

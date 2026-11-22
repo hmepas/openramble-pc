@@ -425,9 +425,10 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         catch (Exception error) when (error is IOException or UnauthorizedAccessException
             or ModelManifestError or ModelInstallError)
         {
-            Notify(new DictationNotice(
+            Notify(DictationNotice.ForException(
                 DictationNoticeKind.Failure,
-                $"Couldn't prepare the app's working folders: {error.Message}"));
+                "Couldn't prepare the app's working folders",
+                error));
         }
 
         WireHotkey();
@@ -482,9 +483,10 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            Notify(new DictationNotice(
+            Notify(DictationNotice.ForException(
                 DictationNoticeKind.Failure,
-                $"Couldn't prepare recording recovery: {error.Message}"));
+                "Couldn't prepare recording recovery",
+                error));
         }
     }
 
@@ -663,7 +665,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// The message is written because every one of them is a fixed template from this
     /// repository - which is the whole point of grepping for it - and because the recognized
     /// text a failure hands back travels in <c>RecoverableText</c>, which is not written here and
-    /// must never be.
+    /// must never be. A notice that ends in an exception's message carries a
+    /// <see cref="DictationNotice.LogMessage"/> - the template and the exception's type name -
+    /// and that is what is written, since a message the runtime wrote can carry file paths.
     /// <para>
     /// One template is filled in with something that is not ours: a take that heard only
     /// silence names the microphone, and a device name can identify the hardware it belongs to.
@@ -684,9 +688,10 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             ("words_lost", notice.WordsDidNotLand),
             ("recoverable_chars", notice.RecoverableText?.Length),
             ("kept_audio", notice.RecoveryAudio is not null),
-            ("message", notice.Message.StartsWith(SilenceNoticePrefix, StringComparison.Ordinal)
-                ? SilenceNoticePrefix + "<microphone>."
-                : notice.Message));
+            ("message", notice.LogMessage
+                ?? (notice.Message.StartsWith(SilenceNoticePrefix, StringComparison.Ordinal)
+                    ? SilenceNoticePrefix + "<microphone>."
+                    : notice.Message)));
 
     /// <summary>The start of the notice <c>DictationController</c> fills in with a device name.</summary>
     private const string SilenceNoticePrefix = "Heard only silence from ";
@@ -1185,9 +1190,10 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         {
             // The choice stays in memory for this run; saying nothing would let the person
             // believe it survived the restart.
-            Notify(new DictationNotice(
+            Notify(DictationNotice.ForException(
                 DictationNoticeKind.Warning,
-                $"The setting wasn't saved: {error.Message}"));
+                "The setting wasn't saved",
+                error));
         }
     }
 

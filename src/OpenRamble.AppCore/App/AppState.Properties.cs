@@ -432,9 +432,10 @@ public sealed partial class AppState
                 Set(ref launchAtLogin, actual, nameof(LaunchAtLogin));
             }
 
-            Notify(new DictationNotice(
+            Notify(DictationNotice.ForException(
                 DictationNoticeKind.Warning,
-                $"Could not update the login item: {error.Message}"));
+                "Could not update the login item",
+                error));
         }
     }
 

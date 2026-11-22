@@ -170,7 +170,11 @@ public sealed partial class AppState
         }
         catch (DictionaryTransfer.TransferError error)
         {
-            Notify(new DictationNotice(DictationNoticeKind.Failure, error.Message));
+            // A damaged file's message quotes the JSON parser, which is not ours to log.
+            Notify(new DictationNotice(DictationNoticeKind.Failure, error.Message)
+            {
+                LogMessage = $"The dictionary file was refused: {error.GetType().Name}",
+            });
             return;
         }
 
@@ -197,8 +201,9 @@ public sealed partial class AppState
     /// The file dialogs live in the view; their failures surface through the same channel as
     /// every other notice.
     /// </summary>
-    public void ReportDictionaryFileProblem(string message) =>
-        Notify(new DictationNotice(DictationNoticeKind.Failure, message));
+    /// <param name="what">The fixed part of the message; the exception's own message follows it on screen only.</param>
+    public void ReportDictionaryFileProblem(string what, Exception error) =>
+        Notify(DictationNotice.ForException(DictationNoticeKind.Failure, what, error));
 
     private static string ImportSummary(int added, int updated)
     {
@@ -236,9 +241,10 @@ public sealed partial class AppState
             // It is not saved, which means it may not change in memory either: the list on the
             // screen would differ from the one on disk, and the person would find out only after
             // a restart.
-            Notify(new DictationNotice(
+            Notify(DictationNotice.ForException(
                 DictationNoticeKind.Failure,
-                $"The dictionary wasn't saved: {error.Message}"));
+                "The dictionary wasn't saved",
+                error));
             return;
         }
 

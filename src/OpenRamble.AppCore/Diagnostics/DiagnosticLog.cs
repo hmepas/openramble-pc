@@ -31,9 +31,10 @@ namespace OpenRamble.AppCore;
 /// </list>
 /// <para>
 /// Notice messages are the one piece of prose that reaches the log, and they are safe because
-/// they are ours: every one of them is a fixed template written in this repository. The
-/// recognized text a failure hands back travels in <c>DictationNotice.RecoverableText</c>, which
-/// is never logged.
+/// they are ours: every one of them is a fixed template written in this repository. A notice
+/// that ends in an exception's message is logged as its template and the exception's type name
+/// (<c>DictationNotice.LogMessage</c>). The recognized text a failure hands back travels in
+/// <c>DictationNotice.RecoverableText</c>, which is never logged.
 /// </para>
 /// <para>
 /// <b>One line, flushed.</b> The process this log exists to explain is one that hangs and gets

@@ -283,11 +283,17 @@ public sealed class AppStateEngineLifecycleTests : IDisposable
 
         TimeSpan shortCountdown = TimeSpan.FromMilliseconds(500);
         using var start = new Barrier(8);
-        Task[] racers = [.. Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
-        {
-            start.SignalAndWait();
-            for (int i = 0; i < 200; i++) { state.IdleUnloadDelayOverride = shortCountdown; }
-        }))];
+        // Threads of their own: eight pool threads parked on a barrier starve the pool every
+        // other suite running alongside depends on.
+        Task[] racers = [.. Enumerable.Range(0, 8).Select(_ => Task.Factory.StartNew(
+            () =>
+            {
+                start.SignalAndWait();
+                for (int i = 0; i < 200; i++) { state.IdleUnloadDelayOverride = shortCountdown; }
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default))];
         await Task.WhenAll(racers);
         // Back to the hour: this re-arm replaces the one live countdown, and should be the only
         // one left.

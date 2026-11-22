@@ -264,14 +264,17 @@ public sealed class LocalTranscriber
     /// <summary>
     /// Recognize a ready buffer.
     ///
-    /// The entire recording goes into the engine, no matter how long it is: the engine makes
-    /// its own fifteen-second windows, with overlap and token deduplication. There used to be
-    /// our own pause cutting here - it was written against the silent loss of speech at the
-    /// seam of windows. The measurements showed that the reason for the loss was not the
-    /// length of the piece but a flag of the library; the cutting cut phrases in the middle,
-    /// slowed parsing down twice and on the main scenario (Russian speech with English
-    /// inserts) lost three times more words than a properly configured engine. Details and
-    /// numbers are in <c>docs/benchmarks.md</c>.
+    /// Up to thirty seconds goes into the engine in one call, exactly as it always did. A longer
+    /// recording - a long dictation, a take recognized again from History - is cut the way the
+    /// upstream server cuts it (<see cref="FileAudioChunks"/>): silence left out, pieces of at
+    /// most twenty seconds cut inside pauses, no overlap, recognized one after another and
+    /// joined by appending. One large inference call over minutes of audio is what this
+    /// replaces: its cost grows faster than the audio, and nothing bounded it.
+    ///
+    /// The whole recording holds one residency: a polite unload refuses until the last piece is
+    /// done, and a forced unload between pieces cancels the whole call rather than finishing it
+    /// on a replacement model. A failed piece fails the whole call - a transcript missing its
+    /// middle is never returned as a success.
     /// </summary>
     public async Task<ASRResult> Transcribe(
         float[] samples,
@@ -325,11 +328,22 @@ public sealed class LocalTranscriber
                 }
             }
 
+            if (samples.Length > LongInputSamples)
+            {
+                return await TranscribeInPieces(samples, expectedGeneration, arrived, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             // In place: the buffer is this dictation's and nobody reads it after the engine.
             // See InputGain for the numbers behind it.
             _ = InputGain.Normalize(samples);
             TimeSpan queued = Stopwatch.GetElapsedTime(arrived);
             ASRResult result = await engine.Transcribe(samples).ConfigureAwait(false);
+            // An engine that ignores cancellation still finishes; its answer belongs to a request
+            // that was given up on, or to a model that was unloaded under it, and must not be
+            // returned as if it were current.
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureGeneration(expectedGeneration);
             return new ASRResult(
                 result.Text,
                 result.Words,
@@ -344,6 +358,63 @@ public sealed class LocalTranscriber
             lock (gate)
             {
                 activeOperations--;
+            }
+        }
+    }
+
+    /// <summary>Longer than this, a buffer is recognized in pieces; see <see cref="Transcribe(float[], CancellationToken)"/>.</summary>
+    private const int LongInputSamples = 30 * FilePiecePlanner.SampleRate;
+
+    /// <summary>
+    /// One piece at a time, under the residency the caller already claimed.
+    /// </summary>
+    /// <remarks>
+    /// Each piece is levelled on its own (<see cref="InputGain"/>): the pieces are copies, so the
+    /// caller's buffer is left as it was, and a quiet stretch is not held down by a loud one
+    /// minutes away. The generation is checked before and after every piece, so no piece starts
+    /// on, and no result comes back from, a model other than the one the call began with.
+    /// </remarks>
+    private async Task<ASRResult> TranscribeInPieces(
+        float[] samples,
+        int expectedGeneration,
+        long arrived,
+        CancellationToken cancellationToken)
+    {
+        var chunks = new FileAudioChunks(samples);
+        var duration = TimeSpan.FromSeconds(chunks.Duration);
+        var joiner = new TimedTranscriptJoiner();
+        TimeSpan processing = TimeSpan.Zero;
+        TimeSpan dispatch = TimeSpan.Zero;
+        while (chunks.Next() is { } chunk)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureGeneration(expectedGeneration);
+            _ = InputGain.Normalize(chunk.Samples);
+            ASRResult result = await engine.Transcribe(chunk.Samples).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureGeneration(expectedGeneration);
+            joiner.Append(result, chunk, duration);
+            processing += result.ProcessingDuration;
+            dispatch += result.EngineDispatchDuration;
+        }
+
+        TimeSpan queued = Stopwatch.GetElapsedTime(arrived) - processing - dispatch;
+        return new ASRResult(
+            joiner.Text,
+            joiner.Words,
+            duration,
+            processing,
+            engineDispatchDuration: dispatch,
+            queueingDuration: queued > TimeSpan.Zero ? queued : TimeSpan.Zero);
+    }
+
+    private void EnsureGeneration(int expectedGeneration)
+    {
+        lock (gate)
+        {
+            if (generation != expectedGeneration || loadedDirectory is null)
+            {
+                throw new OperationCanceledException();
             }
         }
     }

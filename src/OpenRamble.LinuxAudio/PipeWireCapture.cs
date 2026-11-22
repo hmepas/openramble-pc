@@ -210,8 +210,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
             }
 
             session.Close();
-            session.Sink.Cancel();
-            session.Writer.Discard();
+            session.Take.Abort();
             // The full exception, not just its type: a missing tool and a refused device say
             // everything useful in their messages, and this line is the only place it survives.
             DiagnosticLog.EmitException(
@@ -241,7 +240,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
             // Whether a specific microphone was asked for - never its name, which the person chose
             // and which can identify their hardware; "default" or "chosen" is the whole answer.
             ("device", target is null ? "default" : "chosen"));
-        return Task.FromResult(session.Writer.FilePath);
+        return Task.FromResult(session.Take.FilePath);
     }
 
     public Task<bool> WaitForFirstFrame()
@@ -297,37 +296,22 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         bool tailRead = await Bounded(session.Reader, CaptureStopBudget.Drain).ConfigureAwait(false);
         session.Close();
 
-        // Completing the writer happens inside Finish() before it awaits anything, so the queue
-        // is closed the moment this line runs whether or not the wait below succeeds.
-        Task drain = session.Sink.Finish();
+        // The queue gets what is left of the same budget, so the two waits together can never
+        // exceed it. A drain that overruns is abandoned by the take itself, which refuses
+        // whatever it still delivers - see RecordingTake.Stop.
         TimeSpan left = CaptureStopBudget.Drain - Stopwatch.GetElapsedTime(began);
-        bool drained = tailRead && await Bounded(drain, left).ConfigureAwait(false);
-        if (drained)
+        RecordingTake.Stopped stopped = await session.Take.Stop(left).ConfigureAwait(false);
+        bool drained = tailRead && stopped.Drained;
+        if (!stopped.Drained)
         {
-            // Rethrows a recorder failure - a full disk has to reach the person, not the log.
-            await drain.ConfigureAwait(false);
-        }
-        else
-        {
-            // Abandoned, and its eventual failure with it: the writer is closed under it below,
-            // so its next append throws into a task nobody is left to await.
-            Forget(drain);
-            // And the in-memory copy goes with it. It is missing whatever the queue still held,
-            // and a recognition run on a truncated buffer would silently drop the end of the
-            // sentence; the WAV is short by the same tail but is at least the honest record.
-            session.Buffered.Discard();
             DiagnosticLog.Emit(
                 "capture.stop.drain-abandoned",
                 ("session", session.Number),
                 ("budget_ms", CaptureStopBudget.Drain));
         }
 
-        // A take whose file failed lives in memory; its duration is what memory holds, and a
-        // writer that already failed may fail its close too without costing the words.
-        TimeSpan duration = session.DiskFailed
-            ? TimeSpan.FromSeconds(session.Buffered.Count / RecordingFormat.SampleRate)
-            : session.Writer.Duration;
-        string path = session.DiskFailed ? session.CloseFailedWriter() : session.Writer.Close();
+        TimeSpan duration = stopped.Duration;
+        string path = stopped.Path;
 
         bool released = await ReleaseDevice(session).ConfigureAwait(false);
         DiagnosticLog.Emit(
@@ -338,6 +322,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
             ("audio_ms", duration),
             ("ms", Stopwatch.GetElapsedTime(began)),
             ("drained", drained),
+            ("storage", stopped.Storage),
             ("device_released", released));
         return (path, duration);
     }
@@ -347,7 +332,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         Session? session;
         lock (gate) { session = latest; }
 
-        return Task.FromResult(session?.Buffered.Take());
+        return Task.FromResult(session?.Take.TakeSamples());
     }
 
     public async Task AbortRecording()
@@ -362,11 +347,9 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         if (session is null) { return; }
 
         DiagnosticLog.Emit("capture.abort", ("session", session.Number), ("frames", session.Frames));
-        session.Buffered.Discard();
         StopDevice(session);
         session.Close();
-        session.Sink.Cancel();
-        session.Writer.Discard();
+        session.Take.Abort();
         _ = await ReleaseDevice(session).ConfigureAwait(false);
     }
 
@@ -400,58 +383,50 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         // would put a disk write between two reads of a pipe the audio server is filling in real
         // time, and closing the file without draining would lose the last word - the one the
         // person releases the key on.
-        var queue = new FrameSink();
-        var memory = new RecognitionSampleBuffer(maximumBufferedSamples);
-        var segments = new RecordingSegmentAttachment();
-        segments.SetSink(segmentSink);
-        var session = new Session(
-            // The dictation the take belongs to, not a counter of our own: the kernel publishes
-            // the number before it asks for a recording, and every event of that session - the
-            // recognition and the insertion included - is written against it.
-            DiagnosticLog.Session,
+        Session? owner = null;
+        var take = new RecordingTake(
             writer,
-            queue,
-            memory,
-            segments);
-
-        session.Deliver = queue.Start(frame =>
-        {
-            Commit(session, frame);
-            return Task.CompletedTask;
-        });
-        return session;
+            maximumBufferedSamples,
+            segmentSink,
+            happened => OnTakeEvent(owner!, happened),
+            (int)RecordingFormat.SampleRate);
+        // The dictation the take belongs to, not a counter of our own: the kernel publishes the
+        // number before it asks for a recording, and every event of that session - the
+        // recognition and the insertion included - is written against it.
+        owner = new Session(DiagnosticLog.Session, take);
+        return owner;
     }
 
     /// <summary>
-    /// One frame from the queue into the take, the memory and the segmenter, in that order.
+    /// What the take said about itself while it was recording. Never raised once a stop has
+    /// taken it over, so nothing here can reach a take that started later.
     /// </summary>
-    /// <remarks>
-    /// The segmenter is fed the same committed frames, inside the ordered drain, because order
-    /// is the whole contract: a segmenter fed out of order would place seams in the wrong places.
-    /// The memory cap is judged here too, and what it means depends on the disk: a healthy WAV
-    /// carries the take past it, so dictation goes on for as long as the person speaks. A WAV
-    /// that could not be written leaves memory as the only copy, so the take ends at the cap
-    /// with its complete prefix kept for recognition.
-    /// </remarks>
-    private void Commit(Session session, float[] frame)
+    private void OnTakeEvent(Session session, RecordingTake.Event happened)
     {
-        session.AppendToDisk(frame);
-        bool kept = session.Buffered.Append(frame, preserveAtLimit: session.DiskFailed);
-        session.Segments.Submit(frame);
-        if (kept || !session.DiskFailed || session.LimitReported) { return; }
-
-        session.LimitReported = true;
-        session.Close();
-        if (session.Buffered.HoldsTake && OnMemoryLimitReached is { } limitReached)
+        switch (happened)
         {
-            DiagnosticLog.Emit("capture.memory-limit", ("session", session.Number), ("samples", session.Samples));
-            limitReached();
-            return;
-        }
+            case RecordingTake.Event.DiskFailed:
+                DiagnosticLog.Emit("capture.disk-failed", ("session", session.Number));
+                return;
+            case RecordingTake.Event.MemoryLimitReached:
+                session.Close();
+                if (OnMemoryLimitReached is { } limitReached)
+                {
+                    DiagnosticLog.Emit("capture.memory-limit", ("session", session.Number), ("samples", session.Samples));
+                    limitReached();
+                    return;
+                }
 
-        // The file failed after memory had already been given up: neither copy holds the take
-        // any more, and the person has to hear it now rather than at the release.
-        ReportFailure(session, new AudioCaptureError.DiskFull());
+                ReportFailure(session, new AudioCaptureError.DiskFull());
+                return;
+            case RecordingTake.Event.NothingKept:
+                // The file failed after memory had already been given up: neither copy holds the
+                // take any more, and the person has to hear it now rather than at the release.
+                DiagnosticLog.Emit("capture.disk-failed", ("session", session.Number));
+                session.Close();
+                ReportFailure(session, new AudioCaptureError.DiskFull());
+                return;
+        }
     }
 
     public Task SetSegmentSink(Action<float[]>? sink)
@@ -459,7 +434,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         lock (gate)
         {
             segmentSink = sink;
-            current?.Segments.SetSink(sink);
+            current?.Take.SetSegmentSink(sink);
         }
 
         return Task.CompletedTask;
@@ -470,7 +445,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         Session? session;
         lock (gate) { session = latest; }
 
-        return Task.FromResult(session?.Segments.DrainConsumedSampleCount() ?? 0);
+        return Task.FromResult(session?.Take.ConsumedSampleCount() ?? 0);
     }
 
     /// <summary>
@@ -691,71 +666,17 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         private bool closed;
         private volatile bool finishing;
 
-        public Session(
-            int number,
-            WAVWriter writer,
-            FrameSink sink,
-            RecognitionSampleBuffer buffered,
-            RecordingSegmentAttachment segments)
+        public Session(int number, RecordingTake take)
         {
             Number = number;
-            Writer = writer;
-            Sink = sink;
-            Buffered = buffered;
-            Segments = segments;
+            Take = take;
             StartedAt = Stopwatch.GetTimestamp();
         }
 
         public int Number { get; }
 
-        public WAVWriter Writer { get; }
-
-        public FrameSink Sink { get; }
-
-        public RecognitionSampleBuffer Buffered { get; }
-
-        public RecordingSegmentAttachment Segments { get; }
-
-        /// <summary>The memory cap has been announced for this take. Once, never per frame.</summary>
-        public bool LimitReported { get; set; }
-
-        /// <summary>
-        /// Writing the take's file failed. From then on memory is the only copy; the frame queue's
-        /// single consumer is the only writer of this flag.
-        /// </summary>
-        public bool DiskFailed { get; private set; }
-
-        /// <summary>
-        /// One frame into the WAV, unless the WAV has already failed. A failure is recorded
-        /// rather than thrown: it must not stop the queue that also feeds the memory copy.
-        /// </summary>
-        public void AppendToDisk(float[] frame)
-        {
-            if (DiskFailed) { return; }
-
-            try
-            {
-                Writer.Append(frame);
-            }
-            catch (WAVWriter.Failure error)
-            {
-                DiskFailed = true;
-                DiagnosticLog.Emit("capture.disk-failed", ("session", Number), ("kind", error.GetType().Name));
-            }
-        }
-
-        /// <summary>Close a writer that failed mid-take, keeping whatever reached the file.</summary>
-        public string CloseFailedWriter()
-        {
-            try
-            {
-                return Writer.Close();
-            }
-            catch (WAVWriter.Failure)
-            {
-                return Writer.FilePath;
-            }
-        }
+        /// <summary>The file, the queue, the memory copy and the segmenter of this recording.</summary>
+        public RecordingTake Take { get; }
 
         /// <summary>The recorder, from the moment it starts until the stop takes it away.</summary>
         public IRecorderProcess? Recorder { get; private set; }
@@ -770,7 +691,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
 
         public FailureOnce Failure { get; } = new();
 
-        public Action<float[]> Deliver { get; set; } = static _ => { };
+        public Action<float[]> Deliver => Take.Deliver;
 
         /// <summary>Time from the start of the recorder to the first sample that reached the file.</summary>
         public TimeSpan? StartupLatency { get; private set; }
@@ -794,7 +715,11 @@ public sealed class PipeWireCapture : IMicrophoneDevice
             return recorder;
         }
 
-        public void BeginFinishing() => finishing = true;
+        public void BeginFinishing()
+        {
+            finishing = true;
+            Take.BeginStopping();
+        }
 
         /// <summary>
         /// Take one frame from the reader into the take, the memory and the level.

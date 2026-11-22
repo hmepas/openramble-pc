@@ -12,6 +12,7 @@ namespace OpenRamble.AppCore.Tests;
 /// (<c>dictationUnrecognized</c>, <c>dictationWarning</c>) are left out: this port has no error
 /// journal, only the diagnostic log.
 /// </remarks>
+[Collection(DiagnosticLogCollection.Name)]
 public sealed class AppStateEmptyTakeTests : IDisposable
 {
     private readonly AppHarness harness = new();

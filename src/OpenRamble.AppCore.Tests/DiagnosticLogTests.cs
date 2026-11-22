@@ -8,6 +8,7 @@ namespace OpenRamble.AppCore.Tests;
 /// carry the whole weight: nothing is written unless somebody asked for a log, and what is
 /// written is what the application did, never what was said.
 /// </summary>
+[Collection(DiagnosticLogCollection.Name)]
 public sealed class DiagnosticLogTests
 {
     /// <summary>

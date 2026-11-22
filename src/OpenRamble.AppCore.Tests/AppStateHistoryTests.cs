@@ -10,6 +10,7 @@ namespace OpenRamble.AppCore.Tests;
 /// Ported from the macOS <c>AppStateTests</c> history scenarios; the store's own rules are in
 /// <see cref="DictationHistoryStoreTests"/>.
 /// </remarks>
+[Collection(DiagnosticLogCollection.Name)]
 public sealed class AppStateHistoryTests : IDisposable
 {
     private readonly AppHarness harness = new();

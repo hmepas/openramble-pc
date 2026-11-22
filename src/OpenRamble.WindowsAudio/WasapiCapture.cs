@@ -239,18 +239,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
             if (superseded is not null)
             {
                 DiagnosticLog.Emit("capture.superseded", ("session", superseded.Number), ("by", number));
-                if (supersededDeviceStarted)
-                {
-                    _ = Abort(superseded);
-                }
-                else
-                {
-                    // Its device is still inside its own start, which must not be stopped or
-                    // disposed under it; that start finds itself superseded when it returns and
-                    // releases the device itself. Only the take is dropped here.
-                    superseded.Close();
-                    superseded.Take.Abort();
-                }
+                _ = Abort(superseded, supersededDeviceStarted);
             }
         }
 
@@ -288,9 +277,10 @@ public sealed class WasapiCapture : IMicrophoneDevice
 
         if (!stillCurrent)
         {
-            // A newer take reclaimed the microphone while this device was starting. Nobody is
-            // waiting for this one; it is stopped here, where its device is known to be up.
-            await Abort(session).ConfigureAwait(false);
+            // A newer take reclaimed the microphone, or an abort dropped this one, while this
+            // device was starting. Nobody is waiting for it; it is stopped here, where its device
+            // is known to be up.
+            await Abort(session, deviceStarted: true).ConfigureAwait(false);
             throw new AudioCaptureError.NotRecording();
         }
 
@@ -422,39 +412,61 @@ public sealed class WasapiCapture : IMicrophoneDevice
     public async Task AbortRecording()
     {
         Session? session;
+        bool deviceStarted;
         lock (gate)
         {
             session = current;
+            deviceStarted = session?.DeviceStarted ?? false;
             current = null;
         }
 
         if (session is null) { return; }
 
-        await Abort(session).ConfigureAwait(false);
+        await Abort(session, deviceStarted).ConfigureAwait(false);
     }
 
     public async Task AbortRecording(int session)
     {
         Session? aborted;
+        bool deviceStarted;
         lock (gate)
         {
             aborted = current?.Number == session ? current : null;
+            deviceStarted = aborted?.DeviceStarted ?? false;
             if (aborted is not null) { current = null; }
         }
 
         if (aborted is null) { return; }
 
-        await Abort(aborted).ConfigureAwait(false);
+        await Abort(aborted, deviceStarted).ConfigureAwait(false);
     }
 
-    private async Task Abort(Session session)
+    /// <summary>
+    /// Drop the take, and let go of its device if the device is this call's to let go of.
+    /// </summary>
+    /// <param name="session">The session, already detached from <see cref="current"/>.</param>
+    /// <param name="deviceStarted">
+    /// <see cref="Session.DeviceStarted"/>, read under the gate in the same block that detached
+    /// the session.
+    /// </param>
+    /// <remarks>
+    /// A device still inside its own start must not be stopped or disposed under it: a dispose
+    /// joins a capture thread the start may not have finished creating, and NAudio's start is not
+    /// written to be raced by its own stop. That start finds itself no longer current when it
+    /// returns and releases the device itself (see <see cref="Start"/>); only the take is dropped
+    /// here. The flag and the detach are decided under the same gate as the start's own "started,
+    /// and still current?", so exactly one of the two lets the device go - whichever came second
+    /// leaves it to the other. The same rule covers an abort and a newer take reclaiming the
+    /// microphone.
+    /// </remarks>
+    private async Task Abort(Session session, bool deviceStarted)
     {
         DiagnosticLog.Emit("capture.abort", ("session", session.Number), ("frames", session.Frames));
         session.Take.BeginStopping();
-        StopDevice(session);
+        if (deviceStarted) { StopDevice(session); }
         session.Close();
         session.Take.Abort();
-        _ = await ReleaseDevice(session).ConfigureAwait(false);
+        if (deviceStarted) { _ = await ReleaseDevice(session).ConfigureAwait(false); }
     }
 
     public Task<TimeSpan?> StartupLatency()
@@ -941,8 +953,8 @@ public sealed class WasapiCapture : IMicrophoneDevice
         public RecordingTake Take { get; }
 
         /// <summary>
-        /// The device's own start has returned. Until then a newer take must not stop or dispose
-        /// it; written and read under the capture's gate.
+        /// The device's own start has returned. Until then neither an abort nor a newer take may
+        /// stop or dispose it; written and read under the capture's gate.
         /// </summary>
         public bool DeviceStarted { get; set; }
 

@@ -276,8 +276,10 @@ public sealed class PipeWireCapture : IMicrophoneDevice
 
         if (!stillCurrent)
         {
-            // A newer take reclaimed the microphone while this recorder was starting. Nobody is
-            // waiting for this one; it is stopped here, where its recorder is known.
+            // A newer take reclaimed the microphone, or an abort dropped this one, while this
+            // recorder was starting. Nobody is waiting for it; it is stopped here, where its
+            // recorder is known. The abort itself found no recorder to stop - the launch had not
+            // returned one yet - so the device is never raced by it, unlike the Windows peer's.
             await Abort(session).ConfigureAwait(false);
             throw new AudioCaptureError.NotRecording();
         }

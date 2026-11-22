@@ -402,6 +402,34 @@ public sealed class PipeWireCaptureTests : IDisposable
         Assert.True(stale.Disposed);
     }
 
+    /// <summary>
+    /// An abort that arrives while the recorder is still being launched leaves it to the start,
+    /// which finds itself aborted when the launch returns and stops what it launched.
+    /// </summary>
+    [Fact]
+    public async Task AnAbortWhileTheRecorderIsStillComingUpLeavesNothingBehind()
+    {
+        using var launching = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var recorder = new FakeRecorderProcess();
+        using var capture = new PipeWireCapture(takes, _ =>
+        {
+            launching.Set();
+            release.Wait(Patience);
+            return recorder;
+        });
+
+        Task<string> starting = Task.Run(() => capture.StartRecording(1, null));
+        Assert.True(launching.Wait(Patience));
+        await capture.AbortRecording(1);
+        release.Set();
+
+        await Assert.ThrowsAsync<AudioCaptureError.NotRecording>(() => starting);
+        Assert.True(recorder.StopRequests > 0, "the launched recorder must not keep the microphone");
+        Assert.True(recorder.Disposed);
+        Assert.Empty(Directory.EnumerateFiles(takes));
+    }
+
     [Fact]
     public async Task AStaleSessionCannotStopReadOrFailTheNewerTake()
     {

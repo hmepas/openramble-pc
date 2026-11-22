@@ -822,33 +822,47 @@ public sealed partial class AppState
     public bool IsAwaitingIdleUnload { get { lock (gate) { return idleUnloadTimer is not null; } } }
 
     /// <summary>Every state change re-arms or cancels the countdown: activity disarms it, idleness starts it.</summary>
+    /// <remarks>
+    /// Cancel, check and arm happen under one hold of <c>gate</c>. State changes arrive on
+    /// whatever thread made them, and as three separate steps two re-arms could each cancel
+    /// the same old timer and each arm a new one; the first was then overwritten while still
+    /// running, nothing could cancel it, and it unloaded the engine a full countdown after it
+    /// was armed, however recently the person had dictated. Swift gets this for free from the
+    /// main actor.
+    /// </remarks>
     private void RescheduleIdleUnload()
     {
-        CancelIdleUnload();
-        if (transcriber is null) { return; }
-        if (DictationStateValue != DictationState.Idle
-            || !IsEngineReady
-            // Setup is not idleness: the person is granting permissions, not resting from
-            // dictation, and the try-out is a minute away. The engine stays so that first
-            // dictation is instant. Nothing depends on this any more - the setup screen no
-            // longer waits for a loaded engine, and a resting one is woken by the same key press
-            // as everywhere else - so it is a courtesy, not a guard.
-            || !OnboardingCompleted)
-        {
-            return;
-        }
-
-        // The override shortens the countdown for tests.
-        TimeSpan delay = IdleUnloadDelayOverride ?? EngineIdleUnloadDelay;
         lock (gate)
         {
-            if (disposed) { return; }
-            idleUnloadTimer = new Timer(
+            idleUnloadTimer?.Dispose();
+            idleUnloadTimer = null;
+            if (transcriber is null || disposed) { return; }
+            if (dictationState != DictationState.Idle
+                || !isEngineReady
+                // Setup is not idleness: the person is granting permissions, not resting from
+                // dictation, and the try-out is a minute away. The engine stays so that first
+                // dictation is instant. Nothing depends on this any more - the setup screen no
+                // longer waits for a loaded engine, and a resting one is woken by the same key
+                // press as everywhere else - so it is a courtesy, not a guard.
+                || !OnboardingCompleted)
+            {
+                return;
+            }
+
+            // The override shortens the countdown for tests.
+            TimeSpan delay = idleUnloadDelayOverride ?? EngineIdleUnloadDelay;
+            Timer? armed = null;
+            armed = new Timer(
                 _ =>
                 {
                     lock (gate)
                     {
-                        idleUnloadTimer?.Dispose();
+                        // Disposing a timer does not recall a callback already queued: one that
+                        // was replaced or cancelled while it waited for the gate is not the
+                        // countdown any more, and must neither disarm the live one nor unload.
+                        // Arming holds the gate, so `armed` is assigned before this can read it.
+                        if (idleUnloadTimer is not { } live || !ReferenceEquals(live, armed)) { return; }
+                        live.Dispose();
                         idleUnloadTimer = null;
                     }
 
@@ -857,6 +871,7 @@ public sealed partial class AppState
                 null,
                 delay,
                 Timeout.InfiniteTimeSpan);
+            idleUnloadTimer = armed;
         }
     }
 

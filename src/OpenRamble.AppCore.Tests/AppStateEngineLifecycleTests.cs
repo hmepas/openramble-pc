@@ -263,6 +263,43 @@ public sealed class AppStateEngineLifecycleTests : IDisposable
     }
 
     /// <summary>
+    /// Re-arming the countdown from several threads at once leaves exactly one countdown.
+    ///
+    /// Every state change re-arms it, and state changes arrive from the controller, the warm-up
+    /// and the UI on whatever thread they happen on. A re-arm that cancelled, checked and then
+    /// armed in three separate steps let two of them each cancel nothing and each arm one; the
+    /// one overwritten kept running, nobody could cancel it, and an hour after it was armed it
+    /// unloaded the engine however recently the person had dictated.
+    /// </summary>
+    [Fact]
+    public async Task ConcurrentReschedulesLeaveNoOrphanedCountdown()
+    {
+        harness.InstallModelMarker();
+        FinishSetup();
+        var engine = new CountingASREngine();
+        harness.WarmUpEngine = engine;
+        AppState state = harness.MakeState();
+        await TestWait.For("the engine warmed up", () => state.IsEngineReady);
+
+        TimeSpan shortCountdown = TimeSpan.FromMilliseconds(500);
+        using var start = new Barrier(8);
+        Task[] racers = [.. Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+        {
+            start.SignalAndWait();
+            for (int i = 0; i < 200; i++) { state.IdleUnloadDelayOverride = shortCountdown; }
+        }))];
+        await Task.WhenAll(racers);
+        // Back to the hour: this re-arm replaces the one live countdown, and should be the only
+        // one left.
+        state.IdleUnloadDelayOverride = null;
+
+        await Task.Delay(shortCountdown * 2);
+        Assert.True(state.IsEngineReady, "an orphaned short countdown unloaded the engine");
+        Assert.True(state.IsAwaitingIdleUnload, "an orphaned countdown disarmed the live one");
+        Assert.Equal(0, engine.Unloads);
+    }
+
+    /// <summary>
     /// The engine stays an hour after the last dictation, for everyone. Every other residency
     /// test shortens the countdown, so this is the one that notices if the hour itself changes.
     /// </summary>

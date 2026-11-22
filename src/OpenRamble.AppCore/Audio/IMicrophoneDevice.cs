@@ -31,7 +31,11 @@ public interface IMicrophoneDevice : IAudioCapturing, IDisposable
     Action<float>? OnInputLevel { get; set; }
 
     /// <summary>The stream died mid-dictation. Never silent: the session ends and says why.</summary>
-    Action<AudioCaptureError>? Failed { get; set; }
+    /// <remarks>
+    /// Carries the session the failing take belongs to, so a take that is already over - a drain
+    /// still finishing, a recorder dying late - can never end the dictation that came after it.
+    /// </remarks>
+    Action<int, AudioCaptureError>? Failed { get; set; }
 
     /// <summary>
     /// The bounded in-memory take is full and its file could not be written. Raised once per
@@ -40,9 +44,9 @@ public interface IMicrophoneDevice : IAudioCapturing, IDisposable
     /// </summary>
     /// <remarks>
     /// A take whose file is healthy never raises this: it outlives the memory cap, and
-    /// recognition reads the file.
+    /// recognition reads the file. Carries the session the take belongs to, like <see cref="Failed"/>.
     /// </remarks>
-    Action? OnMemoryLimitReached { get; set; }
+    Action<int>? OnMemoryLimitReached { get; set; }
 
     /// <summary>
     /// What the latest session handed to the recorder: frames and samples, counts only.

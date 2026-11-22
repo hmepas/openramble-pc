@@ -160,13 +160,14 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         {
             IAudioCapturing capture = environment.MakeCapture(
                 paths.Takes(),
-                error =>
+                (session, error) =>
                 {
                     journal.Record(DiagnosticEvent.AudioCaptureFailed, errorCode: error.HResult);
                     // The audio stream is no longer usable in the middle of a sentence. Waiting
                     // for a stop is not an option: the person is speaking into emptiness and the
-                    // reason has to be shown exactly.
-                    controller?.Interrupt(CaptureFailureMessage(error, microphoneRemedy));
+                    // reason has to be shown exactly. Only that take's, though: a late failure of
+                    // a take that is already over must not end the one being spoken now.
+                    controller?.Interrupt(session, CaptureFailureMessage(error, microphoneRemedy));
                 },
                 samples =>
                 {
@@ -187,9 +188,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 // Disk spill never gates the microphone. If it remained unavailable until the
                 // bounded PCM buffer became full, finish the complete retained take normally
                 // instead of dropping history or continuing into unrecoverable audio.
-                device.OnMemoryLimitReached = () =>
+                device.OnMemoryLimitReached = session =>
                 {
-                    if (controller?.StopAtCaptureMemoryLimit() != true) { return; }
+                    if (controller?.StopAtCaptureMemoryLimit(session) != true) { return; }
 
                     // Said after the session, so it does not cover "Transcribing…", and without a
                     // sound: the words are about to land, only the end of the take is missing.

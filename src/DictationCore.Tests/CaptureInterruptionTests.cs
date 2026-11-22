@@ -54,6 +54,43 @@ public sealed class CaptureInterruptionTests
         Assert.Equal("Кончилось место на диске.", notices[0].Message);
     }
 
+    /// <summary>
+    /// A take that is already over can still report a failure - a drain finishing late, a
+    /// recorder dying after its stop. That news belongs to its own session and must not end the
+    /// dictation the person is speaking now.
+    /// </summary>
+    [Fact]
+    public async Task TestALateFailureOfAnEarlierTakeDoesNotEndTheCurrentOne()
+    {
+        var capture = new FakeCapture();
+        var controller = MakeController(capture);
+        List<DictationNotice> notices = [];
+        controller.OnNotice = notices.Add;
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        await Settle();
+        int earlier = controller.CurrentSession;
+        notices.Clear();
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        Assert.Equal(DictationState.Listening, controller.State);
+
+        controller.Interrupt(earlier, "Кончилось место на диске.");
+        Assert.False(controller.StopAtCaptureMemoryLimit(earlier), "an old take's limit stops nothing");
+        await Settle();
+
+        Assert.Equal(DictationState.Listening, controller.State);
+        Assert.Empty(notices);
+        Assert.Equal(0, capture.AbortCount);
+
+        controller.Interrupt(controller.CurrentSession, "Кончилось место на диске.");
+        await Settle();
+        Assert.Equal(DictationState.Idle, controller.State);
+    }
+
     [Fact]
     public async Task TestInterruptionAbortsRecordingInsteadOfFinishingIt()
     {

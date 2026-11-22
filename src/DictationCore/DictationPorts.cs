@@ -86,6 +86,45 @@ public interface IAudioCapturing
     /// right to look instant.
     /// </summary>
     Task<TimeSpan?> StartupLatency() => Task.FromResult<TimeSpan?>(null);
+
+    // MARK: - Session-keyed
+
+    // What the controller actually calls. A take is identified by its session number from the
+    // start to the last read, because a continuation of an old take can resume after the next
+    // one has begun: a microphone start abandoned by its watchdog, a stop that outlived its
+    // deadline, an Escape whose abort is still on its way. Acting on "the current recording"
+    // would then stop, read or delete somebody else's take. A production capture must make a
+    // call for any other session harmless, and may let a strictly newer session's start reclaim
+    // a recording an older one never released.
+    //
+    // The defaults keep the session-less members as the whole contract for captures that can
+    // never overlap two takes - every test double, and the bench tool's single recording.
+
+    /// <summary>
+    /// Start recording for <paramref name="session"/>, with its segments going to
+    /// <paramref name="segmentSink"/>. The sink travels with the start, so it can never be
+    /// attached to a take that belongs to another session.
+    /// </summary>
+    async Task<string> StartRecording(int session, Action<float[]>? segmentSink)
+    {
+        await SetSegmentSink(segmentSink).ConfigureAwait(false);
+        return await StartRecording().ConfigureAwait(false);
+    }
+
+    /// <summary>Stop <paramref name="session"/>'s recording; another session's is not touched.</summary>
+    Task<(string Url, TimeSpan Duration)> StopRecording(int session) => StopRecording();
+
+    /// <summary>The buffered samples of <paramref name="session"/>'s take, never of another one.</summary>
+    Task<float[]?> TakeBufferedSamples(int session) => TakeBufferedSamples();
+
+    /// <summary>The streamed count of <paramref name="session"/>'s take, never of another one.</summary>
+    Task<int> ConsumedSampleCount(int session) => ConsumedSampleCount();
+
+    /// <summary>Abort <paramref name="session"/>'s recording; a later take is not touched.</summary>
+    Task AbortRecording(int session) => AbortRecording();
+
+    /// <summary>The startup latency of <paramref name="session"/>'s take.</summary>
+    Task<TimeSpan?> StartupLatency(int session) => StartupLatency();
 }
 
 /// <remarks>

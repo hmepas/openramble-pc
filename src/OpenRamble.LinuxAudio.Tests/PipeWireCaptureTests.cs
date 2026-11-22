@@ -48,8 +48,8 @@ public sealed class PipeWireCaptureTests : IDisposable
         using var capture = new PipeWireCapture(takes, _ => recorder, maximumBufferedSamples: 1_000);
         bool limitReached = false;
         AudioCaptureError? failure = null;
-        capture.OnMemoryLimitReached = () => limitReached = true;
-        capture.Failed = error => failure = error;
+        capture.OnMemoryLimitReached = _ => limitReached = true;
+        capture.Failed = (_, error) => failure = error;
 
         await capture.StartRecording();
         recorder.Feed(new float[4_000]);
@@ -220,7 +220,7 @@ public sealed class PipeWireCaptureTests : IDisposable
         };
         using var capture = new PipeWireCapture(takes, _ => recorder);
         AudioCaptureError? reported = null;
-        capture.Failed = error => reported = error;
+        capture.Failed = (_, error) => reported = error;
 
         await capture.StartRecording();
         recorder.Die();
@@ -241,7 +241,7 @@ public sealed class PipeWireCaptureTests : IDisposable
         var recorder = new FakeRecorderProcess();
         using var capture = new PipeWireCapture(takes, _ => recorder);
         int alarms = 0;
-        capture.Failed = _ => alarms += 1;
+        capture.Failed = (_, _) => alarms += 1;
 
         await capture.StartRecording();
         recorder.Die();
@@ -260,7 +260,7 @@ public sealed class PipeWireCaptureTests : IDisposable
         var recorder = new FakeRecorderProcess();
         using var capture = new PipeWireCapture(takes, _ => recorder);
         AudioCaptureError? reported = null;
-        capture.Failed = error => reported = error;
+        capture.Failed = (_, error) => reported = error;
 
         await capture.StartRecording();
         recorder.Feed(0.5f);
@@ -336,6 +336,70 @@ public sealed class PipeWireCaptureTests : IDisposable
         await Assert.ThrowsAsync<AudioCaptureError.EngineUnavailable>(capture.StartRecording);
 
         await capture.StopRecording();
+    }
+
+    [Fact]
+    public async Task ANewerSessionReclaimsAStartItsWatchdogAlreadyGaveUpOn()
+    {
+        using var launching = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var wedged = new FakeRecorderProcess();
+        var retry = new FakeRecorderProcess();
+        var recorders = new Queue<FakeRecorderProcess>([wedged, retry]);
+        using var capture = new PipeWireCapture(takes, _ =>
+        {
+            FakeRecorderProcess next;
+            lock (recorders) { next = recorders.Dequeue(); }
+            if (ReferenceEquals(next, wedged))
+            {
+                launching.Set();
+                release.Wait(Patience);
+            }
+
+            return next;
+        });
+
+        // Session 1's recorder is still coming up when the person, already told the microphone
+        // took too long, presses again.
+        Task<string> stale = Task.Run(() => capture.StartRecording(1, null));
+        Assert.True(launching.Wait(Patience));
+
+        string path = await capture.StartRecording(2, null);
+        release.Set();
+
+        await Assert.ThrowsAsync<AudioCaptureError.NotRecording>(() => stale);
+        Assert.True(wedged.StopRequests > 0 || wedged.Kills > 0, "the stale recorder must not keep the microphone");
+        retry.Feed(0.5f);
+        (string url, _) = await capture.StopRecording(2);
+        Assert.Equal(path, url);
+    }
+
+    [Fact]
+    public async Task AStaleSessionCannotStopReadOrFailTheNewerTake()
+    {
+        var first = new FakeRecorderProcess();
+        var second = new FakeRecorderProcess();
+        var recorders = new Queue<FakeRecorderProcess>([first, second]);
+        using var capture = new PipeWireCapture(takes, _ => recorders.Dequeue());
+        var failures = new List<int>();
+        capture.Failed = (session, _) => { lock (failures) { failures.Add(session); } };
+
+        await capture.StartRecording(1, null);
+        await capture.StartRecording(2, null);
+        second.Feed([.. Enumerable.Repeat(0.25f, 100)]);
+        Assert.True(await capture.WaitForFirstFrame().WaitAsync(Patience));
+
+        // Late calls of session 1's continuations.
+        await capture.AbortRecording(1);
+        await Assert.ThrowsAsync<AudioCaptureError.NotRecording>(() => capture.StopRecording(1));
+        first.Die();
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
+
+        (string url, TimeSpan duration) = await capture.StopRecording(2);
+        Assert.True(File.Exists(url));
+        Assert.Null(await capture.TakeBufferedSamples(1));
+        Assert.Equal(100, (await capture.TakeBufferedSamples(2))!.Length);
+        Assert.Empty(failures);
     }
 
     [Fact]

@@ -84,9 +84,9 @@ public sealed class WasapiCapture : IMicrophoneDevice
     /// and the listener is expected to finish the dictation through the ordinary path, which is
     /// what <c>DictationController.StopAtCaptureMemoryLimit</c> does. Without a listener the
     /// take is reported as failed instead. Raised once per take, from the frame queue's own
-    /// thread.
+    /// thread, with the take's session.
     /// </remarks>
-    public Action? OnMemoryLimitReached { get; set; }
+    public Action<int>? OnMemoryLimitReached { get; set; }
 
     /// <summary>
     /// The most recent recording, live or just finished.
@@ -140,7 +140,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
     public Action<float>? OnInputLevel { get; set; }
 
     /// <summary>The stream died mid-dictation. Never silent: the session ends and says why.</summary>
-    public Action<AudioCaptureError>? Failed { get; set; }
+    public Action<int, AudioCaptureError>? Failed { get; set; }
 
     /// <summary>
     /// What the latest session handed to the recorder: frames and samples, counts only.
@@ -162,17 +162,48 @@ public sealed class WasapiCapture : IMicrophoneDevice
 
     public Task<string> StartRecording()
     {
+        Action<float[]>? sink;
+        lock (gate) { sink = segmentSink; }
+
+        return Start(DiagnosticLog.Session, sink, supersedeOlder: false);
+    }
+
+    /// <summary>
+    /// Start <paramref name="session"/>'s take. A recording still held by an older session is
+    /// reclaimed rather than refused.
+    /// </summary>
+    /// <remarks>
+    /// Sessions only ever begin after the previous one has ended, so an older session that still
+    /// holds the microphone is a start nobody is waiting for any more - typically one whose
+    /// watchdog gave up on it while the device was still coming up. Refusing the new take with
+    /// "already recording" would make the person's immediate retry fail for a recording they had
+    /// already been told was over.
+    /// </remarks>
+    public Task<string> StartRecording(int session, Action<float[]>? segmentSink) =>
+        Start(session, segmentSink, supersedeOlder: true);
+
+    private async Task<string> Start(int number, Action<float[]>? sink, bool supersedeOlder)
+    {
         Session session;
+        Session? superseded = null;
+        bool supersededDeviceStarted = false;
         lock (gate)
         {
-            if (current is not null)
+            if (current is { } active)
             {
-                throw new AudioCaptureError.EngineUnavailable("already recording");
+                if (!supersedeOlder || active.Number >= number)
+                {
+                    throw new AudioCaptureError.EngineUnavailable("already recording");
+                }
+
+                superseded = active;
+                supersededDeviceStarted = active.DeviceStarted;
+                current = null;
             }
 
             try
             {
-                session = BuildSession();
+                session = BuildSession(number, sink);
             }
             catch (Exception error)
             {
@@ -183,7 +214,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
                 DiagnosticLog.EmitException(
                     "capture.start",
                     error,
-                    ("session", DiagnosticLog.Session),
+                    ("session", number),
                     ("ok", false),
                     ("stage", "build"),
                     ("hresult", $"0x{error.HResult:X8}"));
@@ -195,9 +226,32 @@ public sealed class WasapiCapture : IMicrophoneDevice
             latest = session;
         }
 
+        if (superseded is not null)
+        {
+            DiagnosticLog.Emit("capture.superseded", ("session", superseded.Number), ("by", number));
+            if (supersededDeviceStarted)
+            {
+                _ = Abort(superseded);
+            }
+            else
+            {
+                // Its device is still inside its own start, which must not be stopped or disposed
+                // under it; that start finds itself superseded when it returns and releases the
+                // device itself. Only the take is dropped here.
+                superseded.Close();
+                superseded.Take.Abort();
+            }
+        }
+
+        bool stillCurrent;
         try
         {
             session.Device.StartRecording();
+            lock (gate)
+            {
+                session.DeviceStarted = true;
+                stillCurrent = ReferenceEquals(current, session);
+            }
         }
         catch (Exception error)
         {
@@ -221,6 +275,14 @@ public sealed class WasapiCapture : IMicrophoneDevice
             throw new AudioCaptureError.EngineUnavailable(error.Message);
         }
 
+        if (!stillCurrent)
+        {
+            // A newer take reclaimed the microphone while this device was starting. Nobody is
+            // waiting for this one; it is stopped here, where its device is known to be up.
+            await Abort(session).ConfigureAwait(false);
+            throw new AudioCaptureError.NotRecording();
+        }
+
         DiagnosticLog.Emit(
             "capture.start",
             ("session", session.Number),
@@ -229,7 +291,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
             ("device_channels", session.DeviceFormat.Channels),
             ("device_preferred", session.IsPreferredDevice),
             ("resampled", session.IsResampled));
-        return Task.FromResult(session.Take.FilePath);
+        return session.Take.FilePath;
     }
 
     public Task<bool> WaitForFirstFrame()
@@ -264,7 +326,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
     /// thread may never return; the worker is abandoned to it and the process outlives it.</description></item>
     /// </list>
     /// </remarks>
-    public async Task<(string Url, TimeSpan Duration)> StopRecording()
+    public Task<(string Url, TimeSpan Duration)> StopRecording()
     {
         Session session;
         lock (gate)
@@ -273,6 +335,28 @@ public sealed class WasapiCapture : IMicrophoneDevice
             current = null;
         }
 
+        return Stop(session);
+    }
+
+    public Task<(string Url, TimeSpan Duration)> StopRecording(int session)
+    {
+        Session stopping;
+        lock (gate)
+        {
+            if (current is not { } active || active.Number != session)
+            {
+                throw new AudioCaptureError.NotRecording();
+            }
+
+            stopping = active;
+            current = null;
+        }
+
+        return Stop(stopping);
+    }
+
+    private async Task<(string Url, TimeSpan Duration)> Stop(Session session)
+    {
         long began = Stopwatch.GetTimestamp();
         DiagnosticLog.Emit("capture.stop.begin", ("session", session.Number));
 
@@ -321,6 +405,9 @@ public sealed class WasapiCapture : IMicrophoneDevice
         return Task.FromResult(session?.Take.TakeSamples());
     }
 
+    public Task<float[]?> TakeBufferedSamples(int session) =>
+        Task.FromResult(Latest(session)?.Take.TakeSamples());
+
     public async Task AbortRecording()
     {
         Session? session;
@@ -332,6 +419,25 @@ public sealed class WasapiCapture : IMicrophoneDevice
 
         if (session is null) { return; }
 
+        await Abort(session).ConfigureAwait(false);
+    }
+
+    public async Task AbortRecording(int session)
+    {
+        Session? aborted;
+        lock (gate)
+        {
+            aborted = current?.Number == session ? current : null;
+            if (aborted is not null) { current = null; }
+        }
+
+        if (aborted is null) { return; }
+
+        await Abort(aborted).ConfigureAwait(false);
+    }
+
+    private async Task Abort(Session session)
+    {
         DiagnosticLog.Emit("capture.abort", ("session", session.Number), ("frames", session.Frames));
         session.Take.BeginStopping();
         StopDevice(session);
@@ -348,6 +454,14 @@ public sealed class WasapiCapture : IMicrophoneDevice
         return Task.FromResult(session?.StartupLatency);
     }
 
+    public Task<TimeSpan?> StartupLatency(int session) => Task.FromResult(Latest(session)?.StartupLatency);
+
+    /// <summary>The latest recording, if it is <paramref name="session"/>'s.</summary>
+    private Session? Latest(int session)
+    {
+        lock (gate) { return latest?.Number == session ? latest : null; }
+    }
+
     public void Dispose() => AbortRecording().GetAwaiter().GetResult();
 
     /// <summary>
@@ -357,7 +471,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
     /// The gate must be held: the session becomes the current one the moment this returns, and
     /// two of these built at once would be two microphones open.
     /// </remarks>
-    private Session BuildSession()
+    private Session BuildSession(int number, Action<float[]>? sink)
     {
         MMDevice endpoint;
         bool preferred = false;
@@ -405,7 +519,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
         {
             // The one line that explains a transcript from the wrong microphone. The ID and
             // the name stay out of the log; the fact is what matters.
-            DiagnosticLog.Emit("capture.device.fallback", ("session", DiagnosticLog.Session));
+            DiagnosticLog.Emit("capture.device.fallback", ("session", number));
         }
 
         var device = new NAudio.CoreAudioApi.WasapiCapture(endpoint)
@@ -426,7 +540,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
         var take = new RecordingTake(
             writer,
             MaximumBufferedSamples,
-            segmentSink,
+            sink,
             happened => OnTakeEvent(owner!, happened),
             (int)RecordingFormat.SampleRate);
 
@@ -449,12 +563,11 @@ public sealed class WasapiCapture : IMicrophoneDevice
         };
 
         var session = new Session(
-            // The dictation the take belongs to, not a counter of our own: the kernel publishes
-            // the number before it asks for a recording, and every event of that session - the
-            // recognition and the insertion included - is written against it. A second counter
-            // here would agree with that one until the first session that ends before it
-            // records, and disagree with it silently for the rest of the run.
-            DiagnosticLog.Session,
+            // The dictation the take belongs to, not a counter of our own: every event of that
+            // session - the recognition and the insertion included - is written against it. A
+            // second counter here would agree with that one until the first session that ends
+            // before it records, and disagree with it silently for the rest of the run.
+            number,
             device,
             take,
             buffer,
@@ -487,7 +600,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
                 if (OnMemoryLimitReached is { } limitReached)
                 {
                     DiagnosticLog.Emit("capture.memory-limit", ("session", session.Number), ("samples", session.Samples));
-                    limitReached();
+                    limitReached(session.Number);
                     return;
                 }
 
@@ -674,7 +787,7 @@ public sealed class WasapiCapture : IMicrophoneDevice
             // here, and promising "speak" where nothing is being written is the one thing this
             // must never do.
             session.FirstFrame.TrySetResult(false);
-            Failed?.Invoke(error);
+            Failed?.Invoke(session.Number, error);
         });
     }
 
@@ -815,6 +928,12 @@ public sealed class WasapiCapture : IMicrophoneDevice
 
         /// <summary>The file, the queue, the memory copy and the segmenter of this recording.</summary>
         public RecordingTake Take { get; }
+
+        /// <summary>
+        /// The device's own start has returned. Until then a newer take must not stop or dispose
+        /// it; written and read under the capture's gate.
+        /// </summary>
+        public bool DeviceStarted { get; set; }
 
         public BufferedWaveProvider Incoming { get; }
 

@@ -169,7 +169,9 @@ public interface IFolderOpening
 /// Builds a capture for one dictation.
 /// </summary>
 /// <param name="takesDirectory">Where the WAV goes.</param>
-/// <param name="onFailure">The audio stream died mid-sentence; the reason must be shown exactly.</param>
+/// <param name="onFailure">
+/// The audio stream of the given session died mid-sentence; the reason must be shown exactly.
+/// </param>
 /// <param name="onSamples">Live samples for the recording waveform.</param>
 /// <param name="preferredDeviceUid">
 /// The microphone the person chose, or <c>null</c> for the system default. A later change
@@ -177,7 +179,7 @@ public interface IFolderOpening
 /// </param>
 public delegate IAudioCapturing CaptureFactory(
     string takesDirectory,
-    Action<AudioCaptureError> onFailure,
+    Action<int, AudioCaptureError> onFailure,
     Action<float[]> onSamples,
     string? preferredDeviceUid);
 

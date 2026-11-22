@@ -97,9 +97,9 @@ public sealed class PipeWireCapture : IMicrophoneDevice
     /// and the listener is expected to finish the dictation through the ordinary path, which is
     /// what <c>DictationController.StopAtCaptureMemoryLimit</c> does. Without a listener the
     /// take is reported as failed instead. Raised once per take, from the frame queue's own
-    /// thread.
+    /// thread, with the take's session.
     /// </remarks>
-    public Action? OnMemoryLimitReached { get; set; }
+    public Action<int>? OnMemoryLimitReached { get; set; }
 
     /// <summary>
     /// The most recent recording, live or just finished.
@@ -168,7 +168,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
     public Action<float>? OnInputLevel { get; set; }
 
     /// <inheritdoc/>
-    public Action<AudioCaptureError>? Failed { get; set; }
+    public Action<int, AudioCaptureError>? Failed { get; set; }
 
     /// <inheritdoc/>
     public (long Frames, long Samples) DeliveredCounts
@@ -183,24 +183,67 @@ public sealed class PipeWireCapture : IMicrophoneDevice
 
     public Task<string> StartRecording()
     {
+        Action<float[]>? sink;
+        lock (gate) { sink = segmentSink; }
+
+        return Start(DiagnosticLog.Session, sink, supersedeOlder: false);
+    }
+
+    /// <summary>
+    /// Start <paramref name="session"/>'s take. A recording still held by an older session is
+    /// reclaimed rather than refused.
+    /// </summary>
+    /// <remarks>
+    /// Sessions only ever begin after the previous one has ended, so an older session that still
+    /// holds the microphone is a start nobody is waiting for any more - typically one whose
+    /// watchdog gave up on it while the recorder was still coming up. Refusing the new take with
+    /// "already recording" would make the person's immediate retry fail for a recording they had
+    /// already been told was over.
+    /// </remarks>
+    public Task<string> StartRecording(int session, Action<float[]>? segmentSink) =>
+        Start(session, segmentSink, supersedeOlder: true);
+
+    private async Task<string> Start(int number, Action<float[]>? sink, bool supersedeOlder)
+    {
         Session session;
+        Session? superseded = null;
         string? target;
         lock (gate)
         {
-            if (current is not null)
+            if (current is { } active)
             {
-                throw new AudioCaptureError.EngineUnavailable("already recording");
+                if (!supersedeOlder || active.Number >= number)
+                {
+                    throw new AudioCaptureError.EngineUnavailable("already recording");
+                }
+
+                superseded = active;
+                current = null;
             }
 
-            session = BuildSession();
+            session = BuildSession(number, sink);
             current = session;
             latest = session;
             target = preferredDeviceUid;
         }
 
+        if (superseded is not null)
+        {
+            DiagnosticLog.Emit("capture.superseded", ("session", superseded.Number), ("by", number));
+            _ = Abort(superseded);
+        }
+
+        bool stillCurrent;
         try
         {
-            session.Attach(launch(target));
+            IRecorderProcess recorder = launch(target);
+            // Attached under the gate together with the check, so a newer start either finds the
+            // recorder to stop or leaves it to this line.
+            lock (gate)
+            {
+                session.Attach(recorder);
+                stillCurrent = ReferenceEquals(current, session);
+            }
         }
         catch (Exception error)
         {
@@ -219,6 +262,14 @@ public sealed class PipeWireCapture : IMicrophoneDevice
                 ("session", session.Number),
                 ("ok", false));
             throw new AudioCaptureError.EngineUnavailable(error.Message);
+        }
+
+        if (!stillCurrent)
+        {
+            // A newer take reclaimed the microphone while this recorder was starting. Nobody is
+            // waiting for this one; it is stopped here, where its recorder is known.
+            await Abort(session).ConfigureAwait(false);
+            throw new AudioCaptureError.NotRecording();
         }
 
         // A thread of its own, not a pool one: this blocks on a pipe for the whole dictation, and
@@ -240,7 +291,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
             // Whether a specific microphone was asked for - never its name, which the person chose
             // and which can identify their hardware; "default" or "chosen" is the whole answer.
             ("device", target is null ? "default" : "chosen"));
-        return Task.FromResult(session.Take.FilePath);
+        return session.Take.FilePath;
     }
 
     public Task<bool> WaitForFirstFrame()
@@ -279,7 +330,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
     /// path is bounded by something stronger than a timeout.</description></item>
     /// </list>
     /// </remarks>
-    public async Task<(string Url, TimeSpan Duration)> StopRecording()
+    public Task<(string Url, TimeSpan Duration)> StopRecording()
     {
         Session session;
         lock (gate)
@@ -288,6 +339,28 @@ public sealed class PipeWireCapture : IMicrophoneDevice
             current = null;
         }
 
+        return Stop(session);
+    }
+
+    public Task<(string Url, TimeSpan Duration)> StopRecording(int session)
+    {
+        Session stopping;
+        lock (gate)
+        {
+            if (current is not { } active || active.Number != session)
+            {
+                throw new AudioCaptureError.NotRecording();
+            }
+
+            stopping = active;
+            current = null;
+        }
+
+        return Stop(stopping);
+    }
+
+    private async Task<(string Url, TimeSpan Duration)> Stop(Session session)
+    {
         long began = Stopwatch.GetTimestamp();
         DiagnosticLog.Emit("capture.stop.begin", ("session", session.Number));
 
@@ -335,6 +408,9 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         return Task.FromResult(session?.Take.TakeSamples());
     }
 
+    public Task<float[]?> TakeBufferedSamples(int session) =>
+        Task.FromResult(Latest(session)?.Take.TakeSamples());
+
     public async Task AbortRecording()
     {
         Session? session;
@@ -346,6 +422,25 @@ public sealed class PipeWireCapture : IMicrophoneDevice
 
         if (session is null) { return; }
 
+        await Abort(session).ConfigureAwait(false);
+    }
+
+    public async Task AbortRecording(int session)
+    {
+        Session? aborted;
+        lock (gate)
+        {
+            aborted = current?.Number == session ? current : null;
+            if (aborted is not null) { current = null; }
+        }
+
+        if (aborted is null) { return; }
+
+        await Abort(aborted).ConfigureAwait(false);
+    }
+
+    private async Task Abort(Session session)
+    {
         DiagnosticLog.Emit("capture.abort", ("session", session.Number), ("frames", session.Frames));
         StopDevice(session);
         session.Close();
@@ -361,6 +456,14 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         return Task.FromResult(session?.StartupLatency);
     }
 
+    public Task<TimeSpan?> StartupLatency(int session) => Task.FromResult(Latest(session)?.StartupLatency);
+
+    /// <summary>The latest recording, if it is <paramref name="session"/>'s.</summary>
+    private Session? Latest(int session)
+    {
+        lock (gate) { return latest?.Number == session ? latest : null; }
+    }
+
     public void Dispose() => AbortRecording().GetAwaiter().GetResult();
 
     /// <summary>
@@ -371,7 +474,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
     /// two of these built at once would be two microphones open. The recorder itself is started
     /// outside the gate, the way the Windows peer starts its device outside it.
     /// </remarks>
-    private Session BuildSession()
+    private Session BuildSession(int number, Action<float[]>? sink)
     {
         Directory.CreateDirectory(takesDirectory);
         string path = Path.Combine(takesDirectory, $"take-{Guid.NewGuid():N}.wav");
@@ -387,13 +490,12 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         var take = new RecordingTake(
             writer,
             maximumBufferedSamples,
-            segmentSink,
+            sink,
             happened => OnTakeEvent(owner!, happened),
             (int)RecordingFormat.SampleRate);
-        // The dictation the take belongs to, not a counter of our own: the kernel publishes the
-        // number before it asks for a recording, and every event of that session - the
-        // recognition and the insertion included - is written against it.
-        owner = new Session(DiagnosticLog.Session, take);
+        // The dictation the take belongs to, not a counter of our own: every event of that
+        // session - the recognition and the insertion included - is written against it.
+        owner = new Session(number, take);
         return owner;
     }
 
@@ -413,7 +515,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
                 if (OnMemoryLimitReached is { } limitReached)
                 {
                     DiagnosticLog.Emit("capture.memory-limit", ("session", session.Number), ("samples", session.Samples));
-                    limitReached();
+                    limitReached(session.Number);
                     return;
                 }
 
@@ -447,6 +549,9 @@ public sealed class PipeWireCapture : IMicrophoneDevice
 
         return Task.FromResult(session?.Take.ConsumedSampleCount() ?? 0);
     }
+
+    public Task<int> ConsumedSampleCount(int session) =>
+        Task.FromResult(Latest(session)?.Take.ConsumedSampleCount() ?? 0);
 
     /// <summary>
     /// Read the recorder's output for as long as it has one.
@@ -524,7 +629,7 @@ public sealed class PipeWireCapture : IMicrophoneDevice
             // here, and promising "speak" where nothing is being written is the one thing this
             // must never do.
             session.FirstFrame.TrySetResult(false);
-            Failed?.Invoke(error);
+            Failed?.Invoke(session.Number, error);
         });
     }
 
@@ -679,7 +784,9 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         public RecordingTake Take { get; }
 
         /// <summary>The recorder, from the moment it starts until the stop takes it away.</summary>
-        public IRecorderProcess? Recorder { get; private set; }
+        public IRecorderProcess? Recorder => Volatile.Read(ref recorder);
+
+        private IRecorderProcess? recorder;
 
         /// <summary>The one task reading the recorder's output.</summary>
         public Task Reader { get; set; } = Task.CompletedTask;
@@ -705,15 +812,11 @@ public sealed class PipeWireCapture : IMicrophoneDevice
 
         public bool IsClosed { get { lock (deliveryGate) { return closed; } } }
 
-        public void Attach(IRecorderProcess recorder) => Recorder = recorder;
+        public void Attach(IRecorderProcess started) => Volatile.Write(ref recorder, started);
 
         /// <summary>Take the recorder away, so only the release can reach it.</summary>
-        public IRecorderProcess? Detach()
-        {
-            IRecorderProcess? recorder = Recorder;
-            Recorder = null;
-            return recorder;
-        }
+        /// <remarks>Atomic: a superseding start and the start it superseded may both try.</remarks>
+        public IRecorderProcess? Detach() => Interlocked.Exchange(ref recorder, null);
 
         public void BeginFinishing()
         {

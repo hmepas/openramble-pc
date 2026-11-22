@@ -77,7 +77,7 @@ internal static class MicCommand
         }
 
         AudioCaptureError? failure = null;
-        capture.Failed = error => failure ??= error;
+        capture.Failed = (_, error) => failure ??= error;
 
         float peak = 0;
         capture.OnInputLevel = level => peak = Math.Max(peak, level);

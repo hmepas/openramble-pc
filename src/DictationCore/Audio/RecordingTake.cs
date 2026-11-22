@@ -103,7 +103,12 @@ internal sealed class RecordingTake
     /// <param name="maximumBufferedSamples">The memory cap.</param>
     /// <param name="segmentSink">Where finished pieces of the running take go, if anyone asked.</param>
     /// <param name="report">
-    /// Called from the frame queue's own thread, outside every lock of this type.
+    /// Called from the frame queue's own thread, under this type's lock - the price of "only
+    /// while recording" being exact: a stop that begins meanwhile waits for the handler to
+    /// return. The lock is reentrant, so a handler may stop or abort the take on its own thread;
+    /// it must not block on another thread that is stopping, aborting or reading this take. The
+    /// captures' handlers log, close their session and hand the news on to the controller, which
+    /// decides under its own lock and finishes the take on a worker.
     /// </param>
     /// <param name="sampleRate">The rate of the samples, for the duration of a memory-only take.</param>
     /// <param name="segmenter">The cut rule; only tests choose another.</param>
@@ -192,7 +197,6 @@ internal sealed class RecordingTake
             }
 
             held = storage is Storage.DiskAndMemory or Storage.DiskOnly or Storage.MemoryOnly;
-            if (phase != Phase.Recording) { events = null; }
         }
 
         // Outside the lock, so a stop is never held behind the segment sink. The order is still
@@ -201,7 +205,23 @@ internal sealed class RecordingTake
 
         if (events is null) { return; }
 
-        foreach (Event happened in events) { report(happened); }
+        // Under the lock, and the phase asked again before each one. An event decided above can
+        // meet a stop that began since - while the segment sink ran, or inside the handler of the
+        // event before it - and once a stop has taken over, its result is the take's whole
+        // answer. Deciding under the lock and raising after it left exactly that gap: a take
+        // that had reached its memory cap could report it to a session already finishing it, and
+        // a take with no listener would report as failed a stop that was about to succeed.
+        // Raising here closes it rather than narrowing it: a stop that begins while a handler
+        // runs waits for that handler, and the next event sees the stop.
+        lock (gate)
+        {
+            foreach (Event happened in events)
+            {
+                if (phase != Phase.Recording) { return; }
+
+                report(happened);
+            }
+        }
     }
 
     /// <summary>

@@ -84,7 +84,8 @@ public sealed class WasapiCapture : IMicrophoneDevice
     /// and the listener is expected to finish the dictation through the ordinary path, which is
     /// what <c>DictationController.StopAtCaptureMemoryLimit</c> does. Without a listener the
     /// take is reported as failed instead. Raised once per take, from the frame queue's own
-    /// thread, with the take's session.
+    /// thread, with the take's session - and with the take's lock held, so a stop cannot begin
+    /// under it: a listener may start the stop, but must not wait on another thread for it.
     /// </remarks>
     public Action<int>? OnMemoryLimitReached { get; set; }
 

@@ -168,6 +168,53 @@ public sealed class RecordingTakeTests : IDisposable
         Assert.Equal(RecordingTake.Phase.Stopped, take.CurrentPhase);
     }
 
+    /// <summary>
+    /// An event decided while the take was recording is not raised after a stop has begun: the
+    /// stop waits for the one being raised, and the next one sees the stop.
+    /// </summary>
+    [Fact]
+    public async Task TestNoEventIsRaisedOnceAStopHasBegun()
+    {
+        using var reporting = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var seen = new List<(RecordingTake.Event Event, RecordingTake.Phase Phase)>();
+        RecordingTake? take = null;
+        WAVWriter writer = OpenWriter();
+        take = new RecordingTake(
+            writer,
+            maximumBufferedSamples: 5 * Frame / 2,
+            segmentSink: null,
+            happened =>
+            {
+                lock (seen) { seen.Add((happened, take!.CurrentPhase)); }
+                if (happened != RecordingTake.Event.DiskFailed) { return; }
+
+                reporting.Set();
+                release.Wait(TimeSpan.FromSeconds(10));
+            });
+
+        take.Deliver(new float[Frame]);
+        take.Deliver(new float[Frame]);
+        await WaitFor(() => writer.Duration >= TimeSpan.FromSeconds(2.0 * Frame / 16_000));
+        writer.Close();
+        // One frame that the disk refuses and memory has no room for: two events from one commit,
+        // the second still pending while the first one's handler runs.
+        take.Deliver(new float[Frame]);
+        Assert.True(reporting.Wait(TimeSpan.FromSeconds(5)));
+
+        Task stopping = Task.Run(take.BeginStopping);
+        await Task.Delay(200);
+        release.Set();
+        await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+        await take.Stop(TimeSpan.FromSeconds(5));
+
+        lock (seen)
+        {
+            Assert.Equal(RecordingTake.Event.DiskFailed, seen[0].Event);
+            Assert.All(seen, raised => Assert.Equal(RecordingTake.Phase.Recording, raised.Phase));
+        }
+    }
+
     [Fact]
     public async Task TestAHealthyTakeStopsWithBothCopies()
     {

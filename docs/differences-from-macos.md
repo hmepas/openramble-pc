@@ -233,9 +233,12 @@ About → "Save Error Report…" writes one ZIP (`system.json`, `events.jsonl`,
 
 Where it differs:
 
-- **An existing settings file keeps the journal off.** The settings file
+- **An existing settings file turns the journal on once.** The settings file
   stores every value, so a `false` written by the old opt-in log cannot be told
-  from a deliberate opt-out; both are respected. Fresh installs start with it on.
+  from a deliberate opt-out. Upstream reads a missing key as "on"; here a file
+  without `schemaVersion` is migrated to version 1 on first launch, which turns
+  the journal on (and drops the removed `modelUnloadTimeout`). An opt-out made
+  after that is kept.
 - **Crash records are the app's own.** macOS leaves `.ips` reports that
   upstream sanitizes. A managed process here leaves nothing comparable, so an
   unhandled exception writes `crash-*.json` beside the journal: exception

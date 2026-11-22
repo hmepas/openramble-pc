@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace OpenRamble.AppCore;
@@ -8,7 +9,8 @@ namespace OpenRamble.AppCore;
 ///
 /// Fifteen values, every one of them a choice made in Settings. There is no telemetry
 /// identifier, no install date, no counters: a settings file that grows things the person never
-/// set is a settings file that has started reporting.
+/// set is a settings file that has started reporting. The one value nobody chose is
+/// <see cref="SchemaVersion"/>, and it describes the file, not the person.
 /// </summary>
 public sealed record AppSettings
 {
@@ -40,7 +42,8 @@ public sealed record AppSettings
 
     /// <summary>
     /// Keep the local diagnostic journal. On when the file never said otherwise; a stored
-    /// <c>false</c> - the opt-out, or the old opt-in log never turned on - is kept.
+    /// <c>false</c> is the opt-out and is kept. The <c>false</c> files from before the journal
+    /// carry - the old opt-in log, off by default - is turned on once by the 0 -> 1 migration.
     /// </summary>
     public bool DetailedLogging { get; init; } = SettingsDefaults.DetailedLogging;
 
@@ -65,6 +68,14 @@ public sealed record AppSettings
     /// when we decided it should - never merely because the version changed.
     /// </summary>
     public int OnboardingCompletedRevision { get; init; }
+
+    /// <summary>
+    /// Which shape of this file the values are in. Not a choice and not a counter: it moves only
+    /// when a release changes what a stored value means, and <see cref="SettingsStore"/> uses it
+    /// to bring an older file up to date exactly once. Settings made in memory are always in the
+    /// current shape; a file without the field is from before it existed and reads as <c>0</c>.
+    /// </summary>
+    public int SchemaVersion { get; init; } = SettingsStore.CurrentSchemaVersion;
 }
 
 /// <summary>
@@ -88,6 +99,12 @@ public sealed class SettingsStore
         WriteIndented = true,
     };
 
+    /// <summary>Keys are matched the way <see cref="SerializerOptions"/> matches them.</summary>
+    private static readonly JsonNodeOptions NodeOptions = new() { PropertyNameCaseInsensitive = true };
+
+    /// <summary>The shape <see cref="Write"/> produces; see <see cref="Migrate"/> for the steps up to it.</summary>
+    public const int CurrentSchemaVersion = 1;
+
     private readonly string path;
 
     public SettingsStore(string path)
@@ -98,12 +115,35 @@ public sealed class SettingsStore
     public static SettingsStore Under(AppPaths paths) =>
         new(Path.Combine(paths.Support(), "settings.json"));
 
+    /// <summary>
+    /// The settings as the current version understands them. An older file is migrated (see
+    /// <see cref="Migrate"/>) and written back at once, so its steps run on one launch only.
+    /// </summary>
     public AppSettings Read()
     {
         try
         {
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllBytes(path), SerializerOptions)
-                ?? new AppSettings();
+            if (JsonNode.Parse(File.ReadAllBytes(path), NodeOptions) is not JsonObject document)
+            {
+                return new AppSettings();
+            }
+
+            bool migrated = Migrate(document);
+            AppSettings settings = document.Deserialize<AppSettings>(SerializerOptions) ?? new AppSettings();
+            if (migrated)
+            {
+                try
+                {
+                    Write(settings);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    // Not saved this time; the file is still the old shape, and the same steps
+                    // give the same answer on the next launch.
+                }
+            }
+
+            return settings;
         }
         catch (FileNotFoundException)
         {
@@ -117,6 +157,45 @@ public sealed class SettingsStore
         {
             return new AppSettings();
         }
+    }
+
+    /// <summary>
+    /// Bring a stored file up to <see cref="CurrentSchemaVersion"/>, one step per version, in
+    /// order. Each step runs once in the life of a file: the version it leaves behind is written
+    /// with everything else, and a file already at that version skips it. Returns whether anything
+    /// ran.
+    /// </summary>
+    /// <remarks>
+    /// The steps work on the raw document rather than on <see cref="AppSettings"/> because what
+    /// they deal with is exactly what the record cannot express: keys that no longer exist, and
+    /// values whose meaning changed under the same name. A new step goes at the bottom with the
+    /// next number, and <see cref="CurrentSchemaVersion"/> moves with it.
+    /// </remarks>
+    private static bool Migrate(JsonObject document)
+    {
+        int version = document["schemaVersion"] is JsonValue stored && stored.TryGetValue(out int number)
+            ? number
+            : 0;
+        if (version >= CurrentSchemaVersion)
+        {
+            return false;
+        }
+
+        if (version < 1)
+        {
+            // 0 -> 1: the diagnostic journal. Upstream keeps it on unless the key says otherwise,
+            // but this file stored every value, and the opt-in log it replaced was off by default -
+            // so the "false" nearly every older file carries is a default nobody chose, not an
+            // opt-out. Upstream would read it as absent; here it is turned on, once. Somebody who
+            // had also switched the old log off and on again gets it on too: the file cannot tell
+            // them apart, and the switch is one click away.
+            document["detailedLogging"] = true;
+            // The "Unload model" picker is gone; the engine keeps one fixed hour for everyone.
+            document.Remove("modelUnloadTimeout");
+        }
+
+        document["schemaVersion"] = CurrentSchemaVersion;
+        return true;
     }
 
     /// <summary>

@@ -383,9 +383,14 @@ public sealed class AppStatePreferencesTests : IDisposable
     }
 
     /// <summary>
-    /// testExistingDiagnosticsOptOutIsRespectedAtLaunch: a stored opt-out survives the upgrade,
-    /// and turning the switch off clears what was kept.
+    /// testExistingDiagnosticsOptOutIsRespectedAtLaunch: an opt-out made while the journal
+    /// existed survives the next launch, and turning the switch off clears what was kept.
     /// </summary>
+    /// <remarks>
+    /// "While the journal existed" is the point: a file written today carries the current
+    /// <see cref="AppSettings.SchemaVersion"/>, so this <c>false</c> is one somebody chose. The
+    /// <c>false</c> an older file carries is the next test's business.
+    /// </remarks>
     [Fact]
     public async Task TestExistingDiagnosticsOptOutIsRespectedAtLaunch()
     {
@@ -401,6 +406,42 @@ public sealed class AppStatePreferencesTests : IDisposable
 
         state.DetailedLogging = false;
         Assert.Equal(string.Empty, LogText());
+        Assert.False(harness.Settings.Read().DetailedLogging);
+    }
+
+    /// <summary>
+    /// A settings file from before the journal says <c>"detailedLogging": false</c> because the
+    /// old opt-in log was off by default and every value was written - not because anybody
+    /// opted out. Upstream reads an absent key as "on"; that <c>false</c> is this port's absent
+    /// key, so the journal comes on, once, and the file says so from then on.
+    /// </summary>
+    [Fact]
+    public async Task APreJournalSettingsFileTurnsTheJournalOnOnce()
+    {
+        string file = Path.Combine(harness.Paths.Support(), "settings.json");
+        Directory.CreateDirectory(harness.Paths.Support());
+        File.WriteAllText(file, """
+            {
+              "hotkey": "RightShift",
+              "detailedLogging": false,
+              "modelUnloadTimeout": "never"
+            }
+            """);
+
+        AppState state = await ReadyState();
+
+        Assert.True(state.DetailedLogging);
+        Assert.Equal(DictationHotkey.RightShift, state.Hotkey);
+        await DictateOnce(state);
+        await TestWait.For("the take reached the journal", () => LogText().Length > 0);
+        // Written back at once, so the next launch reads a file that is already current.
+        string stored = File.ReadAllText(file);
+        Assert.Contains("\"schemaVersion\": 1", stored, StringComparison.Ordinal);
+        Assert.Contains("\"detailedLogging\": true", stored, StringComparison.Ordinal);
+        Assert.DoesNotContain("modelUnloadTimeout", stored, StringComparison.Ordinal);
+
+        // An opt-out made from here on is a real one, and the next launch keeps it.
+        state.DetailedLogging = false;
         Assert.False(harness.Settings.Read().DetailedLogging);
     }
 

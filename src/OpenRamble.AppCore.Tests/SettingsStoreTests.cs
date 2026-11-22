@@ -86,6 +86,37 @@ public sealed class SettingsStoreTests : IDisposable
         Assert.Equal(whole.Length / 2, new FileInfo(Path_).Length);
     }
 
+    /// <summary>
+    /// A file without a schema version is from before the version existed, and is brought up to
+    /// date once: the journal comes on, the removed unload picker goes, and the file is
+    /// rewritten so none of it happens again.
+    /// </summary>
+    [Fact]
+    public void TestAnUnversionedFileIsMigratedOnceAndWrittenBack()
+    {
+        File.WriteAllText(Path_, """
+            {
+              "hotkey": "CapsLock",
+              "detailedLogging": false,
+              "modelUnloadTimeout": "never"
+            }
+            """);
+        var store = new SettingsStore(Path_);
+
+        AppSettings read = store.Read();
+
+        Assert.Equal(SettingsStore.CurrentSchemaVersion, read.SchemaVersion);
+        Assert.True(read.DetailedLogging);
+        Assert.Equal(nameof(DictationHotkey.CapsLock), read.Hotkey);
+        string stored = File.ReadAllText(Path_);
+        Assert.DoesNotContain("modelUnloadTimeout", stored, StringComparison.Ordinal);
+        Assert.Equal(read, store.Read());
+
+        // From here on a false is somebody's choice, and the migration does not run over it.
+        store.Write(read with { DetailedLogging = false });
+        Assert.False(store.Read().DetailedLogging);
+    }
+
     /// <summary>A settings file that was never written reads as the defaults, silently.</summary>
     [Fact]
     public void TestAMissingFileIsNotAProblem()

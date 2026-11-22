@@ -32,8 +32,17 @@ public sealed class StreamedSegmentRecognizer
         public sealed record Failed(Exception Error) : Outcome;
     }
 
-    private readonly Func<float[], Task<ASRResult>> transcribe;
+    private readonly Func<float[], CancellationToken, Task<ASRResult>> transcribe;
     private readonly Lock gate = new();
+
+    /// <summary>
+    /// Cancelled by <see cref="Cancel"/>, and handed to every decode. A segment still waiting for
+    /// the engine - a cold model loading, the one-at-a-time turn of another session - is told the
+    /// take is gone and never starts; without it the wait ended in a decode of audio nobody
+    /// would insert, holding the engine against the next dictation.
+    /// </summary>
+    /// <remarks>Deliberately never disposed: a decode in flight may still hold its token.</remarks>
+    private readonly CancellationTokenSource cancellation = new();
 
     /// <summary>
     /// The end of the chain. Each submission waits for the previous one, which is what keeps
@@ -58,6 +67,11 @@ public sealed class StreamedSegmentRecognizer
     private bool cancelled;
 
     public StreamedSegmentRecognizer(Func<float[], Task<ASRResult>> transcribe)
+        : this((samples, _) => transcribe(samples))
+    {
+    }
+
+    public StreamedSegmentRecognizer(Func<float[], CancellationToken, Task<ASRResult>> transcribe)
     {
         this.transcribe = transcribe;
     }
@@ -90,7 +104,7 @@ public sealed class StreamedSegmentRecognizer
 
         try
         {
-            ASRResult result = await transcribe(samples).ConfigureAwait(false);
+            ASRResult result = await transcribe(samples, cancellation.Token).ConfigureAwait(false);
             Append(result.Text.Trim(), result.Words);
         }
         catch (Exception error)
@@ -140,7 +154,10 @@ public sealed class StreamedSegmentRecognizer
             stopped = true;
             cancelled = true;
             texts.Clear();
+            words.Clear();
         }
+
+        cancellation.Cancel();
     }
 
     /// <summary>

@@ -88,6 +88,51 @@ public sealed class StreamedSegmentRecognizerTests
         Assert.Equal([2, 1, 3], recognizer.SubmittedSampleCounts);
     }
 
+    /// <summary>
+    /// Escape while a segment waits for a cold engine: the wait itself is told the take is gone,
+    /// so the decode it was queued for never starts on audio nobody will insert.
+    /// </summary>
+    [Fact]
+    public async Task TestCancellingReachesASegmentStillWaitingForTheEngine()
+    {
+        var waiting = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int decodes = 0;
+        var recognizer = new StreamedSegmentRecognizer(async (_, token) =>
+        {
+            waiting.TrySetResult(token);
+            // The engine warming up: honours the token, like the transcriber's own wait.
+            await Task.Delay(Timeout.Infinite, token);
+            Interlocked.Increment(ref decodes);
+            return Made("too late");
+        });
+
+        recognizer.Submit([1]);
+        CancellationToken token = await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        recognizer.Cancel();
+
+        Assert.True(token.IsCancellationRequested, "the segment's wait must be told the take is gone");
+        Assert.IsType<StreamedSegmentRecognizer.Outcome.Failed>(await recognizer.Finish().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, decodes);
+    }
+
+    [Fact]
+    public async Task TestCancellingForgetsTheWordsAsWellAsTheTexts()
+    {
+        var recognizer = new StreamedSegmentRecognizer(_ => Task.FromResult(new ASRResult(
+            "one",
+            words: [new ASRResult.Word("one", TimeSpan.Zero, TimeSpan.FromSeconds(0.5))],
+            audioDuration: TimeSpan.FromSeconds(1),
+            processingDuration: TimeSpan.FromSeconds(0.01))));
+
+        recognizer.Submit([1]);
+        await Task.Delay(100);
+        Assert.Single(recognizer.RecognizedWords);
+        recognizer.Cancel();
+
+        Assert.Empty(recognizer.RecognizedWords);
+        Assert.Equal(0, recognizer.RecognizedCount);
+    }
+
     [Fact]
     public async Task TestSubmissionsAfterFinishAreIgnored()
     {

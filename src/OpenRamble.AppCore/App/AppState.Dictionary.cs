@@ -33,6 +33,36 @@ public sealed partial class AppState
             AppendsTrailingSpace);
 
     /// <summary>
+    /// The written forms of the person's own dictionary, for the decoder.
+    ///
+    /// Only what the person taught. The built-in starter set is Russian spellings of English
+    /// terms, which leaning toward the Latin form does not fix (measured upstream: 1 of 34 with
+    /// and without), and someone who never teaches a word decodes exactly as before. Entries
+    /// marked <see cref="DictionaryReplacement.NoAcousticBoost"/> stay text-only, as they always
+    /// have.
+    /// </summary>
+    public static IReadOnlyList<string> VocabularyTerms(IEnumerable<DictionaryReplacement> replacements)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        return
+        [
+            .. replacements
+                .Where(replacement => !replacement.NoAcousticBoost)
+                .Select(replacement => replacement.Written)
+                .Where(written => written.Length > 0 && seen.Add(written)),
+        ];
+    }
+
+    /// <summary>Hand the taught words to the recognizer, at launch and on every change.</summary>
+    private void PublishVocabulary()
+    {
+        if (transcriber is null) { return; }
+        // Called in order and not handed to the pool: two quick edits must not arrive reversed.
+        // The engines only store the list for the next run.
+        _ = transcriber.SetVocabulary(VocabularyTerms(Replacements));
+    }
+
+    /// <summary>
     /// Learn from edits to inserted text noticed in the target application.
     ///
     /// Word-by-word diff with a conservative filter: only terms are learned (a change of

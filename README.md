@@ -19,8 +19,13 @@ and WPF on one side; PipeWire, `/dev/input`, `wtype` and Avalonia on the other.
 > [docs/differences-from-macos.md](docs/differences-from-macos.md).
 > Upstream code and icon are used under the [MIT license](LICENSE).
 
-Recognition runs locally (NVIDIA Parakeet TDT 0.6b v3 via sherpa-onnx —
-the same model the macOS app runs through its own runtime). Audio is never
+Recognition runs locally. On Linux it is Parakeet Ultra (Moondream's further
+trained NVIDIA Parakeet TDT 0.6B v3) through transcribe.cpp — the model and the
+runtime upstream ships, at the quantization its desktop builds use. On Windows,
+for now, it is Parakeet TDT 0.6B v3 through sherpa-onnx, until a Windows build
+of the transcribe.cpp runtime exists (see
+[docs/differences-from-macos.md](docs/differences-from-macos.md#the-engine-transcribecpp-on-linux-sherpa-onnx-on-windows-for-now)).
+Audio is never
 uploaded, there are no accounts and no analytics. Recent dictations **are**
 kept on this machine, with their audio, so you can replay, copy, re-recognize
 or delete them: the last 5 by default, adjustable from 5 to 50 in Settings ▸
@@ -69,7 +74,13 @@ Under `%LOCALAPPDATA%\OpenRambleData` on Windows and
 ## Building (on Linux)
 
 Requires the .NET 10 SDK. Both builds are produced on a Linux host: the WPF app
-cross-compiles from here and can only *run* on Windows.
+cross-compiles from here and can only *run* on Windows. The Linux build also
+needs `cmake`, `ninja`, a C++17 compiler and `curl`: `scripts/build-linux.sh`
+first runs `scripts/build-transcribe.sh`, which fetches the transcribe.cpp fork
+at its pinned commit and builds the runtime into `artifacts/native/linux-x64`
+(a few minutes once; skipped afterwards). The libraries link against the build
+machine's glibc, so a build meant for other distributions should be made on the
+oldest one it has to run on.
 
 ```bash
 ./scripts/build-win.sh            # runs all tests, then publishes → dist/win-x64
@@ -93,7 +104,10 @@ download by importing the host's cached model): see
 ### On Linux
 
 Run `dist/linux-x64/OpenRamble.App.Linux`. Same product, same tray, same
-onboarding. What the machine has to provide:
+onboarding; the model it downloads is Parakeet Ultra (~740 MB). A machine that
+already holds Parakeet v3 from an earlier build keeps dictating with it;
+Settings ▸ Recognition offers Ultra, and the old model is deleted once Ultra is
+downloaded, verified and loaded. What the machine has to provide:
 
 - **The `input` group.** The dictation key is read straight from `/dev/input`,
   because no Wayland protocol reports a key being *held*:
@@ -178,8 +192,9 @@ rest of the deviations in
 
 - `src/DictationCore` — platform-independent dictation logic, ported 1:1
   from the Swift original with its full test suite.
-- `src/LocalASR` — model install/verify/download lifecycle and the
-  sherpa-onnx engine adapter.
+- `src/LocalASR` — model install/verify/download lifecycle and the two
+  engine adapters: transcribe.cpp (P/Invoke, Parakeet Ultra) and sherpa-onnx
+  (Parakeet v3).
 - `src/OpenRamble.AppCore` — app policies (hotkey state machine, insertion
   policy, tray/overlay state), testable on Linux.
 - `src/OpenRamble.App` — WPF shell and Win32 adapters (keyboard hook,
@@ -211,8 +226,23 @@ The macOS original is expected as a sibling checkout at `../openramble`
 
 - [OpenRamble](https://github.com/mikwiseman/openramble) (MIT) — the
   original application this port rewrites, including its icon.
+- [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) by CJ
+  Pais and the Handy team (MIT) — the speech recognition runtime on Linux,
+  built from upstream OpenRamble's fork
+  ([mikwiseman/transcribe.cpp](https://github.com/mikwiseman/transcribe.cpp)
+  at `dacdba09`: 0.4.1, the Parakeet long-form fix and phrase boosting). It
+  vendors ggml, miniz and Silero VAD (all MIT); the four licence texts ship
+  next to the libraries (`transcribe-cpp-MIT.txt`, `ggml-MIT.txt`,
+  `miniz-MIT.txt`, `silero-vad-MIT.txt`).
+- [Parakeet Ultra](https://huggingface.co/moondream/parakeet-ultra) by
+  Moondream (CC-BY-4.0), a further trained NVIDIA Parakeet TDT 0.6B v3 — the
+  Linux recognition model, downloaded on first run as handy-computer's
+  [GGUF conversion](https://huggingface.co/handy-computer/parakeet-ultra-gguf)
+  quantized to Q8_0 (revision `a1539be1`, one file of 740,363,168 bytes,
+  SHA-256 verified; GitHub mirror `mikwiseman/openramble` `models-a1539be1`).
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) —
-  offline speech recognition runtime.
+  offline speech recognition runtime on Windows, and on Linux for a machine
+  that still holds Parakeet v3.
 - [NVIDIA Parakeet TDT 0.6b v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
   (CC-BY-4.0) — the recognition model, downloaded on first run as our own
   weight-only int4 build

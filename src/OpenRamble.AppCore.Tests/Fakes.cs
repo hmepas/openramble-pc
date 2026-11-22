@@ -837,6 +837,12 @@ public sealed class AppHarness : IDisposable
     /// </summary>
     public IASREngineAdapting? WarmUpEngine { get; set; }
 
+    /// <summary>The model the state recognizes with; <c>null</c> - the app's default.</summary>
+    public ModelManifest? Model { get; set; }
+
+    /// <summary>The model <see cref="Model"/> replaced; <c>null</c> - none, as on Windows.</summary>
+    public ModelManifest? PreviousModel { get; set; }
+
     /// <summary>Zero - permission polling is off: in a test we change them, not the system.</summary>
     public TimeSpan PermissionPollInterval { get; set; } = TimeSpan.Zero;
 
@@ -870,6 +876,8 @@ public sealed class AppHarness : IDisposable
         {
             Paths = Paths,
             Settings = Settings,
+            ModelManifest = Model,
+            PreviousModelManifest = PreviousModel,
             Permissions = Permissions,
             HotkeyMonitor = Monitor,
             CopyShortcutMonitor = CopyMonitor,
@@ -922,9 +930,16 @@ public sealed class AppHarness : IDisposable
     /// disk. The marker records the same sizes and modification times a production installation
     /// writes after its SHA check, so the store's fast path accepts it without hashing anything.
     /// </summary>
-    public void InstallModelMarker()
+    public void InstallModelMarker() => InstallMarker(Model ?? ModelManifest.Bundled());
+
+    /// <summary>The same, for the model <see cref="Model"/> replaced.</summary>
+    public void InstallPreviousModelMarker() => InstallMarker(PreviousModel!);
+
+    /// <summary>Where the previous model lives once installed.</summary>
+    public string PreviousModelDirectory() => new ModelInstallLayout(PreviousModel!, Paths.Models()).ModelDirectory;
+
+    private void InstallMarker(ModelManifest manifest)
     {
-        ModelManifest manifest = ModelManifest.Bundled();
         var layout = new ModelInstallLayout(manifest, Paths.Models());
         Directory.CreateDirectory(layout.EngineDirectory);
 

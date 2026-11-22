@@ -8,6 +8,7 @@ public sealed partial class AppState
 {
     private DictationState dictationState = DictationState.Idle;
     private ModelState modelState = new ModelState.NotInstalled();
+    private ModelState? upgradeState;
     private bool microphoneGranted;
     private MicrophoneConsentState microphoneState = MicrophoneConsentState.Denied;
     private DictationNotice? lastNotice;
@@ -88,6 +89,16 @@ public sealed partial class AppState
     {
         get { lock (gate) { return modelState; } }
         private set => Set(ref modelState, value);
+    }
+
+    /// <summary>
+    /// The newer model's own state while the previous one still serves, or <c>null</c> when
+    /// there is nothing to upgrade to. <see cref="ModelStateValue"/> describes the model in use.
+    /// </summary>
+    public ModelState? UpgradeState
+    {
+        get { lock (gate) { return upgradeState; } }
+        private set => Set(ref upgradeState, value);
     }
 
     public bool MicrophoneGranted
@@ -271,7 +282,10 @@ public sealed partial class AppState
     public IReadOnlyList<DictionaryReplacement> Replacements
     {
         get { lock (gate) { return replacements; } }
-        private set => Set(ref replacements, value);
+        private set
+        {
+            if (Set(ref replacements, value)) { PublishVocabulary(); }
+        }
     }
 
     public DictationHotkey Hotkey

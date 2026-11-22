@@ -272,6 +272,57 @@ public sealed record ModelStatus
     }
 
     /// <summary>
+    /// The card for the newer model while the previous one still serves.
+    ///
+    /// Every state here leaves dictation working on the model already installed, and the card
+    /// says so: the download is an offer, not a repair. Ported from upstream's
+    /// <c>ModelStatus.upgrade</c>.
+    /// </summary>
+    public static ModelStatus Upgrade(ModelState state, int downloadMegabytes)
+    {
+        ModelStatus status = state switch
+        {
+            ModelState.Downloading downloading => new ModelStatus
+            {
+                Title = "Downloading Parakeet Ultra…",
+                Detail = "Dictation keeps using the current model until the new one is ready.",
+                Progress = state.Progress,
+                ProgressLabel = $"{Megabytes(downloading.ReceivedBytes)} of {Megabytes(downloading.TotalBytes)} MB",
+                Actions = [Action.Cancel],
+                ToneValue = Tone.Neutral,
+                Announcement = "Downloading Parakeet Ultra",
+            },
+            ModelState.Verifying => new ModelStatus
+            {
+                Title = "Checking Parakeet Ultra…",
+                Progress = state.Progress,
+                Actions = [],
+                ToneValue = Tone.Neutral,
+                Announcement = "Checking Parakeet Ultra",
+            },
+            ModelState.Failed or ModelState.RepairRequired => new ModelStatus
+            {
+                Title = "Parakeet Ultra didn't download",
+                Detail = "Dictation keeps using the current model. Nothing was changed.",
+                Actions = [Action.Retry],
+                ToneValue = Tone.Failure,
+                Announcement = "Parakeet Ultra didn't download",
+            },
+            _ => new ModelStatus
+            {
+                Title = "Parakeet Ultra is available",
+                Detail = "A newer version of the same model with fewer recognition mistakes in English and "
+                    + "Russian, run by transcribe.cpp. Dictation keeps working while it downloads, and the "
+                    + "current model is removed once Ultra is ready.",
+                Actions = [Action.Install],
+                ToneValue = Tone.Neutral,
+                Announcement = "Parakeet Ultra is available",
+            },
+        };
+        return status with { DownloadMegabytes = downloadMegabytes };
+    }
+
+    /// <summary>
     /// The error in human words.
     ///
     /// Previously the type's own description was printed here - that is, the person saw

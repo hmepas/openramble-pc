@@ -531,6 +531,9 @@ public sealed class LocalTranscriber
         await capable.StopPreview().ConfigureAwait(false);
     }
 
+    /// <summary>Hand the person's taught words to the engine; see <see cref="IASREngineAdapting.SetVocabulary"/>.</summary>
+    public Task SetVocabulary(IReadOnlyList<string> terms) => engine.SetVocabulary(terms);
+
     /// <summary>
     /// Free up the memory under the model - forced.
     ///

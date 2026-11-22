@@ -104,7 +104,10 @@ public sealed partial class App : Application
         overlay = panel;
 
         AppPaths paths = AppPaths.Standard();
-        var transcriber = new LocalTranscriber(new SherpaOnnxAdapter());
+        // Parakeet Ultra on transcribe.cpp. Parakeet v3 on sherpa-onnx stays only for a machine
+        // that already holds it: it dictates with that until Ultra is downloaded and loaded.
+        var transcriber = new LocalTranscriber(
+            new EngineByModelFiles(new TranscribeCppAdapter(), new SherpaOnnxAdapter()));
         var inserter = new LinuxTextInserter(
             reportRestoreFailure: _ => state?.ReportClipboardRestoreFailure(),
             // The one wire without which the insertion path silently loses a guarantee: nothing on
@@ -117,6 +120,8 @@ public sealed partial class App : Application
         {
             Paths = paths,
             Settings = SettingsStore.Under(paths),
+            ModelManifest = ModelManifest.BundledUltra(),
+            PreviousModelManifest = ModelManifest.Bundled(),
             Permissions = microphone,
             HotkeyMonitor = monitor,
             CopyShortcutMonitor = chord,

@@ -28,7 +28,7 @@ internal static class Program
 
             Commands:
               status                what is installed and where
-              install               download and install the model (~670 MB)
+              install               download and install the model (~740 MB; ~720 MB for sherpa-onnx)
               import <folder>       take the model from a ready folder, without network
               delete                delete the installed model
               transcribe <file>...  recognize files
@@ -45,11 +45,13 @@ internal static class Program
             Environment variables:
               OPENRAMBLE_MODELS_ROOT     installation root (%LOCALAPPDATA%\OpenRambleData\Models default)
               OPENRAMBLE_MODEL_DIR       engine folder past the storage (for measurements)
-              OPENRAMBLE_ASR_PRECISION   int8 (default) | float32 | int4 (weight-only, see scripts/quantize-parakeet-int4.py)
-              OPENRAMBLE_ASR_PROVIDER    cpu (default) | cuda | directml
-              OPENRAMBLE_ASR_THREADS     intra-op threads (default: product value, 4)
-              OPENRAMBLE_ASR_DECODING    greedy_search (default) | modified_beam_search
+              OPENRAMBLE_ASR_ENGINE      transcribe-cpp (Parakeet Ultra; default outside Windows) | sherpa-onnx (Parakeet v3)
+              OPENRAMBLE_ASR_PRECISION   sherpa-onnx: int8 (default) | float32 | int4 (weight-only, see scripts/quantize-parakeet-int4.py)
+              OPENRAMBLE_ASR_PROVIDER    sherpa-onnx: cpu (default) | cuda | directml
+              OPENRAMBLE_ASR_THREADS     threads per recognition (default: the engine's product value, 4)
+              OPENRAMBLE_ASR_DECODING    sherpa-onnx: greedy_search (default) | modified_beam_search
               OPENRAMBLE_ASR_PREWARM=on  run the same inference warm-up as the shipping app
+              OPENRAMBLE_ASR_VOCABULARY  comma-separated taught words (transcribe-cpp), as the app passes them
               OPENRAMBLE_EVAL_PIPELINE   on | exact - score the text after the replacement dictionary
             """);
         return 64;
@@ -131,9 +133,23 @@ internal static class Program
 
     private static string? ModelsRoot() => Environment.GetEnvironmentVariable("OPENRAMBLE_MODELS_ROOT");
 
+    /// <summary>
+    /// Which engine, and with it which model, the bench measures. The default is what this build
+    /// of the product ships: transcribe.cpp with Parakeet Ultra, except in the Windows build, which
+    /// has no transcribe.cpp runtime yet.
+    /// </summary>
+    private static bool UsesTranscribeCpp() =>
+        (Environment.GetEnvironmentVariable("OPENRAMBLE_ASR_ENGINE") ?? DefaultEngine) == "transcribe-cpp";
+
+#if WINDOWS
+    private const string DefaultEngine = "sherpa-onnx";
+#else
+    private const string DefaultEngine = "transcribe-cpp";
+#endif
+
     private static (ModelStore Store, ModelInstallLayout Layout, ModelManifest Manifest) MakeStore()
     {
-        ModelManifest manifest = ModelManifest.Bundled();
+        ModelManifest manifest = UsesTranscribeCpp() ? ModelManifest.BundledUltra() : ModelManifest.Bundled();
         var layout = new ModelInstallLayout(manifest, ModelsRoot());
         var store = new ModelStore(manifest, layout, new HttpClientModelDownloader());
         return (store, layout, manifest);
@@ -343,21 +359,13 @@ internal static class Program
             engineDirectory = layout.EngineDirectory;
         }
 
-        EncoderPrecision precision = Choice("OPENRAMBLE_ASR_PRECISION", "int8", "float32", "int4") switch
-        {
-            "float32" => EncoderPrecision.Float32,
-            "int4" => EncoderPrecision.Int4WeightOnly,
-            _ => EncoderPrecision.Int8,
-        };
-        string provider = Choice("OPENRAMBLE_ASR_PROVIDER", "cpu", "cuda", "directml") ?? "cpu";
-        string decoding =
-            Choice("OPENRAMBLE_ASR_DECODING", "greedy_search", "modified_beam_search")
-            ?? SherpaOnnxAdapter.DefaultDecodingMethod;
+        _ = Choice("OPENRAMBLE_ASR_ENGINE", "transcribe-cpp", "sherpa-onnx");
+        bool transcribeCpp = UsesTranscribeCpp();
 
         // The thread count is not repeated as a number here: the default lives in the adapter,
         // and the bench must measure exactly what the product ships. The variable only
         // overrides it.
-        int threads = SherpaOnnxAdapter.DefaultNumThreads;
+        int threads = transcribeCpp ? TranscribeCppAdapter.DefaultThreadCount : SherpaOnnxAdapter.DefaultNumThreads;
         if (Environment.GetEnvironmentVariable("OPENRAMBLE_ASR_THREADS") is { } rawThreads)
         {
             if (!int.TryParse(rawThreads, CultureInfo.InvariantCulture, out threads) || threads <= 0)
@@ -369,8 +377,37 @@ internal static class Program
             Console.WriteLine($"Threads: {threads}");
         }
 
-        var adapter = new SherpaOnnxAdapter(precision, threads, provider, decoding);
+        IASREngineAdapting adapter;
+        if (transcribeCpp)
+        {
+            Console.WriteLine($"Engine: transcribe.cpp {TranscribeCppAdapter.RuntimeVersion}");
+            adapter = new TranscribeCppAdapter(threads);
+        }
+        else
+        {
+            EncoderPrecision precision = Choice("OPENRAMBLE_ASR_PRECISION", "int8", "float32", "int4") switch
+            {
+                "float32" => EncoderPrecision.Float32,
+                "int4" => EncoderPrecision.Int4WeightOnly,
+                _ => EncoderPrecision.Int8,
+            };
+            string provider = Choice("OPENRAMBLE_ASR_PROVIDER", "cpu", "cuda", "directml") ?? "cpu";
+            string decoding =
+                Choice("OPENRAMBLE_ASR_DECODING", "greedy_search", "modified_beam_search")
+                ?? SherpaOnnxAdapter.DefaultDecodingMethod;
+            Console.WriteLine("Engine: sherpa-onnx");
+            adapter = new SherpaOnnxAdapter(precision, threads, provider, decoding);
+        }
+
         var transcriber = new LocalTranscriber(adapter);
+        // What the app hands over from the person's dictionary, given here by hand.
+        if (Environment.GetEnvironmentVariable("OPENRAMBLE_ASR_VOCABULARY") is { } vocabulary)
+        {
+            string[] terms = vocabulary.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Console.WriteLine($"Taught words: {terms.Length}");
+            await transcriber.SetVocabulary(terms).ConfigureAwait(false);
+        }
+
         long started = Stopwatch.GetTimestamp();
         await transcriber.Prepare(engineDirectory).ConfigureAwait(false);
         Console.WriteLine(

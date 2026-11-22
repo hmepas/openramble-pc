@@ -624,6 +624,9 @@ public sealed class DictationControllerFailurePathTests
     /// so meant a person could talk for many seconds into nothing; they hear about it while they
     /// are still holding the key.
     /// </summary>
+    /// <summary>How early a <see cref="Task.Delay(TimeSpan)"/> deadline may fire on a test runner.</summary>
+    private static readonly TimeSpan TimerSlack = TimeSpan.FromMilliseconds(5);
+
     [Fact]
     public async Task TestAMicrophoneThatNeverStartsIsReportedWhileTheKeyIsHeld()
     {
@@ -644,7 +647,8 @@ public sealed class DictationControllerFailurePathTests
         await Settle();
 
         Assert.Equal(DictationState.Idle, controller.State);
-        Assert.True(ended >= TimeSpan.FromMilliseconds(50), "not before the deadline");
+        // A few milliseconds of slack: the timer behind the deadline may fire a tick early.
+        Assert.True(ended >= TimeSpan.FromMilliseconds(50) - TimerSlack, "not before the deadline");
         Assert.True(ended < TimeSpan.FromSeconds(1), "while the key is still held, not at its release");
         Assert.Equal([SlowStartMessage], notices.Select(notice => notice.Message));
         Assert.Equal(DictationNoticeKind.Failure, notices[0].Kind);
@@ -807,7 +811,7 @@ public sealed class DictationControllerFailurePathTests
         await WaitUntilIdle(controller, TimeSpan.FromSeconds(2));
 
         Assert.True(controller.State == DictationState.Idle, "the short bound after release still holds");
-        Assert.True(released.Elapsed >= TimeSpan.FromMilliseconds(60));
+        Assert.True(released.Elapsed >= TimeSpan.FromMilliseconds(60) - TimerSlack);
         Assert.Equal([SlowStartMessage], notices.Select(notice => notice.Message));
         gate.Open();
         await Settle();

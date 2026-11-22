@@ -81,6 +81,8 @@ public sealed class LongDictationReliabilityTests
         await WaitUntil(() => inserter.InsertedTexts.Count == 1);
 
         Assert.True(inserter.InsertedTexts.Count == 1, "the next dictation still completes");
+        // Every call answers with its own words, so the cancelled take's late result would show.
+        Assert.DoesNotContain("call one", inserter.InsertedTexts[0], StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task WaitUntil(Func<bool> predicate)
@@ -94,7 +96,10 @@ public sealed class LongDictationReliabilityTests
         Assert.True(predicate());
     }
 
-    /// <summary>The engine: the first call waits for the test, every later one answers at once.</summary>
+    /// <summary>
+    /// The engine: the first call waits for the test, every later one answers at once - each with
+    /// words of its own, so a result that leaks into another take can be told apart.
+    /// </summary>
     private sealed class GateEngine
     {
         private readonly Gate gate = new();
@@ -104,9 +109,10 @@ public sealed class LongDictationReliabilityTests
 
         public async Task<ASRResult> Run()
         {
-            if (Interlocked.Increment(ref calls) == 1) { await gate.Pass(); }
+            int call = Interlocked.Increment(ref calls);
+            if (call == 1) { await gate.Pass(); }
 
-            return new ASRResult("words", TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(0.01));
+            return new ASRResult(call == 1 ? "call one" : $"call {call}", TimeSpan.FromSeconds(4), TimeSpan.FromSeconds(0.01));
         }
 
         public void Open() => gate.Open();

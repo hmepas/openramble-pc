@@ -141,7 +141,10 @@ public static class ErrorReport
             ZipFile.CreateFromDirectory(folder, zip, CompressionLevel.Optimal, includeBaseDirectory: true);
 
             // Replace the chosen file only once the whole report exists: an existing file the
-            // person picked stays intact if generating or writing the replacement fails.
+            // person picked stays intact if generating or writing the replacement fails. The
+            // staged copy is created private and beside the destination, so the move is a rename
+            // that keeps that mode; setting it again afterwards would only add a step that throws
+            // on file systems without Unix modes (vfat, SMB) and report a saved file as a failure.
             string staged = Path.Combine(
                 Path.GetDirectoryName(Path.GetFullPath(destination)) ?? ".",
                 "." + Path.GetFileName(destination) + "." + Guid.NewGuid().ToString("N") + ".tmp");
@@ -158,11 +161,6 @@ public static class ErrorReport
             finally
             {
                 File.Delete(staged);
-            }
-
-            if (!OperatingSystem.IsWindows())
-            {
-                File.SetUnixFileMode(destination, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             }
         }
         finally

@@ -208,6 +208,10 @@ public static class OnboardingGate
                     ModelState.Downloading => "Wait for the download to finish.",
                     ModelState.Verifying => "The download is being verified.",
                     ModelState.RepairRequired => "The model is damaged. Redownload it explicitly.",
+                    // A runtime that cannot start is retried from the same files; a download would
+                    // not change it, and the notice already says so.
+                    ModelState.Failed { Error: ModelStoreError.EngineUnavailable } =>
+                        "The speech engine didn't start on this PC. Try again — downloading the model again won't fix this.",
                     ModelState.Failed => "The download failed. Try again.",
                     ModelState.Deleting => "The model is being deleted.",
                     _ => throw new ArgumentOutOfRangeException(nameof(conditions)),

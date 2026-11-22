@@ -221,6 +221,21 @@ public class ModelStatusTests
     }
 
     /// <summary>
+    /// A speech engine that did not start is retried from the files already on disk: the hint
+    /// must not promise a download the button does not start, and that would not help.
+    /// </summary>
+    [Fact]
+    public void RetryingAnEngineThatDidNotStartDoesNotPromiseADownload()
+    {
+        ModelStatus engine = Status(new ModelState.Failed(new ModelStoreError.EngineUnavailable("no AVX")));
+        Assert.Equal([ModelStatus.Action.Retry], engine.Actions);
+        Assert.Contains("Nothing is downloaded", engine.HintFor(ModelStatus.Action.Retry), StringComparison.Ordinal);
+
+        ModelStatus download = Status(new ModelState.Failed(new ModelStoreError.Download("offline")));
+        Assert.Contains("Restarts the model download", download.HintFor(ModelStatus.Action.Retry), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The downloading hint serves the moment: onboarding steers the person to the permission
     /// below; settings only reassures.
     /// </summary>

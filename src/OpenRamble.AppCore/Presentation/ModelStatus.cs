@@ -85,7 +85,16 @@ public sealed record ModelStatus
 
     public string TitleFor(Action action) => TitleOf(action, DownloadMegabytes);
 
-    public string HintFor(Action action) => HintOf(action, DownloadMegabytes);
+    public string HintFor(Action action) =>
+        action == Action.Retry && RetriesLoadOnly
+            ? "Tries starting the speech engine again with the installed model. Nothing is downloaded."
+            : HintOf(action, DownloadMegabytes);
+
+    /// <summary>
+    /// The failure was the engine's runtime, not the files: "Try Again" reloads the model already
+    /// on disk instead of downloading it.
+    /// </summary>
+    private bool RetriesLoadOnly { get; init; }
 
     /// <summary>
     /// The button names the actual volume: full for a clean installation and only the remainder
@@ -253,6 +262,7 @@ public sealed record ModelStatus
                             : "Model installation failed",
                         Detail = reason,
                         Actions = [requiresRepair ? Action.Repair : Action.Retry],
+                        RetriesLoadOnly = engineUnavailable,
                         ToneValue = Tone.Failure,
                         Announcement = requiresRepair
                             ? $"Model needs repair. {reason}"

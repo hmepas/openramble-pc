@@ -136,6 +136,9 @@ public sealed class OnboardingStepTests
             "The download failed. Try again.",
             Reason(OnboardingStep.Setup, model: new ModelState.Failed(new ModelStoreError.Download("no network"))));
         Assert.Equal(
+            "The speech engine didn't start on this PC. Try again — downloading the model again won't fix this.",
+            Reason(OnboardingStep.Setup, model: new ModelState.Failed(new ModelStoreError.EngineUnavailable("no AVX"))));
+        Assert.Equal(
             "The model is being deleted.",
             Reason(OnboardingStep.Setup, model: new ModelState.Deleting()));
     }

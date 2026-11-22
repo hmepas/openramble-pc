@@ -100,17 +100,19 @@ public sealed partial class AppState
             isRecoveryOperationActive = true;
         }
 
-        TargetApplication? target = inserter.FrontmostApplication();
-        // The words were shaped for the app they were dictated into; the app in front now may be
-        // a terminal, which never gets a paragraph break. The menu keeps them as they were, for a
-        // retry into a prose app.
-        string fitted = ParagraphBreaks.Fit(text, new PromptModePolicy().Mode(target));
         DictationStateValue = DictationState.Inserting;
 
         _ = Task.Run(async () =>
         {
             try
             {
+                // Asked here, off the caller's thread: on Linux the answer is a round trip to the
+                // compositor or two runs of xprop, and the caller is the menu's UI thread.
+                TargetApplication? target = inserter.FrontmostApplication();
+                // The words were shaped for the app they were dictated into; the app in front now
+                // may be a terminal, which never gets a paragraph break. The menu keeps them as
+                // they were, for a retry into a prose app.
+                string fitted = ParagraphBreaks.Fit(text, new PromptModePolicy().Mode(target));
                 await overlay.Dismiss().ConfigureAwait(false);
                 await inserter.Insert(fitted, target).ConfigureAwait(false);
 

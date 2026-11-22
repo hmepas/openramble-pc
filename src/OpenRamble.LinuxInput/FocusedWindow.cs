@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -104,26 +105,56 @@ internal static class FocusedWindow
     {
         string runtime = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") ?? "";
         // Hyprland moved its sockets from /tmp into the runtime directory; either may be live.
-        foreach (string directory in new[] { Path.Combine(runtime, "hypr", signature), Path.Combine("/tmp/hypr", signature) })
+        return AskHyprland(
+            [
+                Path.Combine(runtime, "hypr", signature, ".socket.sock"),
+                Path.Combine("/tmp/hypr", signature, ".socket.sock"),
+            ],
+            Budget);
+    }
+
+    /// <summary>
+    /// Ask the first socket that answers, all of it - connect, send, read - within one
+    /// <paramref name="budget"/>.
+    /// </summary>
+    /// <remarks>
+    /// One budget for the whole question, not one per call: a compositor that accepts the
+    /// connection and then says nothing used to cost a receive timeout per socket, and a connect
+    /// to a socket whose listener had stopped accepting had no bound at all.
+    /// </remarks>
+    internal static TargetApplication? AskHyprland(IReadOnlyList<string> sockets, TimeSpan budget)
+    {
+        long began = Stopwatch.GetTimestamp();
+        TimeSpan Remaining() => budget - Stopwatch.GetElapsedTime(began);
+
+        foreach (string path in sockets)
         {
-            string path = Path.Combine(directory, ".socket.sock");
             if (!File.Exists(path)) { continue; }
+            if (Remaining() <= TimeSpan.Zero) { break; }
+
             try
             {
-                using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified)
+                using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+                using (var expiry = new CancellationTokenSource(Remaining()))
                 {
-                    SendTimeout = (int)Budget.TotalMilliseconds,
-                    ReceiveTimeout = (int)Budget.TotalMilliseconds,
-                };
-                socket.Connect(new UnixDomainSocketEndPoint(path));
+                    socket.ConnectAsync(new UnixDomainSocketEndPoint(path), expiry.Token).AsTask().GetAwaiter().GetResult();
+                }
+
+                socket.SendTimeout = Milliseconds(Remaining());
                 socket.Send("j/activewindow"u8);
                 var answer = new MemoryStream();
                 byte[] buffer = new byte[4096];
-                int read;
-                while ((read = socket.Receive(buffer)) > 0) { answer.Write(buffer, 0, read); }
+                while (true)
+                {
+                    socket.ReceiveTimeout = Milliseconds(Remaining());
+                    int read = socket.Receive(buffer);
+                    if (read <= 0) { break; }
+                    answer.Write(buffer, 0, read);
+                }
+
                 return FromHyprland(Encoding.UTF8.GetString(answer.ToArray()));
             }
-            catch (SocketException)
+            catch (Exception error) when (error is SocketException or OperationCanceledException)
             {
                 // A stale socket, or a compositor that did not answer in time: unknown.
             }
@@ -131,6 +162,9 @@ internal static class FocusedWindow
 
         return null;
     }
+
+    /// <summary>A socket timeout for what is left; zero would mean "wait forever".</summary>
+    private static int Milliseconds(TimeSpan remaining) => Math.Max(1, (int)remaining.TotalMilliseconds);
 
     private static TargetApplication? X11(ICommandRunner runner)
     {

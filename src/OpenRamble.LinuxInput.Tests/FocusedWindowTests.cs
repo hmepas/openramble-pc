@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Net.Sockets;
 using DictationCore;
 
 namespace OpenRamble.LinuxInput.Tests;
@@ -41,6 +43,89 @@ public sealed class FocusedWindowTests
         Assert.Equal(new TargetApplication("XTerm", 4242, null), window);
         Assert.Equal(ApplicationCategory.Terminal, PromptModePolicy.Category(window));
         Assert.Null(FocusedWindow.FromXprop("WM_CLASS:  not found.\n"));
+    }
+
+    /// <summary>
+    /// A compositor that takes the connection and never answers, on both sockets: one budget for
+    /// the whole question, not one per socket or per read.
+    /// </summary>
+    [Fact]
+    public void ACompositorThatNeverAnswersIsUnknownWithinOneBudget()
+    {
+        string directory = Directory.CreateTempSubdirectory("hypr-").FullName;
+        try
+        {
+            string first = Path.Combine(directory, "a.sock");
+            string second = Path.Combine(directory, "b.sock");
+            using Socket silentA = Listen(first, backlog: 8);
+            using Socket silentB = Listen(second, backlog: 8);
+            var budget = TimeSpan.FromMilliseconds(200);
+
+            long began = Stopwatch.GetTimestamp();
+            TargetApplication? window = FocusedWindow.AskHyprland([first, second], budget);
+            TimeSpan took = Stopwatch.GetElapsedTime(began);
+
+            Assert.Null(window);
+            // It did ask: an answer of "unknown" without waiting would prove nothing.
+            Assert.True(took >= budget - TimeSpan.FromMilliseconds(20), $"the question took only {took}");
+            Assert.True(took < budget + TimeSpan.FromMilliseconds(150), $"the question took {took}");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A listener that stopped accepting: once its queue is full, a connect blocks. That connect
+    /// used to have no bound at all.
+    /// </summary>
+    [Fact]
+    public void AConnectThatCannotCompleteIsUnknownWithinTheBudget()
+    {
+        string directory = Directory.CreateTempSubdirectory("hypr-").FullName;
+        var fillers = new List<Socket>();
+        try
+        {
+            string path = Path.Combine(directory, "full.sock");
+            using Socket stuck = Listen(path, backlog: 0);
+            // Fill the accept queue without ever accepting, until a further connect would block.
+            for (int i = 0; i < 64; i += 1)
+            {
+                var filler = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified) { Blocking = false };
+                fillers.Add(filler);
+                try
+                {
+                    filler.Connect(new UnixDomainSocketEndPoint(path));
+                }
+                catch (SocketException)
+                {
+                    break;
+                }
+            }
+
+            var budget = TimeSpan.FromMilliseconds(200);
+            long began = Stopwatch.GetTimestamp();
+            TargetApplication? window = FocusedWindow.AskHyprland([path], budget);
+            TimeSpan took = Stopwatch.GetElapsedTime(began);
+
+            // A blocking connect here waited for an accept that never comes.
+            Assert.Null(window);
+            Assert.True(took < budget + TimeSpan.FromMilliseconds(150), $"the question took {took}");
+        }
+        finally
+        {
+            foreach (Socket filler in fillers) { filler.Dispose(); }
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static Socket Listen(string path, int backlog)
+    {
+        var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        listener.Bind(new UnixDomainSocketEndPoint(path));
+        listener.Listen(backlog);
+        return listener;
     }
 
     [Fact]

@@ -208,29 +208,39 @@ public sealed class PipeWireCapture : IMicrophoneDevice
         Session session;
         Session? superseded = null;
         string? target;
-        lock (gate)
+        try
         {
-            if (current is { } active)
+            lock (gate)
             {
-                if (!supersedeOlder || active.Number >= number)
+                if (current is { } active)
                 {
-                    throw new AudioCaptureError.EngineUnavailable("already recording");
+                    if (!supersedeOlder || active.Number >= number)
+                    {
+                        throw new AudioCaptureError.EngineUnavailable("already recording");
+                    }
+
+                    superseded = active;
+                    current = null;
                 }
 
-                superseded = active;
-                current = null;
+                session = BuildSession(number, sink);
+                current = session;
+                latest = session;
+                target = preferredDeviceUid;
             }
-
-            session = BuildSession(number, sink);
-            current = session;
-            latest = session;
-            target = preferredDeviceUid;
         }
-
-        if (superseded is not null)
+        finally
         {
-            DiagnosticLog.Emit("capture.superseded", ("session", superseded.Number), ("by", number));
-            _ = Abort(superseded);
+            // Whether or not this start gets as far as a take of its own: the older session is
+            // no longer the current one from the line that detached it, so no stop and no abort
+            // can reach it any more. A build that failed after that line - a takes folder that
+            // cannot be created, a WAV that cannot be opened - would otherwise leave its recorder
+            // running and its file growing for the life of the process.
+            if (superseded is not null)
+            {
+                DiagnosticLog.Emit("capture.superseded", ("session", superseded.Number), ("by", number));
+                _ = Abort(superseded);
+            }
         }
 
         bool stillCurrent;

@@ -187,59 +187,70 @@ public sealed class WasapiCapture : IMicrophoneDevice
         Session session;
         Session? superseded = null;
         bool supersededDeviceStarted = false;
-        lock (gate)
+        try
         {
-            if (current is { } active)
+            lock (gate)
             {
-                if (!supersedeOlder || active.Number >= number)
+                if (current is { } active)
                 {
-                    throw new AudioCaptureError.EngineUnavailable("already recording");
+                    if (!supersedeOlder || active.Number >= number)
+                    {
+                        throw new AudioCaptureError.EngineUnavailable("already recording");
+                    }
+
+                    superseded = active;
+                    supersededDeviceStarted = active.DeviceStarted;
+                    current = null;
                 }
 
-                superseded = active;
-                supersededDeviceStarted = active.DeviceStarted;
-                current = null;
-            }
+                try
+                {
+                    session = BuildSession(number, sink);
+                }
+                catch (Exception error)
+                {
+                    // Everything between "which microphone" and "start it" - the activation of
+                    // the audio client, its mix format, the take file, the resampler. The
+                    // activation is where Windows says no (E_ACCESSDENIED for a privacy switch, a
+                    // device error for a driver), and without this line that answer never reached
+                    // the log.
+                    DiagnosticLog.EmitException(
+                        "capture.start",
+                        error,
+                        ("session", number),
+                        ("ok", false),
+                        ("stage", "build"),
+                        ("hresult", $"0x{error.HResult:X8}"));
+                    if (error is AudioCaptureError) { throw; }
+                    throw new AudioCaptureError.EngineUnavailable(error.Message);
+                }
 
-            try
-            {
-                session = BuildSession(number, sink);
+                current = session;
+                latest = session;
             }
-            catch (Exception error)
-            {
-                // Everything between "which microphone" and "start it" - the activation of the
-                // audio client, its mix format, the take file, the resampler. The activation is
-                // where Windows says no (E_ACCESSDENIED for a privacy switch, a device error for
-                // a driver), and without this line that answer never reached the log.
-                DiagnosticLog.EmitException(
-                    "capture.start",
-                    error,
-                    ("session", number),
-                    ("ok", false),
-                    ("stage", "build"),
-                    ("hresult", $"0x{error.HResult:X8}"));
-                if (error is AudioCaptureError) { throw; }
-                throw new AudioCaptureError.EngineUnavailable(error.Message);
-            }
-
-            current = session;
-            latest = session;
         }
-
-        if (superseded is not null)
+        finally
         {
-            DiagnosticLog.Emit("capture.superseded", ("session", superseded.Number), ("by", number));
-            if (supersededDeviceStarted)
+            // Whether or not this start gets as far as a take of its own: the older session is
+            // no longer the current one from the line that detached it, so no stop and no abort
+            // can reach it any more. A build that failed after that line - an endpoint Windows
+            // refused, a WAV that cannot be opened - would otherwise leave its microphone open
+            // and its file growing for the life of the process.
+            if (superseded is not null)
             {
-                _ = Abort(superseded);
-            }
-            else
-            {
-                // Its device is still inside its own start, which must not be stopped or disposed
-                // under it; that start finds itself superseded when it returns and releases the
-                // device itself. Only the take is dropped here.
-                superseded.Close();
-                superseded.Take.Abort();
+                DiagnosticLog.Emit("capture.superseded", ("session", superseded.Number), ("by", number));
+                if (supersededDeviceStarted)
+                {
+                    _ = Abort(superseded);
+                }
+                else
+                {
+                    // Its device is still inside its own start, which must not be stopped or
+                    // disposed under it; that start finds itself superseded when it returns and
+                    // releases the device itself. Only the take is dropped here.
+                    superseded.Close();
+                    superseded.Take.Abort();
+                }
             }
         }
 

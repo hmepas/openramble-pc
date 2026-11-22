@@ -374,6 +374,34 @@ public sealed class PipeWireCaptureTests : IDisposable
         Assert.Equal(path, url);
     }
 
+    /// <summary>
+    /// A newer start that cannot open its own take still takes the older one down: the older one
+    /// was already given up, and nobody else will ever stop it.
+    /// </summary>
+    [Fact]
+    public async Task ASupersedingStartThatCannotOpenItsTakeStillReleasesTheOlderOne()
+    {
+        string folder = Path.Combine(takes, "takes");
+        var stale = new FakeRecorderProcess();
+        using var capture = new PipeWireCapture(folder, _ => stale);
+
+        await capture.StartRecording(1, null);
+        stale.Feed(0.5f);
+        Assert.True(await capture.WaitForFirstFrame().WaitAsync(Patience));
+        // The folder is taken away from under the recording and a file is left in its place, so
+        // the next take has nowhere to be written.
+        Directory.Move(folder, Path.Combine(takes, "moved"));
+        await File.WriteAllTextAsync(folder, "occupied");
+
+        await Assert.ThrowsAnyAsync<IOException>(() => capture.StartRecording(2, null));
+
+        Assert.True(stale.StopRequests > 0, "the superseded recorder must not keep the microphone");
+        Assert.Null(await capture.TakeBufferedSamples(1));
+        var patience = Stopwatch.StartNew();
+        while (!stale.Disposed && patience.Elapsed < Patience) { await Task.Delay(10); }
+        Assert.True(stale.Disposed);
+    }
+
     [Fact]
     public async Task AStaleSessionCannotStopReadOrFailTheNewerTake()
     {

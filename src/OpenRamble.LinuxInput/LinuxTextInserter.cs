@@ -283,7 +283,7 @@ public sealed class LinuxTextInserter : ITextInserting
                 throw TextInsertionPolicy.ToError(refused);
             }
 
-            keyboard.Paste();
+            keyboard.Paste(terminal: PromptModePolicy.Category(target) == ApplicationCategory.Terminal);
         }
         catch
         {

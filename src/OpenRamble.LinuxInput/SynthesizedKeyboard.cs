@@ -46,6 +46,9 @@ internal sealed class SynthesizedKeyboard
     /// <summary>Evdev keycode for <c>KEY_LEFTCTRL</c> - the numbering <c>ydotool key</c> takes.</summary>
     private const int KeyLeftCtrl = 29;
 
+    /// <summary>Evdev keycode for <c>KEY_LEFTSHIFT</c>.</summary>
+    private const int KeyLeftShift = 42;
+
     /// <summary>Evdev keycode for <c>KEY_V</c>.</summary>
     private const int KeyV = 47;
 
@@ -97,17 +100,31 @@ internal sealed class SynthesizedKeyboard
         _ => throw new ArgumentOutOfRangeException(nameof(tool), tool, "not a typing tool"),
     };
 
-    /// <summary>Ctrl+V, which is what the clipboard path is for.</summary>
+    /// <summary>Ctrl+V, which is what the clipboard path is for - Ctrl+Shift+V in a terminal.</summary>
     /// <remarks>
+    /// <para>
     /// <c>wtype</c> takes modifier names and key names; <c>ydotool key</c> takes evdev codes with
     /// the state after a colon, and the four of them are press-Ctrl, press-V, release-V,
     /// release-Ctrl in that order. Getting the order wrong leaves a modifier stuck down in the
     /// person's session.
+    /// </para>
+    /// <para>
+    /// A Linux terminal does not paste on Ctrl+V: it hands the shell a literal control character,
+    /// and the text that went to the clipboard never arrives. Its paste is Ctrl+Shift+V, so for a
+    /// terminal Shift goes down inside Ctrl and comes up before it.
+    /// </para>
     /// </remarks>
-    public static IReadOnlyList<string> PasteArguments(string tool) => tool switch
+    public static IReadOnlyList<string> PasteArguments(string tool, bool terminal) => (tool, terminal) switch
     {
-        Wtype => ["-M", "ctrl", "-k", "v", "-m", "ctrl"],
-        Ydotool => ["key", $"{KeyLeftCtrl}:1", $"{KeyV}:1", $"{KeyV}:0", $"{KeyLeftCtrl}:0"],
+        (Wtype, false) => ["-M", "ctrl", "-k", "v", "-m", "ctrl"],
+        (Wtype, true) => ["-M", "ctrl", "-M", "shift", "-k", "v", "-m", "shift", "-m", "ctrl"],
+        (Ydotool, false) => ["key", $"{KeyLeftCtrl}:1", $"{KeyV}:1", $"{KeyV}:0", $"{KeyLeftCtrl}:0"],
+        (Ydotool, true) =>
+        [
+            "key",
+            $"{KeyLeftCtrl}:1", $"{KeyLeftShift}:1", $"{KeyV}:1",
+            $"{KeyV}:0", $"{KeyLeftShift}:0", $"{KeyLeftCtrl}:0",
+        ],
         _ => throw new ArgumentOutOfRangeException(nameof(tool), tool, "not a typing tool"),
     };
 
@@ -126,9 +143,10 @@ internal sealed class SynthesizedKeyboard
     /// </exception>
     public void Type(string text) => Perform("type", TypeArguments, text, TypingBudget);
 
-    /// <summary>Send Ctrl+V to whatever has focus.</summary>
+    /// <summary>Send Ctrl+V to whatever has focus - Ctrl+Shift+V when it is a terminal.</summary>
     /// <exception cref="TextInsertionError.TargetUnavailable">Neither tool could.</exception>
-    public void Paste() => Perform("paste", PasteArguments, input: null, KeystrokeBudget);
+    public void Paste(bool terminal) =>
+        Perform("paste", tool => PasteArguments(tool, terminal), input: null, KeystrokeBudget);
 
     /// <summary>Press Return.</summary>
     /// <exception cref="TextInsertionError.TargetUnavailable">Neither tool could.</exception>

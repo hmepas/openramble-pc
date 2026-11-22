@@ -52,12 +52,19 @@ public sealed class LinuxTextInserterTests
             SynthesizedKeyboard.TypeArguments(SynthesizedKeyboard.Ydotool));
         Assert.Equal(
             ["-M", "ctrl", "-k", "v", "-m", "ctrl"],
-            SynthesizedKeyboard.PasteArguments(SynthesizedKeyboard.Wtype));
+            SynthesizedKeyboard.PasteArguments(SynthesizedKeyboard.Wtype, terminal: false));
         // Evdev codes with the state after the colon: Ctrl down, V down, V up, Ctrl up. Any other
         // order leaves a modifier stuck down in the person's session.
         Assert.Equal(
             ["key", "29:1", "47:1", "47:0", "29:0"],
-            SynthesizedKeyboard.PasteArguments(SynthesizedKeyboard.Ydotool));
+            SynthesizedKeyboard.PasteArguments(SynthesizedKeyboard.Ydotool, terminal: false));
+        // A terminal's paste is Ctrl+Shift+V: Shift goes down inside Ctrl and comes up before it.
+        Assert.Equal(
+            ["-M", "ctrl", "-M", "shift", "-k", "v", "-m", "shift", "-m", "ctrl"],
+            SynthesizedKeyboard.PasteArguments(SynthesizedKeyboard.Wtype, terminal: true));
+        Assert.Equal(
+            ["key", "29:1", "42:1", "47:1", "47:0", "42:0", "29:0"],
+            SynthesizedKeyboard.PasteArguments(SynthesizedKeyboard.Ydotool, terminal: true));
         Assert.Equal(["-k", "Return"], SynthesizedKeyboard.ReturnArguments(SynthesizedKeyboard.Wtype));
         Assert.Equal(["key", "28:1", "28:0"], SynthesizedKeyboard.ReturnArguments(SynthesizedKeyboard.Ydotool));
         Assert.Equal(["--no-newline", "--type", "text/plain"], WaylandClipboard.ReadArguments());
@@ -105,6 +112,26 @@ public sealed class LinuxTextInserterTests
         // afterwards.
         Assert.True(LinuxClipboardRestrictions.ClearsAfterPaste);
         Assert.NotEqual(Long, desktop.ClipboardText);
+    }
+
+    /// <summary>
+    /// Ctrl+V in a terminal is a literal control character, not a paste: long text sent to one
+    /// that way would never arrive. Both tools send the terminal's own chord, Ctrl+Shift+V.
+    /// </summary>
+    [Theory]
+    [InlineData(SynthesizedKeyboard.Wtype)]
+    [InlineData(SynthesizedKeyboard.Ydotool)]
+    public async Task LongTextIntoATerminalIsPastedWithCtrlShiftV(string tool)
+    {
+        var desktop = new FakeWaylandDesktop();
+        if (tool == SynthesizedKeyboard.Ydotool) { desktop.Broken.Add(SynthesizedKeyboard.Wtype); }
+        var inserter = new LinuxTextInserter(desktop, QuickRestore);
+
+        await inserter.Insert(Long, new TargetApplication("kitty", 7, null));
+
+        Assert.Equal(1, desktop.Pastes);
+        CommandRequest paste = desktop.Runs.Last(run => run.Executable == tool);
+        Assert.Equal(SynthesizedKeyboard.PasteArguments(tool, terminal: true), paste.Arguments);
     }
 
     [Fact]

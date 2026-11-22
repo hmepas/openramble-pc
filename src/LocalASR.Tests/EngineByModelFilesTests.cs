@@ -41,6 +41,18 @@ public sealed class EngineByModelFilesTests : IDisposable
         Assert.Equal(1, gguf.Loads);
     }
 
+    /// <summary>The extension is matched as the adapter matches it, whatever its case.</summary>
+    [Fact]
+    public async Task AnUppercaseGgufGoesToTranscribeCpp()
+    {
+        var gguf = new RecordingEngine("gguf");
+        var engine = new EngineByModelFiles(gguf, new RecordingEngine("onnx"));
+
+        await engine.LoadModels(Folder("ultra-upper", "PARAKEET-ULTRA.GGUF"));
+
+        Assert.Equal("gguf", (await engine.Transcribe([0f])).Text);
+    }
+
     [Fact]
     public async Task SwitchingModelsGivesBackTheOtherEnginesWeightsFirst()
     {

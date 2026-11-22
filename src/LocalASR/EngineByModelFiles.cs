@@ -68,7 +68,9 @@ public sealed class EngineByModelFiles : IASREngineAdapting
         await onnx.SetVocabulary(terms).ConfigureAwait(false);
     }
 
+    /// <summary>Matched exactly as <see cref="TranscribeCppAdapter.ModelFile"/> matches it, whatever the case.</summary>
     private static bool HoldsGguf(string directory) =>
         Directory.Exists(directory)
-        && Directory.EnumerateFiles(directory, "*.gguf").Any();
+        && Directory.EnumerateFiles(directory)
+            .Any(path => string.Equals(Path.GetExtension(path), ".gguf", StringComparison.OrdinalIgnoreCase));
 }

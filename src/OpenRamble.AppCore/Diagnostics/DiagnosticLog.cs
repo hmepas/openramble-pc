@@ -138,14 +138,16 @@ public sealed class DiagnosticLog : IDisposable
     /// </remarks>
     public static void EmitException(string name, Exception error, params (string Key, object? Value)[] fields)
     {
-        if (Current is null) { return; }
+        // Read once: a log uninstalled on another thread between a check and a write would
+        // turn the write into a NullReferenceException in whatever path was reporting a failure.
+        if (Current is not { } log) { return; }
 
         var all = new List<(string Key, object? Value)>(fields.Length + 3);
         all.AddRange(fields);
         all.Add(("error", error.GetType().Name));
         all.Add(("message", error.Message));
         all.Add(("stack", error.StackTrace ?? "none"));
-        Current.Write(name, all);
+        log.Write(name, all);
     }
 
     /// <summary>

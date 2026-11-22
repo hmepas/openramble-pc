@@ -238,6 +238,10 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
             // for free - `AsrModels.load` is genuinely async there.
             built = await Task.Run(() => new OfflineRecognizer(Configure(directory))).ConfigureAwait(false);
         }
+        catch (Exception error) when (TranscribeCppAdapter.IsRuntimeMissing(error))
+        {
+            throw new ASREngineError.RuntimeUnavailable(error.Message);
+        }
         catch (Exception error) when (error is not ASREngineError)
         {
             throw new ASREngineError.ModelsUnavailable(error.Message);

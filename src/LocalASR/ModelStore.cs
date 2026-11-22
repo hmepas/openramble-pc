@@ -107,6 +107,24 @@ public abstract class ModelStoreError : Exception
         public string Reason { get; }
     }
 
+    /// <summary>
+    /// The files are intact, but the engine that reads them cannot start on this machine.
+    /// </summary>
+    /// <remarks>
+    /// Port addition, and never thrown by the store: it is how a verified model that cannot be
+    /// used is shown, without offering the download that would not help.
+    /// </remarks>
+    public sealed class EngineUnavailable : ModelStoreError
+    {
+        public EngineUnavailable(string reason)
+            : base(reason)
+        {
+            Reason = reason;
+        }
+
+        public string Reason { get; }
+    }
+
     /// <summary>The folder the user asked to take the model from is not suitable.</summary>
     public sealed class ImportSource : ModelStoreError
     {

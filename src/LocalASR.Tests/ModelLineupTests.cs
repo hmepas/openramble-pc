@@ -68,6 +68,30 @@ public class ModelLineupTests
         Assert.True(lineup.RemovesPrevious);
     }
 
+    /// <summary>Port addition: serving follows "loaded", not "verified".</summary>
+    [Fact]
+    public void ANewModelTheEngineRejectsLeavesTheOldOneServingAndIsOfferedAgain()
+    {
+        var lineup = new ModelLineup(Ready, Ready, ModelLineup.LoadFailure.Files);
+        Assert.Equal(ModelLineup.Slot.Previous, lineup.Recognizer);
+        Assert.True(lineup.OffersUpgrade);
+        Assert.False(lineup.RemovesPrevious);
+    }
+
+    /// <summary>Port addition: a runtime that cannot start is not fixed by a download.</summary>
+    [Fact]
+    public void ANewModelWhoseRuntimeCannotStartLeavesTheOldOneServingAndIsNotOffered()
+    {
+        var lineup = new ModelLineup(Ready, Ready, ModelLineup.LoadFailure.Runtime);
+        Assert.Equal(ModelLineup.Slot.Previous, lineup.Recognizer);
+        Assert.False(lineup.OffersUpgrade);
+        Assert.False(lineup.RemovesPrevious);
+
+        var alone = new ModelLineup(Ready, new ModelState.NotInstalled(), ModelLineup.LoadFailure.Runtime);
+        Assert.Equal(ModelLineup.Slot.None, alone.Recognizer);
+        Assert.False(alone.OffersUpgrade);
+    }
+
     [Fact]
     public void AnOldModelThatIsDamagedIsNotUsedButTheNewOneIsStillOffered()
     {

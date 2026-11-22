@@ -112,6 +112,23 @@ public sealed class TranscribeCppAdapterTests : IDisposable
     }
 
     /// <summary>
+    /// A native library that is missing, built for another processor or from another version is
+    /// the runtime's failure, not the model's: no download would fix it.
+    /// </summary>
+    [Fact]
+    public void ALibraryThatCannotBeBoundIsTheRuntimesFailureNotTheModels()
+    {
+        Assert.True(TranscribeCppAdapter.IsRuntimeMissing(new DllNotFoundException("libtranscribe.so")));
+        Assert.True(TranscribeCppAdapter.IsRuntimeMissing(new EntryPointNotFoundException("transcribe_run")));
+        Assert.True(TranscribeCppAdapter.IsRuntimeMissing(new BadImageFormatException("wrong architecture")));
+        Assert.True(TranscribeCppAdapter.IsRuntimeMissing(
+            new TypeInitializationException("Native", new DllNotFoundException("libsherpa-onnx-c-api.so"))));
+
+        Assert.False(TranscribeCppAdapter.IsRuntimeMissing(new IOException("bad tensor")));
+        Assert.False(TranscribeCppAdapter.IsRuntimeMissing(new TypeInitializationException("Native", new IOException("x"))));
+    }
+
+    /// <summary>
     /// The binding's structs are checked against the library's own sizes before any is handed
     /// over; garbage in a file is a load error, not a crash.
     /// </summary>

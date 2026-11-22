@@ -137,6 +137,10 @@ public sealed partial class TranscribeCppAdapter : IASREngineAdapting
             // it still is not UI-thread work.
             built = await Task.Run(() => Runtime.Load(weights, threadCount)).ConfigureAwait(false);
         }
+        catch (Exception error) when (IsRuntimeMissing(error))
+        {
+            throw new ASREngineError.RuntimeUnavailable(error.Message);
+        }
         catch (Exception error) when (error is not ASREngineError)
         {
             throw new ASREngineError.ModelsUnavailable(error.Message);
@@ -157,6 +161,14 @@ public sealed partial class TranscribeCppAdapter : IASREngineAdapting
         // the session is not.
         if (superseded) { built.Dispose(); }
     }
+
+    /// <summary>
+    /// The native library could not be found, loaded or bound: missing from the installation,
+    /// built for another processor, or from another version. The model files play no part in it.
+    /// </summary>
+    internal static bool IsRuntimeMissing(Exception error) =>
+        error is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException
+        || (error is TypeInitializationException { InnerException: { } inner } && IsRuntimeMissing(inner));
 
     /// <summary>
     /// The single GGUF in a prepared revision directory.
@@ -323,7 +335,7 @@ public sealed partial class TranscribeCppAdapter : IASREngineAdapting
         int status = Initialization.Value;
         if (status != Native.Ok)
         {
-            throw new ASREngineError.ModelsUnavailable($"the recognition runtime did not start: {Describe(status)}");
+            throw new ASREngineError.RuntimeUnavailable($"the recognition runtime did not start: {Describe(status)}");
         }
     }
 

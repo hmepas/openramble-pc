@@ -239,7 +239,7 @@ public sealed class DictationLogFile : IDisposable
     {
         switch (error)
         {
-            case ASREngineError.ModelsNotLoaded or ASREngineError.ModelsUnavailable:
+            case ASREngineError.ModelsNotLoaded or ASREngineError.ModelsUnavailable or ASREngineError.RuntimeUnavailable:
                 Record(DiagnosticEvent.RecognitionModelUnavailable);
                 break;
             case ASREngineError.UnsupportedAudioFormat:

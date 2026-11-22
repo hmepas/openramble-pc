@@ -28,9 +28,28 @@ public sealed partial class AppState
 
     /// <summary>
     /// An engine failure during warm-up. The files on disk are intact, so a disk inspection does
-    /// not see it - the state is kept here until an explicit repair.
+    /// not see it - the state is kept here until an explicit repair, or until the folder it
+    /// happened on loads after all.
     /// </summary>
-    private string? engineLoadFailure;
+    private EngineLoadFailure? engineLoadFailure;
+
+    /// <summary>
+    /// Which folder the engine could not load, in words for the person, and whether its files or
+    /// the engine's runtime are to blame. Only the first is something a download can fix.
+    /// </summary>
+    private sealed record EngineLoadFailure(string Directory, string Detail, ModelLineup.LoadFailure Kind);
+
+    /// <summary>
+    /// One lineup decision at a time, and no take beginning in the middle of one.
+    /// </summary>
+    /// <remarks>
+    /// The disk is looked at from the interface, from the install monitor and from background
+    /// tasks, and each look decides which folder serves and what the upgrade card says. Two of
+    /// them interleaving could leave the card from one decision beside the folder from the other.
+    /// A key-down takes the same lock around its start, so a take cannot begin between the
+    /// "nothing is being recognized" check and the switch it allows.
+    /// </remarks>
+    private readonly Lock modelLineupGate = new();
 
     /// <summary>Whether an engine recycle is already underway — one wedge, one cure.</summary>
     private bool isRecyclingEngine;
@@ -132,27 +151,36 @@ public sealed partial class AppState
     /// </remarks>
     private void ApplyModelState(ModelState main)
     {
-        ModelState refreshed = ApplyLineup(main);
-        string? failure;
-        lock (gate) { failure = engineLoadFailure; }
-        if (failure is not null && refreshed.IsReady)
+        lock (modelLineupGate)
         {
-            refreshed = new ModelState.RepairRequired(failure);
-        }
+            ModelState refreshed = ApplyLineup(main);
+            EngineLoadFailure? failure;
+            lock (gate) { failure = engineLoadFailure; }
+            // Only a failure of the folder that serves takes readiness back. One the lineup has
+            // already stepped away from changes nothing about the model in use.
+            if (failure is not null && refreshed.IsReady && failure.Directory == ServingEngineDirectory)
+            {
+                refreshed = failure.Kind == ModelLineup.LoadFailure.Runtime
+                    ? new ModelState.Failed(new ModelStoreError.EngineUnavailable(failure.Detail))
+                    : new ModelState.RepairRequired(failure.Detail);
+            }
 
-        ModelStateValue = refreshed;
-        PublishRemainingDownload(main);
+            // The volume goes out before the state: a screen that wakes on "repair required"
+            // reads the button's number in the same instant.
+            PublishRemainingDownload(main);
+            ModelStateValue = refreshed;
 
-        if (transcriber is null)
-        {
-            IsEngineReady = ModelStateValue.IsReady;
-        }
-        else if (!ModelStateValue.IsReady)
-        {
-            IsEngineReady = false;
-        }
+            if (transcriber is null)
+            {
+                IsEngineReady = ModelStateValue.IsReady;
+            }
+            else if (!ModelStateValue.IsReady)
+            {
+                IsEngineReady = false;
+            }
 
-        if (ModelStateValue.IsReady) { PrepareEngineIfIdleAndCold(); }
+            if (ModelStateValue.IsReady) { PrepareEngineIfIdleAndCold(); }
+        }
     }
 
     /// <summary>
@@ -166,6 +194,13 @@ public sealed partial class AppState
     /// <see cref="EngineByModelFiles"/> gives back the other engine's weights as it does - and it
     /// never happens under a dictation or a re-recognition: the model that was serving keeps
     /// serving until they finish.
+    /// <para>
+    /// The current model serves once it has loaded, not once it has verified. An engine that
+    /// rejected its files, or whose runtime cannot start on this machine, leaves the previous
+    /// model serving; rejected files are offered again as a download, a runtime that cannot start
+    /// is not offered anything, because new files would not change it.
+    /// </para>
+    /// <para>Called under <see cref="modelLineupGate"/>.</para>
     /// </remarks>
     private ModelState ApplyLineup(ModelState main)
     {
@@ -173,20 +208,32 @@ public sealed partial class AppState
 
         ModelState previous;
         string? serving;
+        EngineLoadFailure? failure;
         lock (gate)
         {
             previous = previousModelState;
             serving = engineDirectory;
+            failure = engineLoadFailure;
         }
 
-        var lineup = new ModelLineup(main, previous);
+        ModelLineup.LoadFailure currentFailure = failure is not null && main.IsReady && failure.Directory == currentEngineDirectory
+            ? failure.Kind
+            : ModelLineup.LoadFailure.None;
+        ModelState? upgrade = currentFailure switch
+        {
+            ModelLineup.LoadFailure.Files => new ModelState.RepairRequired(failure!.Detail),
+            ModelLineup.LoadFailure.Runtime => null,
+            _ => main,
+        };
+
+        var lineup = new ModelLineup(main, previous, currentFailure);
         string? folder = lineup.Recognizer == ModelLineup.Slot.Previous ? previousEngineDirectory : currentEngineDirectory;
         if (folder != serving)
         {
             if (IsRecognitionInProgress)
             {
                 lock (gate) { modelSwitchPending = true; }
-                UpgradeState = lineup.Recognizer == ModelLineup.Slot.Current ? null : main;
+                UpgradeState = lineup.Recognizer == ModelLineup.Slot.Current ? null : upgrade;
                 return serving == previousEngineDirectory ? previous : main;
             }
 
@@ -202,7 +249,7 @@ public sealed partial class AppState
 
         if (lineup.Recognizer == ModelLineup.Slot.Previous)
         {
-            UpgradeState = main;
+            UpgradeState = upgrade;
             return previous;
         }
 
@@ -263,7 +310,7 @@ public sealed partial class AppState
     private void PublishRemainingDownload(ModelState main)
     {
         bool rejected;
-        lock (gate) { rejected = engineLoadFailure is not null; }
+        lock (gate) { rejected = engineLoadFailure is { Kind: ModelLineup.LoadFailure.Files }; }
         // Anything but a ready model on disk means the whole model is still to fetch; an engine
         // that rejected verified files means fetching it again.
         long bytes = !main.IsReady || rejected ? mainModelBytes : 0;
@@ -306,7 +353,9 @@ public sealed partial class AppState
         bool engineRejectedModels;
         lock (gate)
         {
-            engineRejectedModels = engineLoadFailure is not null;
+            // Only rejected files are fetched again. A runtime that could not start gets a new
+            // load attempt below, from the same verified files.
+            engineRejectedModels = engineLoadFailure is { Kind: ModelLineup.LoadFailure.Files };
             // An explicit human command opens a new attempt: the previous failure no longer
             // holds, and a fresh installation will warm up again.
             engineLoadFailure = null;
@@ -641,7 +690,9 @@ public sealed partial class AppState
 
             lock (gate)
             {
-                engineLoadFailure = null;
+                // A failure of another folder - the model the lineup stepped away from - still
+                // stands: it is what keeps this one serving.
+                if (engineLoadFailure?.Directory == preparing) { engineLoadFailure = null; }
                 RevokeRetryLocked();
             }
 
@@ -663,35 +714,51 @@ public sealed partial class AppState
             // by the one sentence that reads outcomes, see PreparationContinues.
             return EngineWarmupOutcome.Skipped;
         }
-        catch (ASREngineError.ModelsUnavailable error)
+        catch (Exception error) when (error is ASREngineError.ModelsUnavailable or ASREngineError.RuntimeUnavailable)
         {
+            bool runtime = error is ASREngineError.RuntimeUnavailable;
             journal.Record(DiagnosticEvent.EngineFailed, errorCode: error.HResult);
             DiagnosticLog.EmitException(
-                "engine.load.failed",
+                runtime ? "engine.runtime.failed" : "engine.load.failed",
                 error,
                 ("load_ms", Stopwatch.GetElapsedTime(loadBegan)));
-            string detail = "the files passed verification, but the engine couldn't load the model: "
-                + error.Message;
             // The model state said the files are there - the guard at the top of this method
             // is that very statement, and it is what makes this a rejection rather than a
-            // missing model. The repair redownloads them anyway, so the volume is republished
-            // right here: without it the only control on the setup screen read "Redownload
-            // Model — 0 MB".
-            ModelState filesOnDisk = ModelStateValue;
+            // missing model. A runtime that cannot start is neither: the files are not at fault.
+            string detail = runtime
+                ? "the speech engine couldn't start on this PC: " + error.Message
+                : "the files passed verification, but the engine couldn't load the model: " + error.Message;
             lock (gate)
             {
-                engineLoadFailure = detail;
-                RevokeRetryLocked();
+                engineLoadFailure = new EngineLoadFailure(
+                    preparing,
+                    detail,
+                    runtime ? ModelLineup.LoadFailure.Runtime : ModelLineup.LoadFailure.Files);
             }
 
-            // The volume goes out before the state: a screen that wakes on "repair required"
-            // reads the button's number in the same instant, and a number published a beat later
-            // is the "0 MB" this comment is about, seen once on a loaded test host.
-            PublishRemainingDownload(filesOnDisk);
-            ModelStateValue = new ModelState.RepairRequired(detail);
+            // The failure is a fact about this folder; the lineup decides what serves now. A
+            // repair redownloads rejected files, so the volume is republished along with the
+            // state: without it the only control on the setup screen read "Redownload Model —
+            // 0 MB".
+            ApplyModelState(store?.CurrentState() ?? ModelStateValue);
+            if (ServingEngineDirectory != preparing)
+            {
+                // The previous model still loads, and serves again. For the app this is an
+                // overtaken load: an engine is still owed, for the other folder.
+                Notify(new DictationNotice(
+                    DictationNoticeKind.Warning,
+                    runtime
+                        ? $"Parakeet Ultra can't run on this PC ({error.Message}). Dictation keeps using the current model."
+                        : "Parakeet Ultra didn't load. Dictation keeps using the current model."));
+                return EngineWarmupOutcome.Skipped;
+            }
+
+            lock (gate) { RevokeRetryLocked(); }
             Notify(new DictationNotice(
                 DictationNoticeKind.Failure,
-                $"The model didn't load. An explicit repair will redownload {RemainingDownloadMegabytes} MB."));
+                runtime
+                    ? $"The speech engine couldn't start on this PC ({error.Message}). Downloading the model again won't fix this."
+                    : $"The model didn't load. An explicit repair will redownload {RemainingDownloadMegabytes} MB."));
             return EngineWarmupOutcome.RepairRequired;
         }
         catch (Exception error) when (error is ASREngineError or IOException or InvalidOperationException)
@@ -703,7 +770,11 @@ public sealed partial class AppState
                 "engine.load.retryable",
                 error,
                 ("load_ms", Stopwatch.GetElapsedTime(loadBegan)));
-            lock (gate) { engineLoadFailure = null; }
+            lock (gate)
+            {
+                if (engineLoadFailure?.Directory == preparing) { engineLoadFailure = null; }
+            }
+
             return EngineWarmupOutcome.Retryable;
         }
         finally

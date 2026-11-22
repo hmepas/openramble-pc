@@ -141,6 +141,80 @@ public sealed class ModelUpgradeTests : IDisposable
         Assert.Contains("keeps using the current model", downloading.Detail, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Ultra's files verify but the engine rejects them. Dictation does not die on a model the
+    /// machine still holds: the old one serves, stays on disk, and Ultra is offered again.
+    /// </summary>
+    [Fact]
+    public async Task UltraThatVerifiesButDoesNotLoadLeavesTheOldModelServing()
+    {
+        harness.InstallPreviousModelMarker();
+        harness.InstallModelMarker();
+        var engine = new RejectingUltraEngine(new ASREngineError.ModelsUnavailable("bad tensor"));
+        harness.WarmUpEngine = engine;
+        AppState state = harness.MakeState();
+
+        await state.RefreshModelState();
+        await TestWait.For(
+            "the old model serves",
+            () => state.IsEngineReady && engine.LoadedDirectories.Any(folder => folder.Contains("parakeet-tdt-0.6b-v3", StringComparison.Ordinal)));
+
+        Assert.True(state.ModelStateValue.IsReady);
+        Assert.IsType<ModelState.RepairRequired>(state.UpgradeState);
+        Assert.Equal(UltraMegabytes, state.RemainingDownloadMegabytes);
+        Assert.True(Directory.Exists(harness.PreviousModelDirectory()));
+
+        // A look at the disk does not move recognition back onto the model that failed.
+        await state.RefreshModelState();
+        Assert.True(state.IsEngineReady);
+        Assert.IsType<ModelState.RepairRequired>(state.UpgradeState);
+    }
+
+    /// <summary>
+    /// The runtime itself cannot start - a library missing, a processor it does not support, a
+    /// build that does not match. New files would not change that, so none are offered.
+    /// </summary>
+    [Fact]
+    public async Task UltraWhoseRuntimeCannotStartLeavesTheOldModelServingAndOffersNoDownload()
+    {
+        harness.InstallPreviousModelMarker();
+        harness.InstallModelMarker();
+        var engine = new RejectingUltraEngine(new ASREngineError.RuntimeUnavailable("libtranscribe.so not found"));
+        harness.WarmUpEngine = engine;
+        AppState state = harness.MakeState();
+
+        await state.RefreshModelState();
+        await TestWait.For(
+            "the old model serves",
+            () => state.IsEngineReady && engine.LoadedDirectories.Any(folder => folder.Contains("parakeet-tdt-0.6b-v3", StringComparison.Ordinal)));
+
+        Assert.True(state.ModelStateValue.IsReady);
+        Assert.Null(state.UpgradeState);
+        Assert.Equal(0, state.RemainingDownloadMegabytes);
+        Assert.True(Directory.Exists(harness.PreviousModelDirectory()));
+        Assert.DoesNotContain("redownload", state.LastNotice?.Message ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>With nothing to fall back to, a runtime that cannot start is not a repair either.</summary>
+    [Fact]
+    public async Task ARuntimeThatCannotStartIsNotOfferedAsARepair()
+    {
+        using var single = new AppHarness();
+        single.InstallModelMarker();
+        single.WarmUpEngine = new RejectingUltraEngine(new ASREngineError.RuntimeUnavailable("libtranscribe.so not found"), rejectsEverything: true);
+        AppState state = single.MakeState();
+
+        await TestWait.For("the load failed", () => state.ModelStateValue is ModelState.Failed);
+
+        Assert.False(state.IsEngineReady);
+        Assert.Equal(0, state.RemainingDownloadMegabytes);
+        Assert.DoesNotContain("redownload", state.LastNotice?.Message ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        // A look at the disk keeps saying so.
+        await state.RefreshModelState();
+        Assert.IsType<ModelState.Failed>(state.ModelStateValue);
+    }
+
     /// <summary>A build that names no previous model never offers an upgrade and never deletes one.</summary>
     [Fact]
     public async Task ABuildWithoutAPreviousModelIsUnchanged()
@@ -166,6 +240,31 @@ public sealed class DirectoryRecordingEngine : IASREngineAdapting
 
     public Task LoadModels(string directory)
     {
+        lock (gate) { directories.Add(directory); }
+        return Task.CompletedTask;
+    }
+
+    public Task<ASRResult> Transcribe(float[] samples) =>
+        Task.FromResult(new ASRResult(string.Empty, TimeSpan.FromSeconds(1), TimeSpan.Zero));
+
+    public Task Unload() => Task.CompletedTask;
+}
+
+/// <summary>An engine that refuses Parakeet Ultra's folder - or every folder - with the given error.</summary>
+public sealed class RejectingUltraEngine(ASREngineError rejection, bool rejectsEverything = false) : IASREngineAdapting
+{
+    private readonly Lock gate = new();
+    private readonly List<string> directories = [];
+
+    public IReadOnlyList<string> LoadedDirectories { get { lock (gate) { return [.. directories]; } } }
+
+    public Task LoadModels(string directory)
+    {
+        if (rejectsEverything || directory.Contains("parakeet-ultra", StringComparison.Ordinal))
+        {
+            return Task.FromException(rejection);
+        }
+
         lock (gate) { directories.Add(directory); }
         return Task.CompletedTask;
     }

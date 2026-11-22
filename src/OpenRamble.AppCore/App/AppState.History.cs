@@ -122,13 +122,18 @@ public sealed partial class AppState
             return;
         }
 
-        if (transcriber is null || !IsEngineReady)
+        lock (modelLineupGate)
         {
-            Notify(new DictationNotice(DictationNoticeKind.Info, "The speech model isn't ready yet."));
-            return;
-        }
+            // Under the lineup's lock, so a model switch cannot slip in between this check and
+            // the work it lets through.
+            if (transcriber is null || !IsEngineReady)
+            {
+                Notify(new DictationNotice(DictationNoticeKind.Info, "The speech model isn't ready yet."));
+                return;
+            }
 
-        IsRetranscribing = true;
+            IsRetranscribing = true;
+        }
         _ = Task.Run(async () =>
         {
             try

@@ -245,15 +245,20 @@ public sealed record ModelStatus
                 {
                     string reason = Message(failed.Error);
                     bool requiresRepair = failed.Error is ModelStoreError.RepairRequired;
+                    bool engineUnavailable = failed.Error is ModelStoreError.EngineUnavailable;
                     return new ModelStatus
                     {
-                        Title = requiresRepair ? "Model needs repair" : "Model installation failed",
+                        Title = requiresRepair ? "Model needs repair"
+                            : engineUnavailable ? "The speech engine didn't start"
+                            : "Model installation failed",
                         Detail = reason,
                         Actions = [requiresRepair ? Action.Repair : Action.Retry],
                         ToneValue = Tone.Failure,
                         Announcement = requiresRepair
                             ? $"Model needs repair. {reason}"
-                            : $"Model installation failed. {reason}",
+                            : engineUnavailable
+                                ? $"The speech engine didn't start. {reason}"
+                                : $"Model installation failed. {reason}",
                     };
                 }
 
@@ -342,6 +347,8 @@ public sealed record ModelStatus
             $"The model is damaged or incomplete: {repair.Reason}. Redownload it explicitly.",
         ModelStoreError.Manifest manifest => $"The model's file list is corrupted: {manifest.Reason}",
         ModelStoreError.ImportSource source => $"That folder didn't work: {source.Reason}",
+        ModelStoreError.EngineUnavailable engine =>
+            $"The model is installed, but {engine.Reason}. Downloading it again won't fix this.",
         ModelStoreError.Cancelled => "Download cancelled.",
         _ => throw new ArgumentOutOfRangeException(nameof(error)),
     };

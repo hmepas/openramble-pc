@@ -23,10 +23,29 @@ public sealed record ModelLineup
         None,
     }
 
-    public ModelLineup(ModelState current, ModelState previous)
+    /// <summary>Why the engine could not load the current model's verified files, if it could not.</summary>
+    /// <remarks>
+    /// Port addition. Verified files are not yet a working model: the engine may reject them, or
+    /// its runtime may not start on this machine at all. Either way the current model does not
+    /// serve. Only the first is fixed by fetching the files again.
+    /// </remarks>
+    public enum LoadFailure
+    {
+        None,
+
+        /// <summary>The engine rejected the files; a fresh download may fix them.</summary>
+        Files,
+
+        /// <summary>The engine's runtime cannot start here; new files would change nothing.</summary>
+        Runtime,
+    }
+
+    public ModelLineup(ModelState current, ModelState previous, LoadFailure currentLoadFailure = LoadFailure.None)
     {
         bool previousUsable = previous.IsReady;
-        if (current.IsReady)
+        // Serving follows "loaded", not "verified": a current model the engine cannot load
+        // leaves the previous one serving.
+        if (current.IsReady && currentLoadFailure == LoadFailure.None)
         {
             Recognizer = Slot.Current;
             OffersUpgrade = false;
@@ -36,8 +55,11 @@ public sealed record ModelLineup
 
         Recognizer = previousUsable ? Slot.Previous : Slot.None;
         // An upgrade is only an offer while the old model still works; without one, installing
-        // the current model is the ordinary first-run path.
-        OffersUpgrade = previousUsable && CanStart(current);
+        // the current model is the ordinary first-run path. Rejected files are offered again; a
+        // runtime that cannot start is not, because a download would not change it.
+        OffersUpgrade = previousUsable
+            && (currentLoadFailure == LoadFailure.Files
+                || (currentLoadFailure == LoadFailure.None && CanStart(current)));
         // A damaged old copy is never repaired, only replaced by the current model, so it is
         // cleared as soon as nothing depends on it.
         RemovesPrevious = !previousUsable

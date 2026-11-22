@@ -554,7 +554,13 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
                 case DictationState.Idle:
                     if (!ExplainIfNotReady()) { return; }
-                    controller?.Begin(handsFree: true, isEnabled: IsDictationReady, isModelReady: ModelStateValue.IsReady);
+                    // Under the lineup's lock: no model switch between its "nothing is being
+                    // recognized" check and this take's start. See modelLineupGate.
+                    lock (modelLineupGate)
+                    {
+                        controller?.Begin(handsFree: true, isEnabled: IsDictationReady, isModelReady: ModelStateValue.IsReady);
+                    }
+
                     break;
 
                 case DictationState.Transcribing:
@@ -629,7 +635,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // that started nothing started nothing.
         DictationState before = DictationStateValue;
         int previousSession = controller?.CurrentSession ?? 0;
-        controller?.Begin(handsFree: false, isEnabled: IsDictationReady, isModelReady: ModelStateValue.IsReady);
+        // Under the lineup's lock: no model switch between its "nothing is being recognized"
+        // check and this take's start. See modelLineupGate.
+        lock (modelLineupGate)
+        {
+            controller?.Begin(handsFree: false, isEnabled: IsDictationReady, isModelReady: ModelStateValue.IsReady);
+        }
 
         // The policy each session is started under, so a session that behaves differently from
         // the last one can be told apart from a session that was started differently. Written

@@ -129,6 +129,23 @@ public abstract class ASREngineError : Exception
         public string Reason { get; }
     }
 
+    /// <summary>
+    /// The engine's native runtime cannot start on this machine: a library missing, a processor
+    /// it was not built for, or a build that does not match this app. The model files are not at
+    /// fault, and downloading them again changes nothing.
+    /// </summary>
+    /// <remarks>Port addition: the Swift engines ship inside the app bundle and cannot go missing.</remarks>
+    public sealed class RuntimeUnavailable : ASREngineError
+    {
+        public RuntimeUnavailable(string reason)
+            : base(reason)
+        {
+            Reason = reason;
+        }
+
+        public string Reason { get; }
+    }
+
     /// <summary>Audio is not in the format expected by the engine.</summary>
     public sealed class UnsupportedAudioFormat : ASREngineError
     {

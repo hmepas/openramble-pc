@@ -159,8 +159,18 @@
                      Minimum="0" Maximum="1" />
         <TextBlock x:Name="ModelProgressLabel" Classes="hint" Margin="0,4,0,0" IsVisible="False" />
         <StackPanel x:Name="ModelActions" Orientation="Horizontal" Margin="0,12,0,0" />
+        <!-- The newer model, offered while the one already installed keeps dictating. -->
+        <StackPanel x:Name="UpgradeCard" IsVisible="False">
+          <Separator Margin="0,12,0,12" />
+          <TextBlock x:Name="UpgradeTitle" FontWeight="SemiBold" />
+          <TextBlock x:Name="UpgradeDetail" Classes="hint" Margin="0,4,0,0" TextWrapping="Wrap" />
+          <ProgressBar x:Name="UpgradeProgress" Height="6" Margin="0,10,0,0" IsVisible="False"
+                       Minimum="0" Maximum="1" />
+          <TextBlock x:Name="UpgradeProgressLabel" Classes="hint" Margin="0,4,0,0" IsVisible="False" />
+          <StackPanel x:Name="UpgradeActions" Orientation="Horizontal" Margin="0,12,0,0" />
+        </StackPanel>
         <TextBlock Classes="hint" Margin="0,16,0,0"
-                   Text="Parakeet TDT 0.6B v3 runs entirely on this PC, through sherpa-onnx on the processor. Once downloaded and verified, recognition works offline — audio is never uploaded. The model picks the language from the sound itself, including mid-sentence switches, so there is nothing to choose here. Audio is retained only after a disclosed technical failure or interrupted process, then pruned within seven days; those takes are listed under Dictation History." />
+                   Text="Parakeet Ultra runs entirely on this PC, through transcribe.cpp on the processor. A PC that already holds the earlier model, Parakeet TDT 0.6B v3, keeps dictating with it until Ultra is downloaded and ready. Once downloaded and verified, recognition works offline — audio is never uploaded. The model picks the language from the sound itself, including mid-sentence switches, so there is nothing to choose here. Audio is retained only after a disclosed technical failure or interrupted process, then pruned within seven days; those takes are listed under Dictation History." />
       </StackPanel>
     </TabItem>
 
@@ -312,7 +322,7 @@
 
           <TextBlock Classes="section" Text="Credits" />
           <TextBlock Classes="hint"
-                     Text="Parakeet TDT 0.6B v3 © NVIDIA, licensed under CC BY 4.0. Recognition runs through sherpa-onnx (Apache 2.0). The interface is built with Avalonia (MIT). This is an unofficial port of OpenRamble by Mik Wiseman (MIT)." />
+                     Text="Parakeet Ultra © Moondream and Parakeet TDT 0.6B v3 © NVIDIA, licensed under CC BY 4.0. GGUF conversion by handy-computer. Recognition runs through transcribe.cpp (MIT, with ggml, miniz and Silero VAD, MIT); the earlier model runs through sherpa-onnx (Apache 2.0). The interface is built with Avalonia (MIT). This is an unofficial port of OpenRamble by Mik Wiseman (MIT)." />
           <Button Content="View source on GitHub" Margin="0,8,0,0" Padding="12,4" Click="OnOpenSource" />
         </StackPanel>
       </ScrollViewer>

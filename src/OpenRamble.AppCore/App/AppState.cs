@@ -142,6 +142,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         (overlay as IOverlayPlacementConfiguring)?.Placement = overlayPlacement;
 
         SetUp(environment);
+        // The dictionary was read before the recognizer had anyone to hear about it.
+        PublishVocabulary();
 
         // Reported after assembly: before it there would have been nowhere to show the message.
         if (loaded.Problem is ReplacementsStore.Problem problem)
@@ -209,11 +211,18 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             this.historyStore = historyStore;
             history = historyStore.Load();
 
-            ModelManifest manifest = ModelManifest.Bundled();
+            ModelManifest manifest = environment.ModelManifest ?? ModelManifest.Bundled();
             var layout = new ModelInstallLayout(manifest, paths.Models());
             store = new ModelStore(manifest, layout, modelDownloader);
             mainModelBytes = manifest.TotalByteCount;
+            currentEngineDirectory = layout.EngineDirectory;
             engineDirectory = layout.EngineDirectory;
+            if (environment.PreviousModelManifest is { } previousManifest)
+            {
+                var previousLayout = new ModelInstallLayout(previousManifest, paths.Models());
+                previousStore = new ModelStore(previousManifest, previousLayout, modelDownloader);
+                previousEngineDirectory = previousLayout.EngineDirectory;
+            }
 
             Func<float[], CancellationToken, Task<ASRResult>>? transcribeSamples = transcriber is null
                 ? null
@@ -254,7 +263,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
             var built = new DictationController(
                 capture,
-                environment.Transcribe(layout.EngineDirectory),
+                // Asked per recording rather than once: which model serves can change while the
+                // app runs (see ModelLineup).
+                (path, token) => environment.Transcribe(ServingEngineDirectory)(path, token),
                 inserter,
                 overlay,
                 new GatedSounds(environment.Sounds, () => SoundsEnabled),
@@ -264,7 +275,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 target => MakePipeline(PromptModePolicy.Category(target)),
                 prepareForTranscription: transcriber is null
                     ? null
-                    : token => transcriber.Prepare(layout.EngineDirectory),
+                    : token => transcriber.Prepare(ServingEngineDirectory),
                 // Ninety seconds rather than the kernel's 25: the reload rides under the voice
                 // either way, and on a slow PC the CPU load can outlast a short take.
                 prepareDeadline: environment.PrepareDeadline ?? TimeSpan.FromSeconds(90),
@@ -302,6 +313,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 }
 
                 if (state == DictationState.Transcribing) { JudgeMicrophoneLevel(); }
+                if (state == DictationState.Idle) { ApplyPendingModelSwitch(); }
 
                 // Every state change re-arms or cancels the idle-unload timer: activity disarms
                 // it, idleness starts the countdown.

@@ -166,6 +166,7 @@ public sealed partial class AppState
             finally
             {
                 IsRetranscribing = false;
+                ApplyPendingModelSwitch();
             }
         });
     }

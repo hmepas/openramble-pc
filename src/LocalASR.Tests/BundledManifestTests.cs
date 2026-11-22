@@ -96,4 +96,36 @@ public class BundledManifestTests
 
         Assert.Contains("Core ML", error.Reason, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Parakeet Ultra at the revision, quantization and checksum upstream's desktop builds pin
+    /// (<c>apps/desktop/src-tauri/model-manifest.json</c>): the same bytes, so the same text.
+    /// </summary>
+    [Fact]
+    public void UltraManifestIsUpstreamsDesktopModel()
+    {
+        ModelManifest manifest = ModelManifest.BundledUltra();
+
+        Assert.Equal("parakeet-ultra-gguf", manifest.ModelID);
+        Assert.Equal("handy-computer/parakeet-ultra-gguf", manifest.Repository);
+        Assert.Equal("a1539be1b849ea7463b88343e5277b373d0c4ea9", manifest.Revision);
+        Assert.Equal("Q8_0", manifest.Quantization);
+        Assert.Equal("CC-BY-4.0", manifest.License);
+        ModelManifest.File file = Assert.Single(manifest.Files);
+        Assert.Equal("parakeet-ultra-Q8_0.gguf", file.Path);
+        Assert.Equal(740_363_168, file.ByteCount);
+        Assert.Equal("007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59", file.Sha256);
+        Assert.Equal(
+            "https://huggingface.co/handy-computer/parakeet-ultra-gguf/resolve/a1539be1b849ea7463b88343e5277b373d0c4ea9/parakeet-ultra-Q8_0.gguf",
+            manifest.DownloadURL(file)?.ToString());
+    }
+
+    /// <summary>The engine loads the one GGUF in the folder; the manifest must install exactly one.</summary>
+    [Fact]
+    public void UltraManifestListsExactlyOneModelFile()
+    {
+        ModelManifest manifest = ModelManifest.BundledUltra();
+
+        Assert.Single(manifest.Files, file => file.Path.EndsWith(".gguf", StringComparison.Ordinal));
+    }
 }

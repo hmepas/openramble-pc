@@ -35,13 +35,14 @@ What upstream did in that range that this port does not carry, and why:
   feature deliberately left for a release of its own.
 - **Menu bar, Dock or both (0.20.0).** There is no Dock; the app lives in the
   notification area on both platforms.
-- **The engine machinery.** Core ML → transcribe.cpp (0.9.0), the private
-  worker process (0.7.0), Neural Engine residency and memory-pressure rules
-  (0.8.x), the Rust shared core and the Tauri desktop app (0.10.0, 0.24.0,
-  reverted in 0.24.1): none of it maps onto sherpa-onnx in this process. The
+- **The engine machinery.** The private worker process (0.7.0), Neural Engine
+  residency and memory-pressure rules (0.8.x), the Rust shared core and the
+  Tauri desktop app (0.10.0, 0.24.0, reverted in 0.24.1) are not ported; the
   behaviours those mechanisms bought — instant key press with a reload riding
   under the voice, bounded waits, a take that is never silently dropped — are
-  what was ported, not the mechanisms.
+  what was ported, not the mechanisms. The engine itself now follows upstream
+  on Linux (transcribe.cpp and Parakeet Ultra, 0.9.0–0.42.0); see the next
+  section.
 - **Session tokens and file dispositions (0.7.0).** Upstream fences every
   late callback with a session identity and a per-recording disposition so a
   timed-out stop cannot touch the next take. The PC captures are not AVAudio
@@ -52,6 +53,65 @@ What upstream did in that range that this port does not carry, and why:
 - **The recovery-storage-fault menu row (0.8.0).** The PC recovery store has
   no notion of a failed delete-intent lane; a kept recording is announced by
   its notice and lives in the recovery folder, as before.
+
+## The engine: transcribe.cpp on Linux, sherpa-onnx on Windows (for now)
+
+**Linux** recognizes the way upstream does: Parakeet Ultra (Moondream's further
+trained Parakeet TDT 0.6B v3) through transcribe.cpp, built from upstream's fork
+at the commit upstream 0.42 pins (`dacdba09`: 0.4.1, the Parakeet long-form fix,
+phrase boosting). The model is the one upstream's Windows and Linux builds
+download — handy-computer's GGUF at `a1539be1`, Q8_0, 740 MB; on a processor
+Q4_K_M, the Mac's choice, is the slower of the two. `scripts/build-transcribe.sh`
+builds the runtime as shared libraries with ggml's CPU backend split per x86
+tier, so one binary picks AVX-512, AVX2 or plain SSE at start; the C# binding is
+`TranscribeCppAdapter` (P/Invoke, every struct's size checked against the
+library before use).
+
+Where it differs from upstream's own adapters, on purpose:
+
+- **Four threads.** Upstream's desktop core passes one thread on Windows and
+  Linux — a value chosen for an encoder on Metal or Vulkan. Its build has no
+  GPU backend, and neither has this one, and on the processor one thread puts
+  the whole encoder on one core: 0.66 s for a 6 s take against 0.18 s at four
+  (16-core desktop). Four is what upstream gives its other CPU-only build, the
+  Intel Mac, and what its Mac adapter documents as the safe count under load.
+- **Word times on every run.** Upstream's dictation asks for text only; this
+  port marks paragraph breaks from word times, so it asks for words. The runtime
+  builds them either way.
+- **No native cancellation callback.** The engine interface here takes no
+  token; `LocalTranscriber` discards an answer it gave up on, as before.
+- **A quiet microphone is levelled first.** Upstream hands the engine the
+  samples as recorded. This port keeps its own `InputGain` (peak to 0.7, at
+  most +30 dB, never down) in front of every engine call. Measured on a laptop
+  take at −48 dBFS RMS: Ultra alone returns "Раз аптека пять пришлось гулять.",
+  with the gain "Раз два, три, четыре, пять, вышел зал, как гуляет." — the same
+  text it gives for the take raised by 20 dB by hand.
+
+No engine call is longer than thirty seconds, which matters more here than it
+did on sherpa-onnx: Parakeet Ultra segments a longer run itself and on 0.4.1
+can drop the start of a piece without trace. Every path — the dictation tail,
+the pieces cut while speaking, a take read back from disk, a History entry
+recognized again — goes through `LocalTranscriber`, which sends anything over
+thirty seconds as pause-cut pieces of at most twenty, as upstream does.
+
+**Moving from v3.** A Linux machine updated from an earlier build holds Parakeet
+v3 as ONNX files. It keeps dictating with them, through sherpa-onnx; Settings
+offers Ultra beside the working model; Ultra is downloaded only when asked, used
+once it verifies and loads, and only then is v3 deleted (`ModelLineup`, upstream
+#79). That is why the Linux build still carries sherpa-onnx — for the length of
+that transition and nothing else.
+
+**Windows** stays on Parakeet v3 and sherpa-onnx, chosen at build time (the
+Windows app composes the sherpa-onnx engine and names no previous model). The
+transcribe.cpp runtime needs a native `transcribe.dll` with its ggml libraries;
+the same CMake invocation as the Linux script builds it with MSVC on Windows
+(`cmake -G Ninja -DTRANSCRIBE_BUILD_SHARED=ON -DTRANSCRIBE_GGML_BACKEND_DL=ON
+-DGGML_CPU_ALL_VARIANTS=ON -DTRANSCRIBE_X86_CONSERVATIVE=ON`), but no such
+build has been made or run yet, and shipping an untested native library to
+Windows is worse than shipping the engine that works there. Once one exists
+and passes the same bench, Windows composes `EngineByModelFiles` and the two
+manifests exactly as Linux does, and sherpa-onnx leaves the project when the
+last v3 install has moved.
 
 ## No automatic updates
 
@@ -90,6 +150,18 @@ missing. Options if wanted later: export the CTC model from NeMo ourselves,
 or wait for an upstream export. The pair-state plumbing is ported and tested,
 ready for either.
 
+**What Linux does have — taught words for the decoder (upstream 0.42.0).**
+Upstream dropped the CTC model with Core ML and now passes the written forms
+of the person's own dictionary entries to transcribe.cpp as the run's
+vocabulary, which its phrase boosting (runtime default weight 8.0) uses to
+complete a spelling the model has begun on its own — it never starts one. The
+starter set and entries marked "no acoustic boost" stay out; with no taught
+words nothing is sent and the run is what it was. This port does exactly that,
+at launch and on every dictionary change. Checked on a FLEURS sentence: Ultra
+writes "массив Винсен … пик Винсен"; taught "Винсон", it writes "Винсон" both
+times and nothing else moves. sherpa-onnx (Windows, and v3 during the move)
+ignores the list.
+
 ## "Learn from my corrections" is inert
 
 **What it would give:** after you fix a dictated word in place, the app
@@ -124,6 +196,11 @@ GitHub, which the per-file mirror scheme (per-file sha256 verification,
 resumable per-file downloads) cannot address. A mirror would mean hosting the
 unpacked files in our own GitHub release — straightforward once this project
 has releases at all.
+
+Parakeet Ultra (Linux) is the exception: it is the very file upstream mirrors
+as a release asset (`mikwiseman/openramble`, `models-a1539be1`), so its
+manifest names that mirror and the installer falls back to it as upstream's
+does.
 
 ## Additions the Windows key path forced
 
@@ -219,7 +296,8 @@ The readiness screen still promises "20–40 seconds" — a number measured on
 Apple Silicon compiling for the Neural Engine. The Windows reality is ONNX
 session initialization (reading ~670 MB of weights + one silent inference);
 the state machine is identical but the figure has not been re-measured on
-real Windows hardware yet.
+real Windows hardware yet. On Linux with transcribe.cpp the weights are
+memory-mapped: the load measured 0.1 s and the warm-up inference 0.06 s.
 
 ## Local diagnostics and "Save Error Report…"
 

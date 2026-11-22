@@ -7,7 +7,21 @@ namespace OpenRamble.AppCore;
 /// <summary>The model on disk, the engine in memory, and the seconds between them.</summary>
 public sealed partial class AppState
 {
+    /// <summary>The folder recognition loads from: the current model's, or the previous one's while it serves.</summary>
     private string? engineDirectory;
+
+    /// <summary>The current model's folder.</summary>
+    private string? currentEngineDirectory;
+
+    /// <summary>The model the current one replaced, if this build knows one; see <see cref="ModelLineup"/>.</summary>
+    private ModelStore? previousStore;
+    private string? previousEngineDirectory;
+
+    /// <summary>What the disk held for the previous model at the last look.</summary>
+    private ModelState previousModelState = new ModelState.NotInstalled();
+
+    /// <summary>The lineup chose another model while something was being recognized.</summary>
+    private bool modelSwitchPending;
 
     /// <summary>Is the model being installed right now?</summary>
     private bool isInstalling;
@@ -80,6 +94,12 @@ public sealed partial class AppState
         }
 
         ModelState main = await Task.Run(store.RefreshState).ConfigureAwait(false);
+        if (previousStore is not null)
+        {
+            ModelState previous = await Task.Run(previousStore.RefreshState).ConfigureAwait(false);
+            lock (gate) { previousModelState = previous; }
+        }
+
         ApplyModelState(main);
     }
 
@@ -112,7 +132,7 @@ public sealed partial class AppState
     /// </remarks>
     private void ApplyModelState(ModelState main)
     {
-        ModelState refreshed = main;
+        ModelState refreshed = ApplyLineup(main);
         string? failure;
         lock (gate) { failure = engineLoadFailure; }
         if (failure is not null && refreshed.IsReady)
@@ -133,6 +153,104 @@ public sealed partial class AppState
         }
 
         if (ModelStateValue.IsReady) { PrepareEngineIfIdleAndCold(); }
+    }
+
+    /// <summary>
+    /// Point recognition at the model the lineup chooses and publish the upgrade's own state.
+    /// </summary>
+    /// <remarks>
+    /// Returns the state of the model in use, which is what readiness, the menu and onboarding
+    /// describe; the newer model's state goes to <see cref="UpgradeState"/> while the previous
+    /// one still serves. A build with no previous model is unchanged: the main state is the
+    /// state. The switch itself is only a new folder - the next preparation loads it, and
+    /// <see cref="EngineByModelFiles"/> gives back the other engine's weights as it does - and it
+    /// never happens under a dictation or a re-recognition: the model that was serving keeps
+    /// serving until they finish.
+    /// </remarks>
+    private ModelState ApplyLineup(ModelState main)
+    {
+        if (previousStore is null) { return main; }
+
+        ModelState previous;
+        string? serving;
+        lock (gate)
+        {
+            previous = previousModelState;
+            serving = engineDirectory;
+        }
+
+        var lineup = new ModelLineup(main, previous);
+        string? folder = lineup.Recognizer == ModelLineup.Slot.Previous ? previousEngineDirectory : currentEngineDirectory;
+        if (folder != serving)
+        {
+            if (IsRecognitionInProgress)
+            {
+                lock (gate) { modelSwitchPending = true; }
+                UpgradeState = lineup.Recognizer == ModelLineup.Slot.Current ? null : main;
+                return serving == previousEngineDirectory ? previous : main;
+            }
+
+            lock (gate)
+            {
+                engineDirectory = folder;
+                modelSwitchPending = false;
+            }
+
+            // The engine still holds the other model; the next preparation loads this one.
+            if (transcriber is not null) { IsEngineReady = false; }
+        }
+
+        if (lineup.Recognizer == ModelLineup.Slot.Previous)
+        {
+            UpgradeState = main;
+            return previous;
+        }
+
+        UpgradeState = null;
+        if (lineup.RemovesPrevious && lineup.Recognizer == ModelLineup.Slot.None) { RemovePreviousModel(); }
+        return main;
+    }
+
+    /// <summary>Where recognition loads from right now.</summary>
+    private string ServingEngineDirectory
+    {
+        get { lock (gate) { return engineDirectory ?? currentEngineDirectory ?? string.Empty; } }
+    }
+
+    /// <summary>A take or a History entry is being recognized, or is about to be.</summary>
+    private bool IsRecognitionInProgress => DictationStateValue != DictationState.Idle || IsRetranscribing;
+
+    /// <summary>Carry out a model switch that waited for recognition to finish.</summary>
+    private void ApplyPendingModelSwitch()
+    {
+        bool pending;
+        lock (gate) { pending = modelSwitchPending; }
+        if (!pending || IsRecognitionInProgress) { return; }
+        _ = Task.Run(RefreshModelState);
+    }
+
+    /// <summary>
+    /// Delete the previous model once the current one has loaded and warmed up.
+    ///
+    /// Verified files are not yet a working engine; the old copy is the only fallback until the
+    /// new one has recognized something, so it goes after the first successful warm-up and not
+    /// at the end of the download.
+    /// </summary>
+    private void RemovePreviousModelOnceReplaced(string loadedDirectory)
+    {
+        if (loadedDirectory == currentEngineDirectory) { RemovePreviousModel(); }
+    }
+
+    private void RemovePreviousModel()
+    {
+        if (previousStore is not { } previous) { return; }
+        _ = Task.Run(async () =>
+        {
+            if (previous.RefreshState() is ModelState.NotInstalled) { return; }
+            await previous.Delete().ConfigureAwait(false);
+            lock (gate) { previousModelState = previous.CurrentState(); }
+            DiagnosticLog.Emit("model.previous.removed");
+        });
     }
 
     /// <summary>
@@ -178,7 +296,9 @@ public sealed partial class AppState
             isInstalling = true;
         }
 
-        IsEngineReady = false;
+        // An upgrade downloads beside a working model: dictation keeps using the previous one and
+        // only the upgrade card shows progress.
+        if (UpgradeState is null) { IsEngineReady = false; }
 
         // An engine failure leaves the files on disk "intact" - the store would say ready. An
         // explicit repair is required to keep the promise of the message and re-download instead
@@ -304,6 +424,7 @@ public sealed partial class AppState
         {
             if (transcriber is not null) { await transcriber.Unload().ConfigureAwait(false); }
             await store.Delete().ConfigureAwait(false);
+            if (previousStore is not null) { await previousStore.Delete().ConfigureAwait(false); }
             await RefreshModelState().ConfigureAwait(false);
         });
     }
@@ -500,9 +621,10 @@ public sealed partial class AppState
         long loadBegan = Stopwatch.GetTimestamp();
         DiagnosticLog.Emit("engine.load.begin", ("state", DictationStateValue));
 
+        string preparing = ServingEngineDirectory;
         try
         {
-            await transcriber.Prepare(engineDirectory).ConfigureAwait(false);
+            await transcriber.Prepare(preparing).ConfigureAwait(false);
             long loaded = Stopwatch.GetTimestamp();
             SetPreparationPhase(EnginePreparationState.Phase.WarmingUp);
             await transcriber.WarmUpInference().ConfigureAwait(false);
@@ -512,6 +634,11 @@ public sealed partial class AppState
                 ("load_ms", Stopwatch.GetElapsedTime(loadBegan, loaded)),
                 ("warm_ms", Stopwatch.GetElapsedTime(loaded)));
 
+            // The lineup moved to the other model while this one was loading: what is warm is
+            // not what serves. Nothing failed; whether the app still owes an engine is decided by
+            // PreparationContinues, like any other overtaken load.
+            if (ServingEngineDirectory != preparing) { return EngineWarmupOutcome.Skipped; }
+
             lock (gate)
             {
                 engineLoadFailure = null;
@@ -520,6 +647,7 @@ public sealed partial class AppState
 
             IsEngineReady = true;
             RescheduleIdleUnload();
+            RemovePreviousModelOnceReplaced(preparing);
             return EngineWarmupOutcome.Ready;
         }
         catch (OperationCanceledException)

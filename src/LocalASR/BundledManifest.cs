@@ -16,6 +16,19 @@ public sealed partial record ModelManifest
     public static ModelManifest Bundled() => DecodeResource("LocalASR.Resources.model-manifest.json");
 
     /// <summary>
+    /// Parakeet Ultra, one GGUF file for the transcribe.cpp engine (<see cref="TranscribeCppAdapter"/>):
+    /// the model upstream's desktop builds ship, at the quantization they ship it in (Q8_0 - on a
+    /// processor Q4_K_M is the slower of the two).
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Bundled"/> stays what it was - Parakeet TDT v3, weight-only int4 ONNX, for
+    /// sherpa-onnx - because a build without the transcribe.cpp runtime (Windows, for now) still
+    /// installs it, and a Linux machine that already holds it keeps dictating with it until this
+    /// one is downloaded, verified and loaded.
+    /// </remarks>
+    public static ModelManifest BundledUltra() => DecodeResource("LocalASR.Resources.ultra-model-manifest.json");
+
+    /// <summary>
     /// Manifest of the acoustic term hinter (Parakeet CTC 110M).
     ///
     /// A separate file, not a section of the main one: the model has its own repository and

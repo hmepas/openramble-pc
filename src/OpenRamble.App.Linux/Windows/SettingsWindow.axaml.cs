@@ -352,17 +352,40 @@ public sealed partial class SettingsWindow : Window, IDictationSink
                 : state.RemainingDownloadMegabytes,
             state.IsEngineReady,
             state.IsPreparingEngine);
+        RenderCard(status, ModelTitle, ModelDetail, ModelProgress, ModelProgressLabel, ModelActions);
 
-        ModelTitle.Text = status.Title;
-        ModelDetail.Text = status.Detail ?? string.Empty;
-        ModelDetail.IsVisible = status.Detail is not null;
+        // The newer model is offered beside the one that keeps dictating, never instead of it.
+        UpgradeCard.IsVisible = state.UpgradeState is not null;
+        if (state.UpgradeState is { } upgrade)
+        {
+            RenderCard(
+                ModelStatus.Upgrade(upgrade, state.RemainingDownloadMegabytes),
+                UpgradeTitle,
+                UpgradeDetail,
+                UpgradeProgress,
+                UpgradeProgressLabel,
+                UpgradeActions);
+        }
+    }
 
-        ModelProgress.IsVisible = status.Progress is not null;
-        ModelProgress.Value = status.Progress ?? 0;
-        ModelProgressLabel.Text = status.ProgressLabel ?? string.Empty;
-        ModelProgressLabel.IsVisible = status.ProgressLabel is not null;
+    private void RenderCard(
+        ModelStatus status,
+        TextBlock title,
+        TextBlock detail,
+        ProgressBar progress,
+        TextBlock progressLabel,
+        StackPanel actions)
+    {
+        title.Text = status.Title;
+        detail.Text = status.Detail ?? string.Empty;
+        detail.IsVisible = status.Detail is not null;
 
-        ModelActions.Children.Clear();
+        progress.IsVisible = status.Progress is not null;
+        progress.Value = status.Progress ?? 0;
+        progressLabel.Text = status.ProgressLabel ?? string.Empty;
+        progressLabel.IsVisible = status.ProgressLabel is not null;
+
+        actions.Children.Clear();
         foreach (ModelStatus.Action action in status.Actions)
         {
             var button = new Button
@@ -375,7 +398,7 @@ public sealed partial class SettingsWindow : Window, IDictationSink
             AutomationProperties.SetHelpText(button, status.HintFor(action));
             ModelStatus.Action captured = action;
             button.Click += (_, _) => Perform(captured);
-            ModelActions.Children.Add(button);
+            actions.Children.Add(button);
         }
     }
 

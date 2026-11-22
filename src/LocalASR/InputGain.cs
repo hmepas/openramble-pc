@@ -14,6 +14,12 @@ namespace LocalASR;
 /// field machine peaked at −25 dBFS with an RMS of −48 dBFS on ordinary speech.
 /// </para>
 /// <para>
+/// Parakeet Ultra through transcribe.cpp needs it as much. Upstream feeds its engine the
+/// samples as recorded; on that same field take Ultra alone returned half the words ("Раз
+/// аптека пять пришлось гулять."), and with this rule in front all of them - the text it gives
+/// for the take raised by 20 dB by hand.
+/// </para>
+/// <para>
 /// So: scale by the peak up to a target, and never down. Not RMS: a pause before the phrase is
 /// silence, and an RMS target would amplify it into full-scale noise. The gain is capped so
 /// that a take with nothing in it - a muted device, a covered microphone - is not turned into

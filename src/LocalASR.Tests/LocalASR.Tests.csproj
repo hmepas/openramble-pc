@@ -37,4 +37,7 @@
     <None Include="Fixtures/en.wav" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The transcribe.cpp runtime next to the binaries; see the file. -->
+  <Import Project="../LocalASR/TranscribeCppNative.props" />
+
 </Project>

@@ -1,0 +1,24 @@
+<Project>
+
+  <!--
+    The transcribe.cpp runtime, for the executables that run it on Linux: the Linux app, the bench's
+    portable target and the LocalASR tests import this file.
+
+    It is native code this repository builds itself: scripts/build-transcribe.sh puts
+    libtranscribe.so, its two ggml libraries, the per-CPU-tier backend modules and their licence
+    notices in artifacts/native/linux-x64. They are copied side by side into the output, which is
+    where the runtime looks for its backend modules. Absent until the script has run; the Linux
+    build script fails if a publish comes out without them.
+
+    Not in LocalASR.csproj itself: a library is built without a runtime identifier, so a
+    condition there cannot tell the Windows app's publish from the Linux one, and the Windows
+    build would carry twenty megabytes of Linux libraries.
+  -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == '' Or '$(RuntimeIdentifier)' == 'linux-x64'">
+    <None Include="$(MSBuildThisFileDirectory)../../artifacts/native/linux-x64/*.so*;$(MSBuildThisFileDirectory)../../artifacts/native/linux-x64/*-MIT.txt"
+          Link="%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+  </ItemGroup>
+
+</Project>

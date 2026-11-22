@@ -58,6 +58,19 @@ public sealed class AppEnvironment
     public string? BundledModelDirectory { get; init; }
 
     /// <summary>
+    /// The model this build recognizes with. <c>null</c> - <see cref="ModelManifest.Bundled"/>,
+    /// Parakeet v3 for sherpa-onnx; the Linux build passes Parakeet Ultra for transcribe.cpp.
+    /// </summary>
+    public ModelManifest? ModelManifest { get; init; }
+
+    /// <summary>
+    /// The model <see cref="ModelManifest"/> replaced, if this build still knows it: a machine
+    /// that holds it keeps dictating with it until the new one is downloaded, verified and loaded,
+    /// and only then is it deleted. See <see cref="ModelLineup"/>.
+    /// </summary>
+    public ModelManifest? PreviousModelManifest { get; init; }
+
+    /// <summary>
     /// How to recognize. The same kind of system edge as the microphone and the insertion: in
     /// the application it is a model on disk, in a test it is a known answer. Without this seam
     /// the whole dictation path could not be checked at all - the tests would only reach the

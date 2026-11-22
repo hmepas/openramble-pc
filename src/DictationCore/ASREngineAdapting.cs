@@ -193,4 +193,10 @@ public interface IASREngineAdapting
 
     /// <summary>Free up the memory under the model.</summary>
     Task Unload();
+
+    /// <summary>
+    /// Words the person taught, which the engine may lean toward while it decodes. An engine with
+    /// no such mechanism ignores them.
+    /// </summary>
+    Task SetVocabulary(IReadOnlyList<string> terms) => Task.CompletedTask;
 }

@@ -281,4 +281,91 @@ public sealed class TakeEndingOwnershipTests
         Assert.False(capture.IsRecording);
         Assert.Equal(1, overlay.DismissCount);
     }
+
+    /// <summary>
+    /// A microphone whose stop waits for a gate and then fails the way a broken frame queue
+    /// does: the file is closed and left on disk, and the failure names it.
+    /// </summary>
+    private sealed class BrokenStopCapture : IAudioCapturing
+    {
+        public BrokenStopCapture(string file) { File = file; }
+
+        public string File { get; }
+
+        public Gate StopGate { get; } = new();
+
+        public Task<string> StartRecording()
+        {
+            System.IO.File.WriteAllText(File, "RIFF");
+            return Task.FromResult(File);
+        }
+
+        public async Task<(string Url, TimeSpan Duration)> StopRecording()
+        {
+            await StopGate.Pass();
+            throw new AudioCaptureError.StopFailed(File, new InvalidOperationException("the queue broke"));
+        }
+
+        // The stop already detached the take: an abort finds nothing to delete.
+        public Task AbortRecording() => Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Escape while a stop is closing the file, and the stop then fails: a cancelled dictation is
+    /// deleted all the same, rather than left for the next launch to recover.
+    /// </summary>
+    [Fact]
+    public async Task TestEscapeDuringAStopThatFailsStillDeletesTheRecording()
+    {
+        string file = Path.Combine(Path.GetTempPath(), $"broken-stop-{Guid.NewGuid():N}.wav");
+        var capture = new BrokenStopCapture(file);
+        var overlay = new HeldOverlay();
+        var controller = new DictationController(
+            capture: capture,
+            transcribe: (_, _) => Task.FromResult(new ASRResult("words", TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(0.01))),
+            inserter: new RecordingInserter(),
+            overlay: overlay,
+            sounds: new CountingSounds());
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        await Settle();
+        controller.Cancel();
+        await Settle();
+        capture.StopGate.Open();
+        await Settle();
+
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.False(File.Exists(file), "a cancelled dictation is deleted");
+        Assert.Empty(overlay.Notices);
+    }
+
+    /// <summary>The same through a rescue: Escape during its stop deletes what the stop left.</summary>
+    [Fact]
+    public async Task TestEscapeDuringARescueWhoseStopFailsStillDeletesTheRecording()
+    {
+        string file = Path.Combine(Path.GetTempPath(), $"broken-rescue-{Guid.NewGuid():N}.wav");
+        var capture = new BrokenStopCapture(file);
+        var overlay = new HeldOverlay();
+        var controller = new DictationController(
+            capture: capture,
+            transcribe: (_, _) => Task.FromResult(new ASRResult("words", TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(0.01))),
+            inserter: new RecordingInserter(),
+            overlay: overlay,
+            sounds: new CountingSounds());
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.PreserveActiveRecording("The microphone was disconnected.");
+        await Settle();
+        controller.Cancel();
+        await Settle();
+        capture.StopGate.Open();
+        await Settle();
+
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.False(File.Exists(file), "a cancelled dictation is deleted");
+        Assert.Empty(overlay.Notices);
+    }
 }

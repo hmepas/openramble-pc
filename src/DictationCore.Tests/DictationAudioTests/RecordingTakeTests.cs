@@ -258,9 +258,13 @@ public sealed class RecordingTakeTests : IDisposable
         Feed(take, 0.5f, seconds: 10);
         Feed(take, 0, seconds: 1.5);
 
-        await Assert.ThrowsAnyAsync<Exception>(() => take.Stop(TimeSpan.FromSeconds(5)));
+        AudioCaptureError.StopFailed failure =
+            await Assert.ThrowsAsync<AudioCaptureError.StopFailed>(() => take.Stop(TimeSpan.FromSeconds(5)));
 
         Assert.Throws<WAVWriter.Failure.NotOpen>(() => writer.Close());
+        // The failure names the file left behind, so a cancellation can still delete it.
+        Assert.Equal(writer.FilePath, failure.Path);
+        Assert.IsType<InvalidOperationException>(failure.InnerException);
     }
 
     [Fact]

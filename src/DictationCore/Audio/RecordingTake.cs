@@ -261,19 +261,19 @@ internal sealed class RecordingTake
                 // Rethrows whatever broke the queue itself - that has to reach the person, not the log.
                 await drain.ConfigureAwait(false);
             }
-            catch (Exception)
+            catch (Exception error)
             {
                 // The take is over all the same: nothing more is committed, the copy in memory -
                 // missing whatever the broken queue dropped - goes, and the file is closed rather
-                // than left open with nobody to close it. Whatever made it to disk stays there.
+                // than left open with nobody to close it. Whatever made it to disk stays there,
+                // and the failure names it: a stop that Escape took over must still delete it.
                 lock (gate)
                 {
                     phase = Phase.Stopped;
                     memory.Discard();
                 }
 
-                _ = CloseFailedWriter();
-                throw;
+                throw new AudioCaptureError.StopFailed(CloseFailedWriter(), error);
             }
         }
         else

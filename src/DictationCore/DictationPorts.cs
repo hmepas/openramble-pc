@@ -138,6 +138,11 @@ public abstract class AudioCaptureError : Exception
     {
     }
 
+    private protected AudioCaptureError(string message, Exception inner)
+        : base(message, inner)
+    {
+    }
+
     public sealed class MicrophonePermissionDenied : AudioCaptureError
     {
         public MicrophonePermissionDenied()
@@ -185,6 +190,22 @@ public abstract class AudioCaptureError : Exception
         }
 
         public string Reason { get; }
+    }
+
+    /// <summary>
+    /// The stop failed after the take's file was closed - a frame queue that broke. The file is
+    /// still on disk, and whoever ends the take decides its fate: a cancellation deletes it.
+    /// </summary>
+    public sealed class StopFailed : AudioCaptureError
+    {
+        public StopFailed(string path, Exception inner)
+            : base($"the recording didn't stop cleanly: {inner.Message}", inner)
+        {
+            Path = path;
+        }
+
+        /// <summary>The take's file, left on disk.</summary>
+        public string Path { get; }
     }
 
     public sealed class NotRecording : AudioCaptureError

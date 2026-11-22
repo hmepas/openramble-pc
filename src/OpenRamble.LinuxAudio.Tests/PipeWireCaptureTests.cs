@@ -174,7 +174,8 @@ public sealed class PipeWireCaptureTests : IDisposable
             await Task.Delay(10);
         }
 
-        await Assert.ThrowsAsync<InvalidOperationException>(capture.StopRecording);
+        AudioCaptureError.StopFailed failure = await Assert.ThrowsAsync<AudioCaptureError.StopFailed>(capture.StopRecording);
+        Assert.IsType<InvalidOperationException>(failure.InnerException);
 
         Assert.True(recorder.Disposed, "a failed stop must not keep the microphone");
     }

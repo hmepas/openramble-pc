@@ -933,6 +933,13 @@ public sealed class DictationController
             {
                 OnStageFailure?.Invoke(DictationFailureStage.CaptureFreeze, freezeStarted.DurationTo(MonotonicInstant.Now), false);
             }
+            else if (error is AudioCaptureError.StopFailed failed)
+            {
+                // Escape took the take over while its file was closing, and the stop failed with
+                // the file still on disk. A cancelled dictation is deleted - not left for the
+                // next launch to recover.
+                await Discard(take, EndingOwner.Finish, failed.Path).ConfigureAwait(false);
+            }
 
             await Fail(take, EndingOwner.Finish, new DictationError.Capture(error.ToString())).ConfigureAwait(false);
             return;
@@ -1933,6 +1940,8 @@ public sealed class DictationController
     private async Task Rescue(string reason, Take take, CancellationToken token)
     {
         (string Url, TimeSpan Duration)? recording;
+        // A stop that failed after closing the file still leaves it on disk.
+        string? leftBehind = null;
         try
         {
             // Under the same budget as the ordinary stop, and here it matters most: this path runs
@@ -1942,9 +1951,10 @@ public sealed class DictationController
                 captureStopDeadline,
                 _ => capture.StopRecording(take.Session)).ConfigureAwait(false);
         }
-        catch (Exception)
+        catch (Exception error)
         {
             recording = null;
+            leftBehind = (error as AudioCaptureError.StopFailed)?.Path;
             // Nothing else will ever close the microphone: the stop that owned it is abandoned.
             _ = Task.Run(async () =>
             {
@@ -1968,7 +1978,7 @@ public sealed class DictationController
         // session the person started next.
         if (token.IsCancellationRequested)
         {
-            if (recording is { } cancelled) { await Discard(take, EndingOwner.Rescue, cancelled.Url).ConfigureAwait(false); }
+            if ((recording?.Url ?? leftBehind) is { } cancelled) { await Discard(take, EndingOwner.Rescue, cancelled).ConfigureAwait(false); }
 
             await Cleanup(take, EndingOwner.Rescue).ConfigureAwait(false);
             return;

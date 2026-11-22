@@ -256,8 +256,25 @@ internal sealed class RecordingTake
         bool drained = await Bounded(drain, budget).ConfigureAwait(false);
         if (drained)
         {
-            // Rethrows whatever broke the queue itself - that has to reach the person, not the log.
-            await drain.ConfigureAwait(false);
+            try
+            {
+                // Rethrows whatever broke the queue itself - that has to reach the person, not the log.
+                await drain.ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // The take is over all the same: nothing more is committed, the copy in memory -
+                // missing whatever the broken queue dropped - goes, and the file is closed rather
+                // than left open with nobody to close it. Whatever made it to disk stays there.
+                lock (gate)
+                {
+                    phase = Phase.Stopped;
+                    memory.Discard();
+                }
+
+                _ = CloseFailedWriter();
+                throw;
+            }
         }
         else
         {

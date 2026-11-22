@@ -240,6 +240,29 @@ public sealed class RecordingTakeTests : IDisposable
         Assert.Empty(events.Raised);
     }
 
+    /// <summary>
+    /// A queue that broke still throws from the stop - that has to reach the person - but the
+    /// take is over and its file is closed first: an open handle nobody will ever close keeps
+    /// the recording undeletable and counts against the process.
+    /// </summary>
+    [Fact]
+    public async Task TestABrokenQueueStillClosesTheTakesFile()
+    {
+        WAVWriter writer = OpenWriter();
+        var take = new RecordingTake(
+            writer,
+            maximumBufferedSamples: 30 * 16_000,
+            segmentSink: static _ => throw new InvalidOperationException("sink broke"),
+            static _ => { },
+            segmenter: Segmenter);
+        Feed(take, 0.5f, seconds: 10);
+        Feed(take, 0, seconds: 1.5);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => take.Stop(TimeSpan.FromSeconds(5)));
+
+        Assert.Throws<WAVWriter.Failure.NotOpen>(() => writer.Close());
+    }
+
     [Fact]
     public async Task TestAHealthyTakeStopsWithBothCopies()
     {

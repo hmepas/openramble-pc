@@ -195,6 +195,47 @@ public sealed class ModelUpgradeTests : IDisposable
         Assert.DoesNotContain("redownload", state.LastNotice?.Message ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Ultra fails, the old model serves, and then the old model fails too. Neither failure may
+    /// erase the other: with one remembered at a time the lineup flipped back to Ultra, every load
+    /// came back "overtaken", and the retry ladder reloaded both models forever.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WhenBothModelsFailToLoadThePreparationStopsAndSaysSo(bool runtime)
+    {
+        harness.InstallPreviousModelMarker();
+        harness.InstallModelMarker();
+        harness.EngineWarmupRetryDelay = TimeSpan.FromMilliseconds(5);
+        ASREngineError rejection = runtime
+            ? new ASREngineError.RuntimeUnavailable("libtranscribe.so not found")
+            : new ASREngineError.ModelsUnavailable("bad tensor");
+        var engine = new RejectingUltraEngine(rejection, rejectsEverything: true);
+        harness.WarmUpEngine = engine;
+        AppState state = harness.MakeState();
+
+        await state.RefreshModelState();
+        await TestWait.For(
+            "the preparation gave up",
+            () => !state.ModelStateValue.IsReady && !state.IsPreparingEngine);
+        int attempts = engine.Attempts;
+        await Task.Delay(200);
+
+        Assert.Equal(attempts, engine.Attempts);
+        Assert.False(state.IsEngineReady);
+        if (runtime)
+        {
+            Assert.IsType<ModelState.Failed>(state.ModelStateValue);
+            Assert.DoesNotContain("redownload", state.LastNotice?.Message ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Assert.IsType<ModelState.RepairRequired>(state.ModelStateValue);
+            Assert.Contains("Neither", state.LastNotice?.Message ?? string.Empty, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>With nothing to fall back to, a runtime that cannot start is not a repair either.</summary>
     [Fact]
     public async Task ARuntimeThatCannotStartIsNotOfferedAsARepair()
@@ -258,8 +299,14 @@ public sealed class RejectingUltraEngine(ASREngineError rejection, bool rejectsE
 
     public IReadOnlyList<string> LoadedDirectories { get { lock (gate) { return [.. directories]; } } }
 
+    /// <summary>Every load asked for, refused or not.</summary>
+    public int Attempts => Volatile.Read(ref attempts);
+
+    private int attempts;
+
     public Task LoadModels(string directory)
     {
+        Interlocked.Increment(ref attempts);
         if (rejectsEverything || directory.Contains("parakeet-ultra", StringComparison.Ordinal))
         {
             return Task.FromException(rejection);

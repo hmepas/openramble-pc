@@ -360,10 +360,6 @@ public sealed class DictationController
     /// </remarks>
     public int CurrentSession { get { lock (gate) { return currentSession; } } }
 
-    /// <summary>The one watchdog per take that ends a microphone which never started.</summary>
-    private CancellationTokenSource? microphoneStartWatchdog;
-    private MonotonicInstant? microphoneStartWatchdogDeadline;
-
     public DictationController(
         IAudioCapturing capture,
         Func<string, CancellationToken, Task<ASRResult>> transcribe,
@@ -469,12 +465,8 @@ public sealed class DictationController
     {
         // Second check of the same condition: between the synchronous part and
         // this line a transition between tasks has happened, during which the
-        // session could be cancelled.
-        if (!IsPreparingCurrentSession(take))
-        {
-            await FinishWithoutInsertion(take).ConfigureAwait(false);
-            return;
-        }
+        // session could be cancelled. Whoever ended it owns the cleanup.
+        if (!IsPreparingCurrentSession(take)) { return; }
 
         try
         {
@@ -486,38 +478,35 @@ public sealed class DictationController
         }
         catch (Exception error)
         {
-            await Fail(take, new DictationError.Capture(error.ToString())).ConfigureAwait(false);
+            // A start that failed on its own ends the take as an interruption of the recording.
+            // One that failed because the take was already ended is that ending's business.
+            bool claimed;
+            lock (gate) { claimed = take.TryClaimEnding(EndingOwner.Interrupt); }
+
+            if (claimed) { await Fail(take, EndingOwner.Interrupt, new DictationError.Capture(error.ToString())).ConfigureAwait(false); }
             return;
         }
 
-        // After waiting, the status is checked again - the cancellation could
+        // After waiting, the phase is checked again - the cancellation could
         // have come exactly at the moment the engine starts. Checked in the same turn of the
         // gate as the transition, so a watchdog firing in between cannot be overwritten.
         bool listening;
         lock (gate)
         {
-            listening = IsCurrent(take) && state == DictationState.Preparing && !take.CancellationRequested;
+            listening = take.TryStartListening();
             if (listening)
             {
                 take.RecordingStartedAt = now();
-                CancelMicrophoneStartWatchdog();
                 SetState(DictationState.Listening);
             }
         }
 
         if (!listening)
         {
-            // The recording has started, but the session is no longer there. We
-            // turn off our microphone - otherwise it stays on and there is
-            // nothing left to stop it - but we do not do the cleaning: it
-            // belongs to the session that is going on now.
+            // The recording has started, but the take was ended while it was starting. We turn
+            // off our microphone - otherwise it stays on and there is nothing left to stop it -
+            // and nothing else: the path that ended the take owns its notice and its cleanup.
             await capture.AbortRecording(take.Session).ConfigureAwait(false);
-            // A watchdog or a rescue may already own the take's ending and its notice; the late
-            // start must not take the cleanup out from under it.
-            bool owned;
-            lock (gate) { owned = take.Finalization is not null; }
-
-            if (!owned) { await FinishWithoutInsertion(take).ConfigureAwait(false); }
             return;
         }
 
@@ -545,7 +534,7 @@ public sealed class DictationController
     {
         lock (gate)
         {
-            return IsCurrent(take) && state == DictationState.Preparing && !take.CancellationRequested;
+            return take.Phase == TakePhase.Preparing;
         }
     }
 
@@ -601,20 +590,19 @@ public sealed class DictationController
             limited = take;
             if (limited?.Session != session) { return false; }
 
-            switch (state)
+            switch (limited.Phase)
             {
-                case DictationState.Listening:
+                case TakePhase.Listening:
                     MarkStopRequested(limited);
                     stopNow = true;
                     break;
-                case DictationState.Preparing:
+                case TakePhase.Preparing:
                     MarkStopRequested(limited);
                     limited.DeferredStopRequested = true;
                     deferred = true;
                     break;
-                case DictationState.Idle:
-                case DictationState.Transcribing:
-                case DictationState.Inserting:
+                case TakePhase.Ending:
+                case TakePhase.Done:
                     return false;
             }
         }
@@ -635,13 +623,13 @@ public sealed class DictationController
             stopping = take;
             if (stopping is null || !stopping.IsHandsFree) { return; }
 
-            switch (state)
+            switch (stopping.Phase)
             {
-                case DictationState.Listening:
+                case TakePhase.Listening:
                     MarkStopRequested(stopping);
                     stopNow = true;
                     break;
-                case DictationState.Preparing:
+                case TakePhase.Preparing:
                     // Same as releasing the key, only pressing: the second press
                     // arrived before the engine rose. Losing it is not allowed -
                     // in this mode the key is not held down and nothing else
@@ -651,9 +639,8 @@ public sealed class DictationController
                     stopping.DeferredStopRequested = true;
                     deferred = true;
                     break;
-                case DictationState.Idle:
-                case DictationState.Transcribing:
-                case DictationState.Inserting:
+                case TakePhase.Ending:
+                case TakePhase.Done:
                     break;
             }
         }
@@ -678,7 +665,7 @@ public sealed class DictationController
         lock (gate)
         {
             if (take is not { } promoted
-                || (state != DictationState.Preparing && state != DictationState.Listening)) { return; }
+                || (promoted.Phase != TakePhase.Preparing && promoted.Phase != TakePhase.Listening)) { return; }
 
             // Commit every internal mode transition before publishing the external hands-free
             // callback. That callback is reentrant and may immediately stop the session;
@@ -689,8 +676,8 @@ public sealed class DictationController
             // A tap's release may have pulled the watchdog in. That bound belonged to the tap; a
             // hands-free take is ended only by a microphone that misses the deadline from its
             // key-down.
-            CancelMicrophoneStartWatchdog();
-            if (state == DictationState.Preparing)
+            promoted.CancelMicrophoneStartWatchdog();
+            if (promoted.Phase == TakePhase.Preparing)
             {
                 ArmMicrophoneStartWatchdog(promoted, promoted.BeganAt.Advanced(microphoneStartDeadline));
             }
@@ -707,13 +694,14 @@ public sealed class DictationController
         CancellationToken token;
         lock (gate)
         {
-            // Finalization runs exactly once: otherwise the text will be inserted twice.
-            if (!IsCurrent(finishing) || finishing.Finalization is not null || state != DictationState.Listening) { return; }
+            // Finalization runs exactly once: otherwise the text will be inserted twice. Only a
+            // listening take can be finished; one whose ending is already claimed - by Escape
+            // among others - is not this stop's to finish.
+            if (!finishing.TryClaimEnding(EndingOwner.Finish)) { return; }
 
             // One entry for all the stop paths: Stop, StopHandsFree and the
             // deferred release - all of them come here.
             MarkStopRequested(finishing);
-            CancelMicrophoneStartWatchdog();
             SetState(DictationState.Transcribing);
             finishing.Finalization = new CancellationTokenSource();
             token = finishing.Finalization.Token;
@@ -730,15 +718,15 @@ public sealed class DictationController
                 // Every expected failure is handled inside, each with its own notice. This is the
                 // last line under them: whatever escaped, the take must not hold "Transcribing…"
                 // forever with the microphone free and nobody told.
-                bool current;
-                lock (gate) { current = IsCurrent(finishing); }
+                bool owned;
+                lock (gate) { owned = finishing.Owns(EndingOwner.Finish); }
 
-                if (!current) { return; }
+                if (!owned) { return; }
 
-                await Report(finishing, new DictationNotice(
+                await Report(finishing, EndingOwner.Finish, new DictationNotice(
                     kind: DictationNoticeKind.Failure,
                     message: new DictationError.Recognition("unexpected failure").UserMessage)).ConfigureAwait(false);
-                await Cleanup(finishing).ConfigureAwait(false);
+                await Cleanup(finishing, EndingOwner.Finish).ConfigureAwait(false);
             }
         });
     }
@@ -761,7 +749,7 @@ public sealed class DictationController
         bool reportNow;
         lock (gate)
         {
-            if (!IsCurrent(stopping) || state != DictationState.Preparing) { return; }
+            if (stopping.Phase != TakePhase.Preparing) { return; }
 
             TimeSpan held = stopping.BeganAt.DurationTo(MonotonicInstant.Now);
             reportNow = DictationDurationPolicy.OutcomeForShortRecording(held)
@@ -782,17 +770,17 @@ public sealed class DictationController
     /// </remarks>
     private void ArmMicrophoneStartWatchdog(Take watched, MonotonicInstant deadline)
     {
-        if (microphoneStartWatchdog is not null
-            && microphoneStartWatchdogDeadline is { } armed
+        if (watched.MicrophoneStartWatchdog is not null
+            && watched.MicrophoneStartWatchdogDeadline is { } armed
             && armed.Timestamp <= deadline.Timestamp)
         {
             return;
         }
 
-        microphoneStartWatchdog?.Cancel();
+        watched.MicrophoneStartWatchdog?.Cancel();
         var watchdog = new CancellationTokenSource();
-        microphoneStartWatchdog = watchdog;
-        microphoneStartWatchdogDeadline = deadline;
+        watched.MicrophoneStartWatchdog = watchdog;
+        watched.MicrophoneStartWatchdogDeadline = deadline;
         TimeSpan remaining = MonotonicInstant.Now.DurationTo(deadline);
         // A timer, not a task started now: nothing runs until the deadline, so arming this at the
         // key-down takes no thread away from the capture start it is watching.
@@ -801,14 +789,6 @@ public sealed class DictationController
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnRanToCompletion,
             TaskScheduler.Default);
-    }
-
-    /// <summary>The gate must be held.</summary>
-    private void CancelMicrophoneStartWatchdog()
-    {
-        microphoneStartWatchdog?.Cancel();
-        microphoneStartWatchdog = null;
-        microphoneStartWatchdogDeadline = null;
     }
 
     /// <summary>
@@ -824,23 +804,20 @@ public sealed class DictationController
     {
         lock (gate)
         {
-            if (!IsCurrent(late) || state != DictationState.Preparing || late.Finalization is not null) { return; }
+            // Claims the ending, so neither a stop nor the late start can finish it.
+            if (!late.TryClaimEnding(EndingOwner.Watchdog)) { return; }
 
-            CancelMicrophoneStartWatchdog();
-            late.CancellationRequested = true;
-            // Marks the session as ending, so neither a stop nor the late start can finish it.
-            late.Finalization = new CancellationTokenSource();
             SetState(DictationState.Transcribing);
         }
 
         late.Streamed?.Cancel();
         _ = Task.Run(async () =>
         {
-            await Report(late, new DictationNotice(
+            await Report(late, EndingOwner.Watchdog, new DictationNotice(
                 kind: DictationNoticeKind.Failure,
                 message: "Starting the microphone took too long. Dictation was stopped.",
                 wordsDidNotLand: true)).ConfigureAwait(false);
-            await Cleanup(late).ConfigureAwait(false);
+            await Cleanup(late, EndingOwner.Watchdog).ConfigureAwait(false);
         });
     }
 
@@ -950,7 +927,7 @@ public sealed class DictationController
                 OnStageFailure?.Invoke(DictationFailureStage.CaptureFreeze, freezeStarted.DurationTo(MonotonicInstant.Now), false);
             }
 
-            await Fail(take, new DictationError.Capture(error.ToString())).ConfigureAwait(false);
+            await Fail(take, EndingOwner.Finish, new DictationError.Capture(error.ToString())).ConfigureAwait(false);
             return;
         }
 
@@ -970,8 +947,8 @@ public sealed class DictationController
 
         if (!ShouldContinue(take, token))
         {
-            await Discard(take, recording.Url).ConfigureAwait(false);
-            await FinishWithoutInsertion(take).ConfigureAwait(false);
+            await Discard(take, EndingOwner.Finish, recording.Url).ConfigureAwait(false);
+            await FinishWithoutInsertion(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
 
@@ -992,18 +969,18 @@ public sealed class DictationController
 
             DictationDurationPolicy.ShortRecordingOutcome outcome =
                 DictationDurationPolicy.OutcomeForShortRecording(held);
-            await Discard(take, recording.Url).ConfigureAwait(false);
+            await Discard(take, EndingOwner.Finish, recording.Url).ConfigureAwait(false);
             switch (outcome)
             {
                 case DictationDurationPolicy.ShortRecordingOutcome.DropSilently:
-                    await FinishWithoutInsertion(take).ConfigureAwait(false);
+                    await FinishWithoutInsertion(take, EndingOwner.Finish).ConfigureAwait(false);
                     break;
                 case DictationDurationPolicy.ShortRecordingOutcome.ReportSilentInput:
-                    await Report(take, new DictationNotice(
+                    await Report(take, EndingOwner.Finish, new DictationNotice(
                         kind: DictationNoticeKind.Failure,
                         message: "The microphone recorded nothing — check that the right input device is selected and not muted."))
                         .ConfigureAwait(false);
-                    await Cleanup(take).ConfigureAwait(false);
+                    await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
                     break;
             }
 
@@ -1202,8 +1179,8 @@ public sealed class DictationController
         {
             if (!ShouldContinue(take, token))
             {
-                await Discard(take, recording.Url).ConfigureAwait(false);
-                await FinishWithoutInsertion(take).ConfigureAwait(false);
+                await Discard(take, EndingOwner.Finish, recording.Url).ConfigureAwait(false);
+                await FinishWithoutInsertion(take, EndingOwner.Finish).ConfigureAwait(false);
                 return;
             }
 
@@ -1216,8 +1193,8 @@ public sealed class DictationController
             DictationNotice failed = await PreserveForRetry(
                 recording.Url,
                 "The speech model is still getting ready; this take was not discarded.").ConfigureAwait(false);
-            await Report(take, failed).ConfigureAwait(false);
-            await Cleanup(take).ConfigureAwait(false);
+            await Report(take, EndingOwner.Finish, failed).ConfigureAwait(false);
+            await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
         catch (TranscriptionTimeout)
@@ -1225,8 +1202,8 @@ public sealed class DictationController
             ReportFallback();
             if (!ShouldContinue(take, token))
             {
-                await Discard(take, recording.Url).ConfigureAwait(false);
-                await FinishWithoutInsertion(take).ConfigureAwait(false);
+                await Discard(take, EndingOwner.Finish, recording.Url).ConfigureAwait(false);
+                await FinishWithoutInsertion(take, EndingOwner.Finish).ConfigureAwait(false);
                 return;
             }
 
@@ -1238,8 +1215,8 @@ public sealed class DictationController
             DictationNotice failed = await PreserveForRetry(
                 recording.Url,
                 "Transcribing took too long and was stopped.").ConfigureAwait(false);
-            await Report(take, failed).ConfigureAwait(false);
-            await Cleanup(take).ConfigureAwait(false);
+            await Report(take, EndingOwner.Finish, failed).ConfigureAwait(false);
+            await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
         catch (Exception error)
@@ -1256,8 +1233,8 @@ public sealed class DictationController
             ReportFallback();
             if (!ShouldContinue(take, token))
             {
-                await Discard(take, recording.Url).ConfigureAwait(false);
-                await FinishWithoutInsertion(take).ConfigureAwait(false);
+                await Discard(take, EndingOwner.Finish, recording.Url).ConfigureAwait(false);
+                await FinishWithoutInsertion(take, EndingOwner.Finish).ConfigureAwait(false);
                 return;
             }
 
@@ -1266,8 +1243,8 @@ public sealed class DictationController
             DictationNotice failed = await PreserveForRetry(
                 recording.Url,
                 new DictationError.Recognition(error.ToString()).UserMessage).ConfigureAwait(false);
-            await Report(take, failed).ConfigureAwait(false);
-            await Cleanup(take).ConfigureAwait(false);
+            await Report(take, EndingOwner.Finish, failed).ConfigureAwait(false);
+            await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
 
@@ -1284,8 +1261,8 @@ public sealed class DictationController
         // pipeline - can run for a take the person already ended.
         if (!ShouldContinue(take, token))
         {
-            await Discard(take, recording.Url).ConfigureAwait(false);
-            await FinishWithoutInsertion(take).ConfigureAwait(false);
+            await Discard(take, EndingOwner.Finish, recording.Url).ConfigureAwait(false);
+            await FinishWithoutInsertion(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
 
@@ -1332,8 +1309,8 @@ public sealed class DictationController
             DictationNotice failed = await PreserveForRetry(
                 recording.Url,
                 "The recognized text couldn't be prepared for insertion.").ConfigureAwait(false);
-            await Report(take, failed).ConfigureAwait(false);
-            await Cleanup(take).ConfigureAwait(false);
+            await Report(take, EndingOwner.Finish, failed).ConfigureAwait(false);
+            await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
 
@@ -1347,12 +1324,12 @@ public sealed class DictationController
             lock (gate) { keep = OnTakeFinished; }
 
             _ = keep?.Invoke(recognized.Text, recording.Url, insertionTarget);
-            await Discard(take, recording.Url).ConfigureAwait(false);
-            await Report(take, new DictationNotice(
+            await Discard(take, EndingOwner.Finish, recording.Url).ConfigureAwait(false);
+            await Report(take, EndingOwner.Finish, new DictationNotice(
                 kind: DictationNoticeKind.Info,
                 message: "Nothing left to insert after cleanup.",
                 wordsDidNotLand: false)).ConfigureAwait(false);
-            await Cleanup(take).ConfigureAwait(false);
+            await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
 
@@ -1389,7 +1366,7 @@ public sealed class DictationController
         lock (gate) { takeFinished = OnTakeFinished; }
 
         _ = takeFinished?.Invoke(processed.Text, recording.Url, insertionTarget);
-        await Discard(take, recording.Url).ConfigureAwait(false);
+        await Discard(take, EndingOwner.Finish, recording.Url).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1432,15 +1409,15 @@ public sealed class DictationController
 
         if (!ShouldContinue(take, token))
         {
-            await Discard(take, url).ConfigureAwait(false);
-            await FinishWithoutInsertion(take).ConfigureAwait(false);
+            await Discard(take, EndingOwner.Finish, url).ConfigureAwait(false);
+            await FinishWithoutInsertion(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
 
         DictationNotice notice;
         if (heardOnlySilence == true)
         {
-            await Discard(take, url).ConfigureAwait(false);
+            await Discard(take, EndingOwner.Finish, url).ConfigureAwait(false);
             Func<string?>? microphoneName;
             lock (gate) { microphoneName = MicrophoneName; }
 
@@ -1460,7 +1437,7 @@ public sealed class DictationController
             lock (gate) { takeFinished = OnTakeFinished; }
 
             bool kept = takeFinished?.Invoke(string.Empty, url, target) == true;
-            if (kept) { await Discard(take, url).ConfigureAwait(false); }
+            if (kept) { await Discard(take, EndingOwner.Finish, url).ConfigureAwait(false); }
 
             notice = new DictationNotice(
                 kind: DictationNoticeKind.Info,
@@ -1471,8 +1448,8 @@ public sealed class DictationController
                 wordsDidNotLand: true);
         }
 
-        await Report(take, notice).ConfigureAwait(false);
-        await Cleanup(take).ConfigureAwait(false);
+        await Report(take, EndingOwner.Finish, notice).ConfigureAwait(false);
+        await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1599,16 +1576,16 @@ public sealed class DictationController
 
         if (!ShouldContinue(take, token))
         {
-            await FinishWithoutInsertion(take).ConfigureAwait(false);
+            await FinishWithoutInsertion(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
 
-        await Report(take, new DictationNotice(
+        await Report(take, EndingOwner.Finish, new DictationNotice(
             kind: DictationNoticeKind.Failure,
             message: "The microphone didn't stop when the key was released, so this dictation was "
                 + "dropped. Restarting OpenRamble usually fixes this.",
             wordsDidNotLand: true)).ConfigureAwait(false);
-        await Cleanup(take).ConfigureAwait(false);
+        await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1647,7 +1624,8 @@ public sealed class DictationController
     {
         lock (gate)
         {
-            if (!IsCurrent(take)) { return; }
+            // Escape may have taken the ending over; from here on it cannot.
+            if (!take.Owns(EndingOwner.Finish)) { return; }
 
             SetState(DictationState.Inserting);
         }
@@ -1661,7 +1639,7 @@ public sealed class DictationController
         // into someone else's application and does not respond.
         if (!ShouldContinue(take, token))
         {
-            await FinishWithoutInsertion(take).ConfigureAwait(false);
+            await FinishWithoutInsertion(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
 
@@ -1726,7 +1704,7 @@ public sealed class DictationController
             if (!ShouldContinue(take, token)) { return; }
         }
 
-        await Cleanup(take).ConfigureAwait(false);
+        await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1739,12 +1717,12 @@ public sealed class DictationController
     {
         lock (gate) { pendingRecovery = new RecoveredDictation(text); }
 
-        await Report(take, new DictationNotice(
+        await Report(take, EndingOwner.Finish, new DictationNotice(
             kind: DictationNoticeKind.Warning,
             message: "Insertion couldn't be confirmed in time. The text is saved in the menu and may already have been pasted.",
             recoverableText: text,
             wordsDidNotLand: true)).ConfigureAwait(false);
-        await Cleanup(take).ConfigureAwait(false);
+        await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1756,10 +1734,10 @@ public sealed class DictationController
     /// </summary>
     private async Task ReportReturnFailure(Take take)
     {
-        await Report(take, new DictationNotice(
+        await Report(take, EndingOwner.Finish, new DictationNotice(
             kind: DictationNoticeKind.Warning,
             message: "The text was inserted, but pressing Return failed.")).ConfigureAwait(false);
-        await Cleanup(take).ConfigureAwait(false);
+        await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
     }
 
     /// <summary>The text was recognized, but could not be inserted - we keep it so that it does not disappear.</summary>
@@ -1767,11 +1745,11 @@ public sealed class DictationController
     {
         if (error is TextInsertionError.InsertedButClipboardRestoreFailed)
         {
-            await Report(take, new DictationNotice(
+            await Report(take, EndingOwner.Finish, new DictationNotice(
                 kind: DictationNoticeKind.Warning,
                 message: "The text was inserted, but the previous clipboard couldn't be restored."))
                 .ConfigureAwait(false);
-            await Cleanup(take).ConfigureAwait(false);
+            await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
             return;
         }
 
@@ -1782,12 +1760,12 @@ public sealed class DictationController
             ? "Text not inserted: secure input is active. Your text is saved in the menu."
             : "The text couldn't be inserted. It's saved in the menu.";
 
-        await Report(take, new DictationNotice(
+        await Report(take, EndingOwner.Finish, new DictationNotice(
             kind: DictationNoticeKind.Warning,
             message: message,
             recoverableText: text,
             wordsDidNotLand: true)).ConfigureAwait(false);
-        await Cleanup(take).ConfigureAwait(false);
+        await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
     }
 
     // MARK: - Cancel
@@ -1802,10 +1780,12 @@ public sealed class DictationController
             cancelled = take;
             if (cancelled is null || !DictationStopPolicy.CanCancel(state)) { return; }
 
-            // The order is important: first the flag, then cancel the task.
+            // The order is important: first the claim, then cancel the task.
             // Cancelling a task does not interrupt an already ongoing wait, and
-            // the flag is checked after each of them.
-            cancelled.CancellationRequested = true;
+            // the ownership is checked after each of them. A stop, a watchdog or a rescue
+            // already under way hands its ending over: from here on it speaks for nothing.
+            if (!cancelled.TryClaimEnding(EndingOwner.Cancel)) { return; }
+
             running = cancelled.Finalization;
         }
 
@@ -1819,7 +1799,7 @@ public sealed class DictationController
         _ = Task.Run(async () =>
         {
             await AbortWithinGrace(cancelled).ConfigureAwait(false);
-            await FinishWithoutInsertion(cancelled).ConfigureAwait(false);
+            await FinishWithoutInsertion(cancelled, EndingOwner.Cancel).ConfigureAwait(false);
         });
     }
 
@@ -1872,28 +1852,22 @@ public sealed class DictationController
     /// </summary>
     public void Interrupt(int session, string reason)
     {
-        CancellationTokenSource? running;
         Take? interrupted;
         lock (gate)
         {
             interrupted = take;
-            if (interrupted?.Session != session) { return; }
-            if (state != DictationState.Preparing && state != DictationState.Listening) { return; }
-
-            interrupted.CancellationRequested = true;
-            running = interrupted.Finalization;
+            // Only a take still preparing or listening: one already ending has its own outcome.
+            if (interrupted?.Session != session || !interrupted.TryClaimEnding(EndingOwner.Interrupt)) { return; }
         }
-
-        running?.Cancel();
 
         var notice = new DictationNotice(kind: DictationNoticeKind.Failure, message: reason);
         _ = Task.Run(async () =>
         {
             // Through Report: the interruption loses the words, and the person
             // mid-sentence learns of it by ear like any other loss.
-            await Report(interrupted, notice).ConfigureAwait(false);
+            await Report(interrupted, EndingOwner.Interrupt, notice).ConfigureAwait(false);
             await AbortWithinGrace(interrupted).ConfigureAwait(false);
-            await FinishWithoutInsertion(interrupted).ConfigureAwait(false);
+            await FinishWithoutInsertion(interrupted, EndingOwner.Interrupt).ConfigureAwait(false);
         });
     }
 
@@ -1908,26 +1882,25 @@ public sealed class DictationController
         lock (gate)
         {
             preserved = take;
-            if (preserved is null
-                || (state != DictationState.Preparing && state != DictationState.Listening)) { return; }
+            if (preserved is null) { return; }
 
-            if (state == DictationState.Listening)
+            // A listening take has a recording to keep.
+            if (preserved.TryClaimEnding(EndingOwner.Rescue))
             {
-                if (preserved.Finalization is not null) { return; }
-
                 SetState(DictationState.Transcribing);
                 preserved.Finalization = new CancellationTokenSource();
                 CancellationToken token = preserved.Finalization.Token;
                 _ = Task.Run(() => Rescue(reason, preserved, token));
                 return;
             }
+
+            if (preserved.Phase != TakePhase.Preparing) { return; }
         }
 
-        Cancel();
-        var notice = new DictationNotice(kind: DictationNoticeKind.Failure, message: reason);
-        // Through Report, not around it: the notice must carry the attention
+        // A take still preparing has recorded nothing to keep. It ends as an interrupted one,
+        // with the reason as its notice - through Report, so the notice carries the attention
         // sound like every other surfaced failure.
-        _ = Task.Run(() => Report(preserved, notice));
+        Interrupt(preserved.Session, reason);
     }
 
     private async Task Rescue(string reason, Take take, CancellationToken token)
@@ -1968,9 +1941,9 @@ public sealed class DictationController
         // session the person started next.
         if (token.IsCancellationRequested)
         {
-            if (recording is { } cancelled) { await Discard(take, cancelled.Url).ConfigureAwait(false); }
+            if (recording is { } cancelled) { await Discard(take, EndingOwner.Rescue, cancelled.Url).ConfigureAwait(false); }
 
-            await Cleanup(take).ConfigureAwait(false);
+            await Cleanup(take, EndingOwner.Rescue).ConfigureAwait(false);
             return;
         }
 
@@ -1982,7 +1955,7 @@ public sealed class DictationController
             // fragments silently - here we name the reason of the interruption
             // and nothing else, otherwise a one-second device hiccup leaves a
             // "recording for retry" whose retry can only ever produce an empty result.
-            await Discard(take, fragment.Url).ConfigureAwait(false);
+            await Discard(take, EndingOwner.Rescue, fragment.Url).ConfigureAwait(false);
             notice = new DictationNotice(kind: DictationNoticeKind.Failure, message: reason);
         }
         else
@@ -2009,8 +1982,8 @@ public sealed class DictationController
                 recoveryAudio: saved);
         }
 
-        await Report(take, notice).ConfigureAwait(false);
-        await Cleanup(take).ConfigureAwait(false);
+        await Report(take, EndingOwner.Rescue, notice).ConfigureAwait(false);
+        await Cleanup(take, EndingOwner.Rescue).ConfigureAwait(false);
     }
 
     // MARK: - Completion
@@ -2018,6 +1991,7 @@ public sealed class DictationController
     /// <summary>Is the take for which the wait began still ongoing? The gate must be held.</summary>
     private bool IsCurrent(Take waiting) => ReferenceEquals(take, waiting);
 
+    /// <summary>Whether the stop still owns the ending of its take and should carry it on.</summary>
     private bool ShouldContinue(Take waiting, CancellationToken token)
     {
         lock (gate)
@@ -2026,28 +2000,26 @@ public sealed class DictationController
 
             return DictationFinalizationPolicy.ShouldContinue(
                 state,
-                waiting.CancellationRequested,
+                cancellationRequested: !waiting.Owns(EndingOwner.Finish),
                 token.IsCancellationRequested);
         }
     }
 
-    private async Task Fail(Take failed, DictationError error)
+    /// <summary>
+    /// There is no reason to show the failure of a cancelled session: the person has already
+    /// closed it, and the message would fall on top of the one that is going on now. Report and
+    /// Cleanup speak only for the owner of the ending, so a failure caused by Escape's own abort
+    /// stays silent.
+    /// </summary>
+    private async Task Fail(Take failed, EndingOwner owner, DictationError error)
     {
-        // There is no reason to show the failure of a cancelled session: the
-        // person has already closed it, and the message would fall on top of the
-        // one that is going on now.
-        lock (gate)
-        {
-            if (!IsCurrent(failed)) { return; }
-        }
-
-        await Report(failed, new DictationNotice(
+        await Report(failed, owner, new DictationNotice(
             kind: DictationNoticeKind.Failure,
             message: error.UserMessage)).ConfigureAwait(false);
-        await Cleanup(failed).ConfigureAwait(false);
+        await Cleanup(failed, owner).ConfigureAwait(false);
     }
 
-    private Task FinishWithoutInsertion(Take finished) => Cleanup(finished);
+    private Task FinishWithoutInsertion(Take finished, EndingOwner owner) => Cleanup(finished, owner);
 
     /// <summary>
     /// Cleaning after the session, in strict order.
@@ -2058,12 +2030,15 @@ public sealed class DictationController
     ///
     /// You can only clean up your own session: the tail of a previous one, woken
     /// after a cancellation, would otherwise put out the new one already in progress.
+    /// And only the path that owns the ending cleans up, exactly once: a second cleanup's
+    /// dismiss could land on the next take's panel.
     /// </summary>
-    private async Task Cleanup(Take finished)
+    private async Task Cleanup(Take finished, EndingOwner owner)
     {
         lock (gate)
         {
-            if (!IsCurrent(finished)) { return; }
+            // From here the ending is committed: nothing can take it over any more.
+            if (!finished.TryCompleteEnding(owner)) { return; }
         }
 
         // The terminal panel command goes out while this session is still current, before any
@@ -2073,9 +2048,8 @@ public sealed class DictationController
 
         lock (gate)
         {
-            if (!IsCurrent(finished)) { return; }
-
-            CancelMicrophoneStartWatchdog();
+            // Only the completed take's own cleanup gets here, and no take can begin before it
+            // sets Idle below: the field still holds this take.
             // The whole session state goes with its take: the release mark, the hands-free mode,
             // the target, the stream, the sound already played. Nothing of it can flow into the
             // next one, and nothing still holding this take can reach the next one through it.
@@ -2099,11 +2073,17 @@ public sealed class DictationController
     /// The only way messages exit from the kernel - the attention sound rides on
     /// it, so a path around <see cref="Report"/> is a path around the ear.
     /// </summary>
-    private async Task Report(Take take, DictationNotice notice)
+    /// <param name="owner">
+    /// The path speaking. Only the owner of the take's ending speaks for it - before its cleanup
+    /// and after, as a recording that could not be deleted still needs saying.
+    /// </param>
+    private async Task Report(Take take, EndingOwner owner, DictationNotice notice)
     {
         bool sound;
         lock (gate)
         {
+            if (take.Owner != owner) { return; }
+
             OnNotice?.Invoke(notice);
             // One sound per session, and only for words that never landed.
             //
@@ -2126,7 +2106,7 @@ public sealed class DictationController
     /// of the completion branches: the user's voice should not remain in files
     /// after the text is recognized.
     /// </summary>
-    private async Task Discard(Take take, string url)
+    private async Task Discard(Take take, EndingOwner owner, string url)
     {
         if (!File.Exists(url)) { return; }
 
@@ -2142,7 +2122,7 @@ public sealed class DictationController
 
         if (failure is not null)
         {
-            await Report(take, DictationNotice.ForException(
+            await Report(take, owner, DictationNotice.ForException(
                 DictationNoticeKind.Failure,
                 "Couldn't delete the local recording",
                 failure)).ConfigureAwait(false);
@@ -2167,6 +2147,39 @@ public sealed class DictationController
     /// may still try to write it.
     /// </para>
     /// </remarks>
+    /// <summary>The life of one take: Preparing → Listening → Ending(owner) → Done.</summary>
+    /// <remarks>
+    /// Preparing may go straight to Ending when the microphone never opens or the take is ended
+    /// before it does. The controller-wide <see cref="DictationState"/> is what the person sees;
+    /// this is who may still act on the take.
+    /// </remarks>
+    private enum TakePhase
+    {
+        Preparing,
+        Listening,
+        Ending,
+        Done,
+    }
+
+    /// <summary>Which path claimed the end of a take.</summary>
+    private enum EndingOwner
+    {
+        /// <summary>The release: recognition and insertion.</summary>
+        Finish,
+
+        /// <summary>The microphone did not open in time.</summary>
+        Watchdog,
+
+        /// <summary>The device or the permission went away mid-take; the recording is kept.</summary>
+        Rescue,
+
+        /// <summary>Escape.</summary>
+        Cancel,
+
+        /// <summary>The recording failed on its own, including a start that threw.</summary>
+        Interrupt,
+    }
+
     private sealed class Take
     {
         private readonly TaskCompletionSource<TargetApplication?> target =
@@ -2210,21 +2223,90 @@ public sealed class DictationController
         /// </summary>
         public bool DeferredStopRequested { get; set; }
 
-        public bool CancellationRequested { get; set; }
-
         /// <summary>Whether this take has already asked for the person's attention.</summary>
         public bool HasSounded { get; set; }
 
         /// <summary>
         /// The Swift original keeps the finalization <c>Task</c> to cancel it; here the
-        /// cancellation source alone carries that meaning, and its presence is the
-        /// "finalization is running" flag.
+        /// cancellation source alone carries that meaning. Present once a stop or a rescue owns
+        /// the ending; a cancellation that takes the ending over trips it. Who owns the ending is
+        /// <see cref="Owner"/>, not this.
         /// </summary>
         /// <remarks>
         /// Deliberately never disposed: cancellation registrations of an abandoned
         /// transcription outlive the session that started it.
         /// </remarks>
         public CancellationTokenSource? Finalization { get; set; }
+
+        /// <summary>
+        /// Where the take is. Moves only forward and only under the controller's gate. A take
+        /// that is not <see cref="TakePhase.Done"/> is the controller's current one.
+        /// </summary>
+        public TakePhase Phase { get; private set; } = TakePhase.Preparing;
+
+        /// <summary>
+        /// The path that ends the take, from the moment it claimed the ending. It alone speaks
+        /// for the take and cleans it up.
+        /// </summary>
+        public EndingOwner? Owner { get; private set; }
+
+        /// <summary>The one watchdog that ends this take's microphone if it never starts.</summary>
+        public CancellationTokenSource? MicrophoneStartWatchdog { get; set; }
+
+        public MonotonicInstant? MicrophoneStartWatchdogDeadline { get; set; }
+
+        /// <summary>The gate must be held. The microphone opened: Preparing → Listening.</summary>
+        public bool TryStartListening()
+        {
+            if (Phase != TakePhase.Preparing) { return false; }
+
+            Phase = TakePhase.Listening;
+            CancelMicrophoneStartWatchdog();
+            return true;
+        }
+
+        /// <summary>
+        /// The gate must be held. Claim the ending for <paramref name="claimant"/>, if this phase
+        /// lets it: a stop and a rescue need a listening take, the watchdog a preparing one, and
+        /// a cancellation may take over a stop, a rescue or a watchdog still under way - Escape is
+        /// what ends a wedge.
+        /// </summary>
+        public bool TryClaimEnding(EndingOwner claimant)
+        {
+            bool allowed = (Phase, claimant) switch
+            {
+                (TakePhase.Preparing, EndingOwner.Watchdog or EndingOwner.Cancel or EndingOwner.Interrupt) => true,
+                (TakePhase.Listening, EndingOwner.Finish or EndingOwner.Rescue or EndingOwner.Cancel or EndingOwner.Interrupt) => true,
+                (TakePhase.Ending, EndingOwner.Cancel) => Owner is EndingOwner.Finish or EndingOwner.Rescue or EndingOwner.Watchdog,
+                _ => false,
+            };
+            if (!allowed) { return false; }
+
+            Phase = TakePhase.Ending;
+            Owner = claimant;
+            CancelMicrophoneStartWatchdog();
+            return true;
+        }
+
+        /// <summary>The gate must be held. Whether <paramref name="owner"/> is ending the take right now.</summary>
+        public bool Owns(EndingOwner owner) => Phase == TakePhase.Ending && Owner == owner;
+
+        /// <summary>The gate must be held. The owner's cleanup begins: Ending → Done.</summary>
+        public bool TryCompleteEnding(EndingOwner owner)
+        {
+            if (!Owns(owner)) { return false; }
+
+            Phase = TakePhase.Done;
+            return true;
+        }
+
+        /// <summary>The gate must be held.</summary>
+        public void CancelMicrophoneStartWatchdog()
+        {
+            MicrophoneStartWatchdog?.Cancel();
+            MicrophoneStartWatchdog = null;
+            MicrophoneStartWatchdogDeadline = null;
+        }
 
         public DateTimeOffset? RecordingStartedAt { get; set; }
 

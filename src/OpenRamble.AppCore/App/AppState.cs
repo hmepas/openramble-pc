@@ -53,6 +53,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly IHostOnlyClipboard? clipboard;
     private readonly IFolderOpening? folders;
     private readonly Func<bool> layoutHasAltGraph;
+    private readonly Func<DictationHotkey, bool> hotkeySourceSwallowsKey;
+    private readonly Func<bool> keydFoldsRightModifiers;
     private readonly string? hotkeySettingsHint;
     private readonly MicrophoneRemedy microphoneRemedy;
     private readonly Func<DateTimeOffset> now;
@@ -101,6 +103,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         clipboard = environment.Clipboard;
         folders = environment.Folders;
         layoutHasAltGraph = environment.LayoutHasAltGraph ?? (static () => false);
+        hotkeySourceSwallowsKey = environment.HotkeySourceSwallowsKey ?? (static _ => true);
+        keydFoldsRightModifiers = environment.KeydFoldsRightModifiers ?? (static () => false);
         hotkeySettingsHint = environment.HotkeySettingsHint;
         microphoneRemedy = environment.MicrophoneRemedy;
         now = environment.Now ?? (static () => DateTimeOffset.Now);

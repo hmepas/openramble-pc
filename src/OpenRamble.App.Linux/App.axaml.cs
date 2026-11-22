@@ -195,6 +195,11 @@ public sealed partial class App : Application
             Folders = new FolderOpening(),
             LayoutHasAltGraph = KeyboardLayoutFacts.HasAltGraph,
             HotkeySettingsHint = HotkeyAdvice.LinuxSettingsHint,
+            // evdev reads alongside and never grabs, so the key still reaches everything else. With
+            // no keyboard open the only way in is a compositor keybind on the control socket, and
+            // a keybind consumes its key.
+            HotkeySourceSwallowsKey = _ => !monitor.IsRunning,
+            KeydFoldsRightModifiers = Keyd.FoldsRightModifiers,
             MicrophoneRemedy = MicrophoneRemedy.Linux,
         });
 

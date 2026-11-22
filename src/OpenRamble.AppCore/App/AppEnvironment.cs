@@ -108,13 +108,13 @@ public sealed class AppEnvironment
     public IFolderOpening? Folders { get; init; }
 
     /// <summary>
-    /// Whether the active keyboard layout composes with Right Alt - one of the two facts
+    /// Whether the active keyboard layout composes with Right Alt - one of the facts
     /// <see cref="HotkeyAdvice"/> cannot work out on its own.
     /// </summary>
     public Func<bool>? LayoutHasAltGraph { get; init; }
 
     /// <summary>
-    /// The other one: the sentence that says where the system setting owning the key is changed.
+    /// Another: the sentence that says where the system setting owning the key is changed.
     /// <c>null</c> leaves the warning without it, which is what a platform with no single
     /// settings page deserves.
     /// </summary>
@@ -125,6 +125,19 @@ public sealed class AppEnvironment
     /// the warning is shared, because every other word is true on both.
     /// </remarks>
     public string? HotkeySettingsHint { get; init; }
+
+    /// <summary>
+    /// Whether the hotkey source keeps the given key's events from the rest of the system - the
+    /// difference between "Right Alt still composes" and "Right Alt is gone". <c>null</c> answers
+    /// yes, so a build that forgot it warns rather than stays silent.
+    /// </summary>
+    public Func<DictationHotkey, bool>? HotkeySourceSwallowsKey { get; init; }
+
+    /// <summary>
+    /// Whether keyd's virtual keyboard is present, folding Right Ctrl and Right Shift into their
+    /// left codes. <c>null</c> answers no: only Linux has keyd to look for.
+    /// </summary>
+    public Func<bool>? KeydFoldsRightModifiers { get; init; }
 
     /// <summary>
     /// The same kind of fact for the microphone: what to tell a person whose microphone will not

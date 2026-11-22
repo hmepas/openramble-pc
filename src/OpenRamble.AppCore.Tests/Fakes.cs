@@ -857,6 +857,14 @@ public sealed class AppHarness : IDisposable
     public bool LayoutHasAltGraph { get; set; }
 
     /// <summary>
+    /// Whether the hotkey source swallows the key. <c>true</c> by default - the same answer the
+    /// production environment gives when nobody wires it.
+    /// </summary>
+    public bool HotkeySourceSwallowsKey { get; set; } = true;
+
+    public bool KeydFoldsRightModifiers { get; set; }
+
+    /// <summary>
     /// The platform sentence appended to a hotkey warning. <c>null</c> by default, because the
     /// fake environment is on no platform in particular and the shared half of the warning is
     /// what nearly every test is about.
@@ -915,6 +923,8 @@ public sealed class AppHarness : IDisposable
             Clipboard = Clipboard,
             Folders = Folders,
             LayoutHasAltGraph = () => LayoutHasAltGraph,
+            HotkeySourceSwallowsKey = _ => HotkeySourceSwallowsKey,
+            KeydFoldsRightModifiers = () => KeydFoldsRightModifiers,
             HotkeySettingsHint = HotkeySettingsHint,
             MicrophoneRemedy = MicrophoneRemedy,
         });

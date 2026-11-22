@@ -58,6 +58,13 @@ internal static class InputDeviceCatalog
     /// </remarks>
     private const ulong TypingKeyMask = 0xFFFF_FFFEUL;
 
+    /// <summary>What keyd names the virtual keyboard it re-emits every grabbed key through.</summary>
+    public const string KeydVirtualKeyboardName = "keyd virtual keyboard";
+
+    /// <summary>Whether keyd's virtual keyboard is among <paramref name="keyboards"/>.</summary>
+    public static bool HasKeydVirtualKeyboard(IReadOnlyList<KeyboardDevice> keyboards) =>
+        keyboards.Any(device => device.Name == KeydVirtualKeyboardName);
+
     /// <summary>Read the machine's keyboards, or nothing if the kernel's list cannot be read.</summary>
     /// <remarks>
     /// An unreadable proc file is not a failure worth throwing over: the caller's next question -
@@ -183,4 +190,19 @@ internal static class InputDeviceCatalog
         ulong.TryParse(word, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong value)
             ? value
             : 0;
+}
+
+/// <summary>
+/// Whether keyd is remapping this machine's keyboards.
+/// </summary>
+/// <remarks>
+/// keyd grabs the physical keyboards and re-emits every key through its own virtual keyboard, with
+/// Right Ctrl and Right Shift folded into the left codes - so on such a machine those two keys
+/// never arrive as themselves. Its virtual keyboard appearing in the kernel's device list is the
+/// sign, read from the same world-readable file the monitor enumerates, so it needs no group.
+/// </remarks>
+public static class Keyd
+{
+    public static bool FoldsRightModifiers() =>
+        InputDeviceCatalog.HasKeydVirtualKeyboard(InputDeviceCatalog.Read());
 }

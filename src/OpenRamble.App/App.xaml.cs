@@ -140,6 +140,8 @@ public partial class App : Application
             Folders = new FolderOpening(),
             LayoutHasAltGraph = KeyboardLayoutFacts.HasAltGraph,
             HotkeySettingsHint = HotkeyAdvice.WindowsSettingsHint,
+            // Exactly what HotkeyMonitor tells the hook to swallow; every other key passes on.
+            HotkeySourceSwallowsKey = static hotkey => hotkey.NeedsSuppression,
             MicrophoneRemedy = MicrophoneRemedy.Windows,
         });
 

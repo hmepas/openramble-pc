@@ -791,6 +791,25 @@ public sealed class AppStateTests : IDisposable
             StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The environment's keyboard facts reach the warning: keyd folding Right Ctrl, and a source
+    /// that leaves Right Alt alone.
+    /// </summary>
+    [Fact]
+    public void TheHotkeyWarningFollowsTheEnvironmentsKeyboardFacts()
+    {
+        harness.KeydFoldsRightModifiers = true;
+        harness.LayoutHasAltGraph = true;
+        harness.HotkeySourceSwallowsKey = false;
+        AppState state = harness.MakeState();
+
+        Assert.Contains("keyd", Assert.IsType<string>(state.HotkeyWarning), StringComparison.Ordinal);
+
+        state.Hotkey = DictationHotkey.RightAlt;
+
+        Assert.Null(state.HotkeyWarning);
+    }
+
     /// <summary>Start at login is off until a person says otherwise.</summary>
     [Fact]
     public void LaunchAtLoginIsOffByDefaultAndReachesTheSystem()

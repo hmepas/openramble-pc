@@ -18,13 +18,13 @@ public sealed class HotkeyAdviceTests
     [Fact]
     public void Scenario001()
     {
-        Assert.Equal(KeyUsage.Free, KeyUsageInfo.Of(DictationHotkey.RightCtrl, layoutHasAltGraph: true));
-        Assert.Equal(KeyUsage.AltGraph, KeyUsageInfo.Of(DictationHotkey.RightAlt, layoutHasAltGraph: true));
-        Assert.Equal(KeyUsage.Free, KeyUsageInfo.Of(DictationHotkey.RightAlt, layoutHasAltGraph: false));
-        Assert.Equal(KeyUsage.CapsLockToggle, KeyUsageInfo.Of(DictationHotkey.CapsLock, layoutHasAltGraph: false));
+        Assert.Equal(KeyUsage.Free, KeyUsageInfo.Of(DictationHotkey.RightCtrl, layoutHasAltGraph: true, sourceSwallowsKey: true, keydFoldsRightModifiers: false));
+        Assert.Equal(KeyUsage.AltGraph, KeyUsageInfo.Of(DictationHotkey.RightAlt, layoutHasAltGraph: true, sourceSwallowsKey: true, keydFoldsRightModifiers: false));
+        Assert.Equal(KeyUsage.Free, KeyUsageInfo.Of(DictationHotkey.RightAlt, layoutHasAltGraph: false, sourceSwallowsKey: true, keydFoldsRightModifiers: false));
+        Assert.Equal(KeyUsage.CapsLockToggle, KeyUsageInfo.Of(DictationHotkey.CapsLock, layoutHasAltGraph: false, sourceSwallowsKey: true, keydFoldsRightModifiers: false));
         Assert.Equal(
             KeyUsage.MissingOnManyKeyboards,
-            KeyUsageInfo.Of(DictationHotkey.F13, layoutHasAltGraph: false));
+            KeyUsageInfo.Of(DictationHotkey.F13, layoutHasAltGraph: false, sourceSwallowsKey: true, keydFoldsRightModifiers: false));
     }
 
     /// <summary>
@@ -100,10 +100,10 @@ public sealed class HotkeyAdviceTests
     {
         Assert.Equal(
             KeyUsage.Free,
-            KeyUsageInfo.Of(DictationHotkey.RightShift, layoutHasAltGraph: true));
+            KeyUsageInfo.Of(DictationHotkey.RightShift, layoutHasAltGraph: true, sourceSwallowsKey: true, keydFoldsRightModifiers: false));
         Assert.Equal(
             KeyUsage.Free,
-            KeyUsageInfo.Of(DictationHotkey.RightShift, layoutHasAltGraph: false));
+            KeyUsageInfo.Of(DictationHotkey.RightShift, layoutHasAltGraph: false, sourceSwallowsKey: true, keydFoldsRightModifiers: false));
         Assert.Null(HotkeyAdvice.Warning(DictationHotkey.RightShift, KeyUsage.Free, WindowsHint));
     }
 
@@ -124,7 +124,7 @@ public sealed class HotkeyAdviceTests
         {
             Assert.NotEqual(
                 KeyUsage.Unknown,
-                KeyUsageInfo.Of(hotkey, layoutHasAltGraph: false));
+                KeyUsageInfo.Of(hotkey, layoutHasAltGraph: false, sourceSwallowsKey: true, keydFoldsRightModifiers: false));
             Assert.True(
                 codes.Add(WindowsHotkeyKeymap.Instance.CodeFor(hotkey)),
                 $"{hotkey.Title} shares a key code");
@@ -204,5 +204,88 @@ public sealed class HotkeyAdviceTests
         Assert.Equal(
             HotkeyAdvice.Warning(DictationHotkey.F13, KeyUsage.MissingOnManyKeyboards, WindowsHint),
             HotkeyAdvice.Warning(DictationHotkey.F13, KeyUsage.MissingOnManyKeyboards, settingsHint: null));
+    }
+
+    // MARK: - What the machine does with the key
+
+    /// <summary>
+    /// keyd re-sends Right Ctrl and Right Shift as their left twins: the right key never arrives,
+    /// and the warning says so and names the keys that do.
+    /// </summary>
+    [Theory]
+    [InlineData(DictationHotkey.RightCtrl, "Left Ctrl")]
+    [InlineData(DictationHotkey.RightShift, "Left Shift")]
+    public void KeydFoldingARightModifierWarnsAndNamesTheLeftTwin(DictationHotkey hotkey, string twin)
+    {
+        KeyUsage usage = KeyUsageInfo.Of(
+            hotkey, layoutHasAltGraph: false, sourceSwallowsKey: false, keydFoldsRightModifiers: true);
+        Assert.Equal(KeyUsage.FoldedIntoLeftTwin, usage);
+
+        string warning = Assert.IsType<string>(
+            HotkeyAdvice.Warning(hotkey, usage, HotkeyAdvice.LinuxSettingsHint));
+        Assert.Contains("keyd", warning, StringComparison.Ordinal);
+        Assert.Contains($"re-sends {hotkey.Title} as {twin}", warning, StringComparison.Ordinal);
+        Assert.Contains("Right Alt", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(HotkeyAdvice.LinuxSettingsHint, warning, StringComparison.Ordinal);
+    }
+
+    /// <summary>The keys keyd folds into are exactly the ones that still arrive.</summary>
+    [Theory]
+    [InlineData(DictationHotkey.LeftCtrl)]
+    [InlineData(DictationHotkey.LeftShift)]
+    public void KeydLeavesTheLeftKeysFree(DictationHotkey hotkey)
+    {
+        KeyUsage usage = KeyUsageInfo.Of(
+            hotkey, layoutHasAltGraph: true, sourceSwallowsKey: false, keydFoldsRightModifiers: true);
+
+        Assert.Equal(KeyUsage.Free, usage);
+        Assert.Null(HotkeyAdvice.Warning(hotkey, usage, HotkeyAdvice.LinuxSettingsHint));
+    }
+
+    [Fact]
+    public void WithoutKeydRightCtrlIsFree()
+    {
+        KeyUsage usage = KeyUsageInfo.Of(
+            DictationHotkey.RightCtrl,
+            layoutHasAltGraph: true,
+            sourceSwallowsKey: false,
+            keydFoldsRightModifiers: false);
+
+        Assert.Equal(KeyUsage.Free, usage);
+        Assert.Null(HotkeyAdvice.Warning(DictationHotkey.RightCtrl, usage, HotkeyAdvice.LinuxSettingsHint));
+    }
+
+    /// <summary>
+    /// A source that reads alongside - evdev, or the Windows hook for anything but Caps Lock -
+    /// leaves AltGr composing, and Right Alt plus a key is a chord that ends the hold. Nothing
+    /// to warn about, even on a layout that has AltGr.
+    /// </summary>
+    [Fact]
+    public void RightAltOnASourceThatDoesNotSwallowItIsFree()
+    {
+        KeyUsage usage = KeyUsageInfo.Of(
+            DictationHotkey.RightAlt,
+            layoutHasAltGraph: true,
+            sourceSwallowsKey: false,
+            keydFoldsRightModifiers: false);
+
+        Assert.Equal(KeyUsage.Free, usage);
+        Assert.Null(HotkeyAdvice.Warning(DictationHotkey.RightAlt, usage, HotkeyAdvice.LinuxSettingsHint));
+    }
+
+    /// <summary>A source that takes the key - a compositor keybind - does cost AltGr.</summary>
+    [Fact]
+    public void RightAltOnASwallowingSourceWithAnAltGraphLayoutWarns()
+    {
+        KeyUsage usage = KeyUsageInfo.Of(
+            DictationHotkey.RightAlt,
+            layoutHasAltGraph: true,
+            sourceSwallowsKey: true,
+            keydFoldsRightModifiers: false);
+
+        Assert.Equal(KeyUsage.AltGraph, usage);
+        string warning = Assert.IsType<string>(
+            HotkeyAdvice.Warning(DictationHotkey.RightAlt, usage, HotkeyAdvice.LinuxSettingsHint));
+        Assert.Contains("AltGr character composition", warning, StringComparison.Ordinal);
     }
 }

@@ -132,6 +132,15 @@ public sealed class InputDeviceCatalogTests
     }
 
     [Fact]
+    public void KeydIsRecognisedByItsVirtualKeyboard()
+    {
+        Assert.True(InputDeviceCatalog.HasKeydVirtualKeyboard(
+            InputDeviceCatalog.Parse(Catalog(UsbKeyboard, VirtualKeyboard))));
+        Assert.False(InputDeviceCatalog.HasKeydVirtualKeyboard(
+            InputDeviceCatalog.Parse(Catalog(UsbKeyboard, Mouse))));
+    }
+
+    [Fact]
     public void EveryKeyboardInTheFileIsFoundAndNothingElseIs()
     {
         IReadOnlyList<KeyboardDevice> keyboards = InputDeviceCatalog.Parse(

@@ -33,6 +33,13 @@ public enum KeyUsage
     AltGraph,
 
     /// <summary>
+    /// Right Ctrl or Right Shift on a machine where keyd is remapping the keyboard: keyd grabs
+    /// the physical keyboards and re-sends this key through its virtual keyboard as the left
+    /// twin, so the right-hand code never arrives anywhere. Not taken - gone.
+    /// </summary>
+    FoldedIntoLeftTwin,
+
+    /// <summary>
     /// F13: no shipping keyboard sends it without a remapper. Not taken by anything - simply
     /// not there.
     /// </summary>
@@ -55,8 +62,25 @@ public static class KeyUsageInfo
     /// guessed from the locale: the same person switches between a layout that has AltGr and
     /// one that does not, several times an hour.
     /// </param>
-    public static KeyUsage Of(DictationHotkey hotkey, bool layoutHasAltGraph) => hotkey switch
+    /// <param name="sourceSwallowsKey">
+    /// Whether the thing delivering the hotkey keeps the key's events from the rest of the
+    /// system. Only then does Right Alt stop composing: a source that merely reads alongside -
+    /// the Windows hook for every key but Caps Lock, evdev on Linux - leaves AltGr working, and
+    /// Right Alt plus another key is a chord that ends the hold rather than dictating over it.
+    /// A compositor keybind driving the control socket does consume the key.
+    /// </param>
+    /// <param name="keydFoldsRightModifiers">
+    /// Whether keyd's virtual keyboard is present, which means Right Ctrl and Right Shift are
+    /// re-sent as their left twins and never arrive as themselves.
+    /// </param>
+    public static KeyUsage Of(
+        DictationHotkey hotkey,
+        bool layoutHasAltGraph,
+        bool sourceSwallowsKey,
+        bool keydFoldsRightModifiers) => hotkey switch
     {
+        DictationHotkey.RightCtrl or DictationHotkey.RightShift when keydFoldsRightModifiers =>
+            KeyUsage.FoldedIntoLeftTwin,
         DictationHotkey.RightCtrl => KeyUsage.Free,
         // Held alone, Shift types nothing and toggles nothing: it only means something together
         // with another key, and another key ends the gesture before it can mean anything.
@@ -66,7 +90,9 @@ public static class KeyUsageInfo
         // the hold rather than dictating over it - the rule the original shipped Left Control with.
         DictationHotkey.LeftCtrl => KeyUsage.Free,
         DictationHotkey.LeftShift => KeyUsage.Free,
-        DictationHotkey.RightAlt => layoutHasAltGraph ? KeyUsage.AltGraph : KeyUsage.Free,
+        DictationHotkey.RightAlt => layoutHasAltGraph && sourceSwallowsKey
+            ? KeyUsage.AltGraph
+            : KeyUsage.Free,
         DictationHotkey.CapsLock => KeyUsage.CapsLockToggle,
         DictationHotkey.F13 => KeyUsage.MissingOnManyKeyboards,
         _ => KeyUsage.Unknown,
@@ -80,6 +106,7 @@ public static class KeyUsageInfo
             KeyUsage.Free => false,
             // Not taken - absent. The warning it earns is about a different problem.
             KeyUsage.MissingOnManyKeyboards => false,
+            KeyUsage.FoldedIntoLeftTwin => false,
             // We consider the unfamiliar value to be busy: staying silent here is more
             // expensive than warning again.
             _ => true,
@@ -89,6 +116,7 @@ public static class KeyUsageInfo
         {
             KeyUsage.Free => null,
             KeyUsage.MissingOnManyKeyboards => null,
+            KeyUsage.FoldedIntoLeftTwin => null,
             KeyUsage.CapsLockToggle => "the caps lock toggle",
             KeyUsage.AltGraph => "AltGr character composition",
             _ => "a system action",
@@ -134,6 +162,16 @@ public static class HotkeyAdvice
         {
             return "Most keyboards cannot send F13 at all — without a remapper or a macro key, "
                 + "dictation won't start.";
+        }
+
+        if (usage == KeyUsage.FoldedIntoLeftTwin)
+        {
+            string twin = hotkey == DictationHotkey.RightShift
+                ? DictationHotkey.LeftShift.Title
+                : DictationHotkey.LeftCtrl.Title;
+            return $"keyd is remapping this keyboard and re-sends {hotkey.Title} as {twin}, so "
+                + $"{hotkey.Title} never arrives and dictation won't start. Choose {twin} or "
+                + $"{DictationHotkey.RightAlt.Title} instead, or map the key in keyd's config.";
         }
 
         if (!usage.IsTakenBySystem)

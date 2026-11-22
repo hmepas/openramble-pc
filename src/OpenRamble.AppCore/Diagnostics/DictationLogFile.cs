@@ -95,6 +95,16 @@ public sealed class DictationLogFile : IDisposable
     private readonly BlockingCollection<Action> queue = new();
     private readonly Thread writer;
     private bool enabled;
+
+    /// <summary>
+    /// Something meant for the journal did not reach it, or did not survive in it; exported as
+    /// "incomplete". Touched only on the writer thread (or under <c>queue</c> once it stopped).
+    /// </summary>
+    /// <remarks>
+    /// Sticky on purpose, as upstream: a later line that does get written does not bring back the
+    /// one that was lost, and the report is read precisely to find out what happened - claiming
+    /// a journal is whole because the last write worked would hide the gap it is meant to admit.
+    /// </remarks>
     private bool writeFailed;
     private bool disposed;
 
@@ -608,11 +618,25 @@ public sealed class DictationLogFile : IDisposable
         }
     }
 
+    /// <summary>The writer thread: one item at a time, for the life of the journal.</summary>
+    /// <remarks>
+    /// Nothing may leave an item. The I/O errors each item expects are handled where they happen;
+    /// anything else used to end this thread, which ends the process, or - where the process
+    /// survived it - left every later <see cref="Sync"/> waiting on a writer that was gone. An
+    /// item that fails costs its own line and marks the journal incomplete; the next one runs.
+    /// </remarks>
     private void Drain()
     {
         foreach (Action work in queue.GetConsumingEnumerable())
         {
-            work();
+            try
+            {
+                work();
+            }
+            catch (Exception)
+            {
+                writeFailed = true;
+            }
         }
     }
 

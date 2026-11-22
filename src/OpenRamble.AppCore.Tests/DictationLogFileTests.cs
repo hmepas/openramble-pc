@@ -238,6 +238,28 @@ public sealed class DictationLogFileTests : IDisposable
         Assert.DoesNotContain("pasteMilliseconds", lines[1], StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A line that fails for a reason other than the disk costs that line, not the journal.
+    ///
+    /// The writer is one thread for the whole run. An exception it did not expect used to end
+    /// it - and with it the process, or, where the process survived, every later barrier, which
+    /// waited for a thread that was gone. An undefined event is the stand-in here: the
+    /// allowlist's converter refuses to write it, and refusing is a <see cref="System.Text.Json.JsonException"/>,
+    /// not an I/O error.
+    /// </summary>
+    [Fact]
+    public void TestAnUnexpectedWriteErrorMarksTheJournalIncompleteAndKeepsItRunning()
+    {
+        using var log = new DictationLogFile(root, enabled: true);
+        log.Record((DiagnosticEvent)999);
+        log.Record(DiagnosticEvent.DictationListening);
+
+        (byte[] data, _, bool incomplete) = log.Snapshot();
+
+        Assert.True(incomplete);
+        Assert.Contains("dictationListening", Assert.Single(Lines(data)), StringComparison.Ordinal);
+    }
+
     // MARK: - Port-only: where it lives, file modes and crash records
 
     /// <summary>Beside the app's other files, under <c>SupportLogs</c>, one file per UTC date.</summary>

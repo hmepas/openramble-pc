@@ -86,6 +86,30 @@ public sealed class AppStateEmptyTakeTests : IDisposable
         Assert.Equal(DictationNoticeKind.Warning, state.LastNotice.Kind);
     }
 
+    /// <summary>
+    /// The person sees which microphone it was; the diagnostic log does not. A device name can
+    /// identify the hardware, and the log carries only fixed templates.
+    /// </summary>
+    [Fact]
+    public async Task TheLogDoesNotNameTheMicrophone()
+    {
+        harness.Capture.SetBufferedSamples(Quiet);
+        harness.InputDevices.Devices.Add(new AudioInputDevice("usb-headset", "USB Headset"));
+        harness.Settings.Write(new AppSettings { InputDeviceUid = "usb-headset" });
+        var sink = new StringWriter();
+        var log = new DiagnosticLog(sink);
+        using (DiagnosticLog.Install(log))
+        {
+            AppState state = harness.MakeState();
+            await Dictate(state);
+            Assert.Equal("Heard only silence from USB Headset.", state.LastNotice!.Message);
+        }
+
+        log.Dispose();
+        Assert.Contains("Heard_only_silence_from", sink.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("USB_Headset", sink.ToString(), StringComparison.Ordinal);
+    }
+
     private AppState SeedWordlessTake()
     {
         string audio = Path.Combine(harness.Paths.Support(), "seed.wav");

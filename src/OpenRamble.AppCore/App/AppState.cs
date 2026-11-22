@@ -651,6 +651,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// repository - which is the whole point of grepping for it - and because the recognized
     /// text a failure hands back travels in <c>RecoverableText</c>, which is not written here and
     /// must never be.
+    /// <para>
+    /// One template is filled in with something that is not ours: a take that heard only
+    /// silence names the microphone, and a device name can identify the hardware it belongs to.
+    /// The person needs the name on screen; the log needs only to know which notice it was, so
+    /// that one is written with the name left out.
+    /// </para>
     /// </remarks>
     /// <param name="session">
     /// The dictation it ends, or <c>null</c> for the notices that belong to no dictation at all -
@@ -665,7 +671,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             ("words_lost", notice.WordsDidNotLand),
             ("recoverable_chars", notice.RecoverableText?.Length),
             ("kept_audio", notice.RecoveryAudio is not null),
-            ("message", notice.Message));
+            ("message", notice.Message.StartsWith(SilenceNoticePrefix, StringComparison.Ordinal)
+                ? SilenceNoticePrefix + "<microphone>."
+                : notice.Message));
+
+    /// <summary>The start of the notice <c>DictationController</c> fills in with a device name.</summary>
+    private const string SilenceNoticePrefix = "Heard only silence from ";
 
     /// <summary>
     /// Start a dictation from an on-screen press-and-hold control instead of the key.

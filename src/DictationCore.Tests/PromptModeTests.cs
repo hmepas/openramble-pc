@@ -118,6 +118,26 @@ public sealed class PromptModeTests
         Assert.Equal(PromptMode.Prose, policy.Mode(Target("com.apple.Notes", name: "Terminal")));
     }
 
+    /// <summary>
+    /// A terminal gets a real Return for "Send it.", so only a terminal known
+    /// by its bundle id is one. A name never is: Apple's Console is a log
+    /// viewer, and a web app called "… console" is a web page.
+    /// </summary>
+    [Fact]
+    public void TestANameNeverMakesATerminal()
+    {
+        foreach (TargetApplication app in new[]
+        {
+            Target("com.apple.Console", name: "Console"),
+            Target("com.apple.Safari.WebApp.6F1D7A2C", name: "Google Cloud console"),
+            Target("com.unknown.thing", name: "Some Terminal"),
+        })
+        {
+            Assert.NotEqual(ApplicationCategory.Terminal, PromptModePolicy.Category(app));
+            Assert.Equal(PromptMode.Verbatim, new PromptModePolicy().Mode(app));
+        }
+    }
+
     /// <summary>"Code" is deliberately not a sign: too many things are called that way.</summary>
     [Fact]
     public void TestGenericWordsInNamesDoNotDecide()
@@ -130,6 +150,37 @@ public sealed class PromptModeTests
     }
 
     // MARK: - Map
+
+    /// <summary>The bundle ids macOS reports for these apps, not guesses at them.</summary>
+    [Fact]
+    public void TestMessagesAndBearAreProse()
+    {
+        TargetApplication messages = Target("com.apple.MobileSMS", name: "Messages");
+        TargetApplication bear = Target("net.shinyfrog.bear", name: "Bear");
+        Assert.Equal(ApplicationCategory.Messaging, PromptModePolicy.Category(messages));
+        Assert.Equal(ApplicationCategory.Notes, PromptModePolicy.Category(bear));
+        Assert.Equal(PromptMode.Prose, new PromptModePolicy().Mode(messages));
+        Assert.Equal(PromptMode.Prose, new PromptModePolicy().Mode(bear));
+    }
+
+    /// <summary>
+    /// Port addition: a Linux window class and a Windows process name sit where macOS puts a
+    /// bundle id, and the seed knows the common ones on both.
+    /// </summary>
+    [Theory]
+    [InlineData("kitty", ApplicationCategory.Terminal)]
+    [InlineData("Alacritty", ApplicationCategory.Terminal)]
+    [InlineData("org.wezfurlong.wezterm", ApplicationCategory.Terminal)]
+    [InlineData("WindowsTerminal", ApplicationCategory.Terminal)]
+    [InlineData("code", ApplicationCategory.CodeEditor)]
+    [InlineData("Code", ApplicationCategory.CodeEditor)]
+    [InlineData("firefox", ApplicationCategory.Browser)]
+    [InlineData("thunderbird", ApplicationCategory.Mail)]
+    [InlineData("org.telegram.desktop", ApplicationCategory.Messaging)]
+    public void TestLinuxClassesAndWindowsProcessNamesAreKnown(string identifier, ApplicationCategory category)
+    {
+        Assert.Equal(category, PromptModePolicy.Category(Target(identifier)));
+    }
 
     [Fact]
     public void TestCategoryIsExposedForSettings()

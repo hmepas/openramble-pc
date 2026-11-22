@@ -171,6 +171,18 @@ public static class TranscriptPolisher
 
             string character = characters[index];
 
+            // A dot with a space before it and a letter or digit right after
+            // opens a word - ".gitignore", ".env", ".NET" - and is not the end
+            // of the word before it. Kept as written.
+            if (character == "." && index > 0 && characters[index - 1] == " "
+                && index + 1 < characters.Length
+                && (IsLetter(characters[index + 1]) || IsNumber(characters[index + 1])))
+            {
+                result.Add(character);
+                index += 1;
+                continue;
+            }
+
             if (Closing.Contains(character))
             {
                 // The space before the punctuation mark is a recognition artifact.
@@ -243,6 +255,8 @@ public static class TranscriptPolisher
         Rune.TryGetRuneAt(character, 0, out var rune) ? rune : default;
 
     private static bool IsLetter(string character) => Rune.IsLetter(FirstRune(character));
+
+    private static bool IsNumber(string character) => Rune.IsNumber(FirstRune(character));
 
     private static bool IsUppercase(string character) => Rune.IsUpper(FirstRune(character));
 

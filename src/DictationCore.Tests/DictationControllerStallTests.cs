@@ -252,13 +252,13 @@ public sealed class DictationControllerStallTests : IDisposable
         var controller = new DictationController(
             capture: new FileCapture(takes),
             transcribe: (_, _) => Task.FromResult(new ASRResult(
-                "message отправь",
+                "message. отправь",
                 audioDuration: TimeSpan.FromSeconds(2),
                 processingDuration: TimeSpan.FromSeconds(0.01))),
             inserter: inserter,
             overlay: new NullOverlay(),
             sounds: new NullSounds(),
-            pipeline: () => new TextPipeline(allowPressReturnCommand: true),
+            pipeline: _ => new TextPipeline(allowPressReturnCommand: true),
             returnDeadline: TimeSpan.FromMilliseconds(50));
         List<DictationNotice> notices = [];
         controller.OnNotice = notices.Add;
@@ -269,7 +269,7 @@ public sealed class DictationControllerStallTests : IDisposable
         await WaitForIdle(controller, limit: 250);
 
         Assert.Equal(DictationState.Idle, controller.State);
-        Assert.Equal(["Message"], inserter.InsertedTexts);
+        Assert.Equal(["Message."], inserter.InsertedTexts);
         Assert.True(controller.PendingRecovery is null, "the text itself already landed");
         Assert.Contains(notices, notice => notice.Message.Contains("pressing Return failed"));
     }

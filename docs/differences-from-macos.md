@@ -294,6 +294,19 @@ an application nothing about the rest of the desktop, and what is left is
   while the text is being recognized and the text lands in the new window. There
   is also no secure-input flag: a password field looks like any other, and
   synthetic keystrokes are accepted in it.
+- **The kind of app in front is known on Hyprland and plain X11 only.**
+  Paragraphs in prose apps and "Send it." in terminals (upstream 0.33.0) depend
+  on the focused app's kind. Hyprland names the focused window's class on its
+  control socket, and an X11 session through `xprop`; the class is looked up in
+  the same seed as macOS bundle ids, with Linux classes and Windows process
+  names added to it. GNOME, KDE and Sway under Wayland say nothing, so every app
+  there is "unknown": verbatim text, no paragraph breaks, and no Return. The
+  window title is never read.
+- **A line break is pasted, not typed, outside a terminal.** A typed line break
+  is Return, and Return in a chat sends the message, so a take whose text has a
+  paragraph or a "New line." in it goes through the clipboard even when it is
+  short (on Windows too). In a known terminal it is still typed, because there
+  a line break is Return and Ctrl+V is not a paste.
 - **Nothing is heard from the system.** Sleep, wake and audio-device changes are
   window messages on Windows; on Linux they are a `login1` D-Bus subscription
   and PipeWire graph events, and neither is wired yet. A dictation held across a

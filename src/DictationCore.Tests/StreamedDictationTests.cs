@@ -88,7 +88,7 @@ public sealed class StreamedDictationTests
             inserter: inserter,
             overlay: new FakeOverlay(),
             sounds: new FakeSounds(),
-            pipeline: () => new TextPipeline());
+            pipeline: _ => new TextPipeline());
 
     private static async Task Run(DictationController controller)
     {
@@ -106,6 +106,51 @@ public sealed class StreamedDictationTests
             await Task.Delay(5);
         }
     }
+
+    /// <summary>
+    /// Word timings survive the stream: each piece's words move onto the take's clock, so a
+    /// long pause at the end of the first piece still becomes a paragraph in a prose app.
+    /// </summary>
+    [Fact]
+    public async Task TestWordTimingsAcrossPiecesMarkAParagraph()
+    {
+        float[] samples = Enumerable.Repeat(0.5f, 30 * 16_000).ToArray();
+        var capture = new StreamingCapture(samples, [8 * 16_000, 8 * 16_000, 8 * 16_000]);
+        var inserter = new FakeInserter();
+        ASRResult[] pieces =
+        [
+            Piece("First piece.", ("First", 0.0, 0.4), ("piece.", 0.4, 0.9)),
+            Piece("Second piece.", ("Second", 0.0, 7.0), ("piece.", 7.0, 7.9)),
+            Piece("Third piece.", ("Third", 0.0, 7.0), ("piece.", 7.0, 7.9)),
+            Piece("And the tail.", ("And", 0.0, 0.2), ("the", 0.2, 0.4), ("tail.", 0.4, 0.8)),
+        ];
+        int calls = 0;
+        var controller = new DictationController(
+            capture: capture,
+            transcribe: (_, _) => Task.FromResult(new ASRResult("", TimeSpan.Zero, TimeSpan.Zero)),
+            transcribeSamples: (_, _) =>
+            {
+                // One decode runs at a time, so the count needs no lock.
+                int index = calls;
+                calls += 1;
+                return Task.FromResult(pieces[Math.Min(index, pieces.Length - 1)]);
+            },
+            inserter: inserter,
+            overlay: new FakeOverlay(),
+            sounds: new FakeSounds(),
+            pipeline: _ => new TextPipeline(mode: PromptMode.Prose));
+
+        await Run(controller);
+
+        Assert.Equal(["First piece.\n\nSecond piece. Third piece. And the tail."], inserter.InsertedTexts);
+    }
+
+    private static ASRResult Piece(string text, params (string Text, double Start, double End)[] words) =>
+        new(
+            text,
+            words: ParagraphBreaksTests.Words(words),
+            audioDuration: TimeSpan.FromSeconds(8),
+            processingDuration: TimeSpan.FromSeconds(0.01));
 
     [Fact]
     public async Task TestTheStreamedPiecesAndTheTailBecomeOneSentence()

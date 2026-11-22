@@ -21,7 +21,7 @@ public sealed class DictationProvenanceTests
             inserter: inserter,
             overlay: overlay,
             sounds: sounds,
-            pipeline: () => new TextPipeline(replacements: replacements ?? []));
+            pipeline: _ => new TextPipeline(replacements: replacements ?? []));
 
     private static async Task Settle(int iterations = 12)
     {

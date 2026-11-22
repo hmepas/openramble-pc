@@ -111,9 +111,9 @@ public sealed class TextPipelineTests
             replacements: [new DictionaryReplacement(spoken: "сентри", written: "Sentry")],
             allowPressReturnCommand: true);
 
-        TextPipeline.Output output = pipeline.Process("сентри снова упал , посмотри отправь");
+        TextPipeline.Output output = pipeline.Process("сентри снова упал , посмотри. отправь");
 
-        Assert.Equal("Sentry снова упал, посмотри", output.Text);
+        Assert.Equal("Sentry снова упал, посмотри.", output.Text);
         Assert.Equal(TrailingCommand.PressReturn, output.Command);
     }
 
@@ -126,10 +126,27 @@ public sealed class TextPipelineTests
             replacements: [new DictionaryReplacement(spoken: "отправь", written: "ОТПРАВЬ")],
             allowPressReturnCommand: true);
 
-        TextPipeline.Output output = pipeline.Process("готово отправь");
+        TextPipeline.Output output = pipeline.Process("готово. отправь");
 
         Assert.Equal(TrailingCommand.PressReturn, output.Command);
-        Assert.Equal("Готово", output.Text);
+        Assert.Equal("Готово.", output.Text);
+    }
+
+    /// <summary>
+    /// Return submits irreversibly, so the command counts only as its own
+    /// final sentence.
+    /// </summary>
+    [Fact]
+    public void TestSendItMidThoughtStaysWords()
+    {
+        var pipeline = new TextPipeline(allowPressReturnCommand: true);
+        Assert.Null(pipeline.Process("and then we send it").Command);
+        Assert.Null(pipeline.Process("Review the doc, send it.").Command);
+        Assert.Equal("And then we send it", pipeline.Process("and then we send it").Text);
+
+        TextPipeline.Output standalone = pipeline.Process("Ship it. Send it.");
+        Assert.Equal(TrailingCommand.PressReturn, standalone.Command);
+        Assert.Equal("Ship it.", standalone.Text);
     }
 
     [Fact]

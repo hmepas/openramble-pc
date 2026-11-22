@@ -149,6 +149,23 @@ public sealed class TextInsertionPolicyTests
         Assert.Equal(InsertionPath.ClipboardPaste, InsertionPathPolicy.Choose(10_000));
     }
 
+    /// <summary>
+    /// A typed line break is Return, which sends a chat message: text with a paragraph in it is
+    /// pasted, short or not. A terminal is the exception, where a line break is Return anyway.
+    /// </summary>
+    [Fact]
+    public void TestALineBreakIsPastedEverywhereButATerminal()
+    {
+        var chat = new TargetApplication("org.telegram.desktop", 7, null);
+        var unknown = new TargetApplication(null, 0, null);
+        var terminal = new TargetApplication("kitty", 8, null);
+
+        Assert.Equal(InsertionPath.ClipboardPaste, InsertionPathPolicy.Choose("Hi.\n\nBye.", chat));
+        Assert.Equal(InsertionPath.ClipboardPaste, InsertionPathPolicy.Choose("Hi.\n", unknown));
+        Assert.Equal(InsertionPath.SynthesizedKeystrokes, InsertionPathPolicy.Choose("ls\n", terminal));
+        Assert.Equal(InsertionPath.SynthesizedKeystrokes, InsertionPathPolicy.Choose("Hi. Bye.", chat));
+    }
+
     // MARK: - The last look before the irreversible paste
 
     /// <summary>

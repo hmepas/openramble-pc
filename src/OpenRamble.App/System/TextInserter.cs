@@ -110,7 +110,7 @@ public sealed partial class TextInserter : ITextInserting
     {
         // Length, never content: the log has to be able to say "the text was there and the
         // insertion still did not happen", and that takes a number, not the words.
-        InsertionPath path = InsertionPathPolicy.Choose(text.Length);
+        InsertionPath path = InsertionPathPolicy.Choose(text, target);
         // The dictation these words came out of, so that an insertion can be read together with
         // the recording and the recognition that produced it rather than guessed at by timestamp.
         int session = DiagnosticLog.Session;

@@ -159,6 +159,20 @@ public static class InsertionPathPolicy
         characterCount <= SynthesizedKeystrokeLimit
             ? InsertionPath.SynthesizedKeystrokes
             : InsertionPath.ClipboardPaste;
+
+    /// <summary>
+    /// The path for this text going to this app.
+    ///
+    /// A typed line break is Return, and Return in a chat or a form sends it - half a message
+    /// gone because a pause became a paragraph. So text with a line break is pasted, which is how
+    /// the macOS build puts every line break in, except in a terminal, where a line break is what
+    /// Return means and Ctrl+V is not a paste.
+    /// </summary>
+    public static InsertionPath Choose(string text, TargetApplication? target) =>
+        text.Contains('\n', StringComparison.Ordinal)
+            && PromptModePolicy.Category(target) != ApplicationCategory.Terminal
+            ? InsertionPath.ClipboardPaste
+            : Choose(text.Length);
 }
 
 /// <summary>

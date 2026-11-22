@@ -56,6 +56,9 @@ public sealed class LinuxTextInserter : ITextInserting
     /// there IS somewhere to insert and its identity is unknowable, so the target is a placeholder
     /// with no process and no name. <c>PromptMode</c> reads the name to pick a prompt and gets
     /// <c>Unknown</c>, which is its own safe default.
+    ///
+    /// Used where the desktop will not say which window has focus. Where it will (Hyprland, plain
+    /// X11), <see cref="FocusedWindow"/> names it by its class, so the text can be shaped for it.
     /// </remarks>
     private static readonly TargetApplication WhateverHasFocus = new(null, 0, null);
 
@@ -65,6 +68,7 @@ public sealed class LinuxTextInserter : ITextInserting
     private readonly TimeSpan restoreDelay;
     private readonly Action<TextInsertionError>? reportRestoreFailure;
     private readonly Func<HotkeyModifiers> heldModifiers;
+    private readonly Func<TargetApplication?> focusedWindow;
 
     /// <param name="restoreDelay">
     /// How long the dictation stays on the clipboard after Ctrl+V. Slow applications fetch the
@@ -83,7 +87,12 @@ public sealed class LinuxTextInserter : ITextInserting
         TimeSpan? restoreDelay = null,
         Action<TextInsertionError>? reportRestoreFailure = null,
         Func<HotkeyModifiers>? heldModifiers = null)
-        : this(new SubprocessCommandRunner(), restoreDelay, reportRestoreFailure, heldModifiers)
+        : this(
+            new SubprocessCommandRunner(),
+            restoreDelay,
+            reportRestoreFailure,
+            heldModifiers,
+            static () => FocusedWindow.Query(new SubprocessCommandRunner()))
     {
     }
 
@@ -92,17 +101,19 @@ public sealed class LinuxTextInserter : ITextInserting
         ICommandRunner runner,
         TimeSpan? restoreDelay = null,
         Action<TextInsertionError>? reportRestoreFailure = null,
-        Func<HotkeyModifiers>? heldModifiers = null)
+        Func<HotkeyModifiers>? heldModifiers = null,
+        Func<TargetApplication?>? focusedWindow = null)
     {
         keyboard = new SynthesizedKeyboard(runner);
         clipboard = new WaylandClipboard(runner);
         this.restoreDelay = restoreDelay ?? TimeSpan.FromSeconds(1);
         this.reportRestoreFailure = reportRestoreFailure;
         this.heldModifiers = heldModifiers ?? (static () => HotkeyModifiers.None);
+        this.focusedWindow = focusedWindow ?? (static () => null);
     }
 
     /// <inheritdoc cref="WhateverHasFocus"/>
-    public TargetApplication? FrontmostApplication() => WhateverHasFocus;
+    public TargetApplication? FrontmostApplication() => focusedWindow() ?? WhateverHasFocus;
 
     /// <summary>
     /// A wrapper over a single implementation.
@@ -117,7 +128,7 @@ public sealed class LinuxTextInserter : ITextInserting
     {
         // Length, never content: the log has to be able to say "the text was there and the
         // insertion still did not happen", and that takes a number, not the words.
-        InsertionPath path = InsertionPathPolicy.Choose(text.Length);
+        InsertionPath path = InsertionPathPolicy.Choose(text, target);
         int session = DiagnosticLog.Session;
         DiagnosticLog.Emit(
             "insert.begin",

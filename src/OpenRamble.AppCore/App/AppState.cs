@@ -244,7 +244,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 new GatedSounds(environment.Sounds, () => SoundsEnabled),
                 transcribeSamples,
                 recordingRecovery,
-                MakePipeline,
+                // Built per take for the app the words are going to: see MakePipeline.
+                target => MakePipeline(PromptModePolicy.Category(target)),
                 prepareForTranscription: transcriber is null
                     ? null
                     : token => transcriber.Prepare(layout.EngineDirectory),

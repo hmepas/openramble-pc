@@ -106,4 +106,31 @@ public sealed class PolisherSpanTests
             "Напиши \"`a  b`\" вот так",
             TranscriptPolisher.Polish("напиши \"`a  b`\" вот так"));
     }
+
+    /// <summary>
+    /// A dot that opens a word - a dotfile, an extension, .NET - is not the end
+    /// of the word before it. The model writes "in .gitignore"; the polisher
+    /// used to glue it into "in.gitignore".
+    /// </summary>
+    [Fact]
+    public void TestADotThatOpensAWordKeepsItsSpace()
+    {
+        string[] unchanged =
+        [
+            "Add the key to .env and restart.",
+            "Open .zshrc",
+            "It is listed in .gitignore",
+            "Delete the .DS_Store files.",
+            "We moved from .NET to Go.",
+            "Convert the .png files to .webp",
+        ];
+        foreach (string text in unchanged)
+        {
+            Assert.Equal(text, TranscriptPolisher.Polish(text));
+        }
+
+        // A real stray space before a full stop still goes.
+        Assert.Equal("It works.", TranscriptPolisher.Polish("It works ."));
+        Assert.Equal("Done. Next step", TranscriptPolisher.Polish("Done . Next step"));
+    }
 }

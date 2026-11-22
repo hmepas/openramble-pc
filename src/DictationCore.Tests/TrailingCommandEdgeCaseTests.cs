@@ -38,6 +38,18 @@ public sealed class TrailingCommandEdgeCaseTests
         Assert.Equal("готовоотправь", result.Text);
     }
 
+    [Fact]
+    public void TestAMarkOnTheSpaceBeforeTheCommandGluesItToThatSpace()
+    {
+        // " ́" is one character that starts with a space; what touches the command is
+        // the mark, so it is not set apart, as in the shared core, which looks at that last
+        // scalar.
+        TrailingCommandParser.Result result = TrailingCommandParser.Parse("Dear John. ́new line.");
+
+        Assert.Null(result.Command);
+        Assert.Equal("Dear John. ́new line.", result.Text);
+    }
+
     // MARK: - Register
 
     [Fact]

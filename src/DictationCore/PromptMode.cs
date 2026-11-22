@@ -132,13 +132,13 @@ public sealed record PromptModePolicy
             ["notion.id"] = ApplicationCategory.Notes,
             ["md.obsidian"] = ApplicationCategory.Notes,
             ["com.agiletortoise.drafts-osx"] = ApplicationCategory.Notes,
-            ["com.bear-writer"] = ApplicationCategory.Notes,
+            ["net.shinyfrog.bear"] = ApplicationCategory.Notes,
             // Messengers
             ["com.tinyspeck.slackmacgap"] = ApplicationCategory.Messaging,
             ["com.hnc.discord"] = ApplicationCategory.Messaging,
             ["ru.keepcoder.telegram"] = ApplicationCategory.Messaging,
             ["net.whatsapp.whatsapp"] = ApplicationCategory.Messaging,
-            ["com.apple.messages"] = ApplicationCategory.Messaging,
+            ["com.apple.mobilesms"] = ApplicationCategory.Messaging,
             ["us.zoom.xos"] = ApplicationCategory.Messaging,
             // Mail
             ["com.apple.mail"] = ApplicationCategory.Mail,
@@ -158,6 +158,78 @@ public sealed record PromptModePolicy
             ["com.microsoft.word"] = ApplicationCategory.Office,
             ["com.apple.iwork.pages"] = ApplicationCategory.Office,
             ["com.microsoft.powerpoint"] = ApplicationCategory.Office,
+
+            // Port addition: the identifiers the other platforms put where macOS puts a bundle
+            // id - a Linux window's class (the Wayland app_id, or the X11 WM_CLASS class) and a
+            // Windows process name. Lowercased like the rest; one key means the same app on both
+            // ("code", "alacritty", "firefox"). Kept to apps whose identifier is certain, because
+            // a terminal gets a real Return and an unknown app is verbatim anyway.
+            // Terminals
+            ["kitty"] = ApplicationCategory.Terminal,
+            ["alacritty"] = ApplicationCategory.Terminal,
+            ["foot"] = ApplicationCategory.Terminal,
+            ["footclient"] = ApplicationCategory.Terminal,
+            ["org.wezfurlong.wezterm"] = ApplicationCategory.Terminal,
+            ["org.gnome.terminal"] = ApplicationCategory.Terminal,
+            ["gnome-terminal-server"] = ApplicationCategory.Terminal,
+            ["org.gnome.console"] = ApplicationCategory.Terminal,
+            ["org.gnome.ptyxis"] = ApplicationCategory.Terminal,
+            ["org.kde.konsole"] = ApplicationCategory.Terminal,
+            ["konsole"] = ApplicationCategory.Terminal,
+            ["xfce4-terminal"] = ApplicationCategory.Terminal,
+            ["xterm"] = ApplicationCategory.Terminal,
+            ["urxvt"] = ApplicationCategory.Terminal,
+            ["st-256color"] = ApplicationCategory.Terminal,
+            ["terminator"] = ApplicationCategory.Terminal,
+            ["com.gexperts.tilix"] = ApplicationCategory.Terminal,
+            ["windowsterminal"] = ApplicationCategory.Terminal,
+            ["cmd"] = ApplicationCategory.Terminal,
+            ["powershell"] = ApplicationCategory.Terminal,
+            ["pwsh"] = ApplicationCategory.Terminal,
+            ["wezterm-gui"] = ApplicationCategory.Terminal,
+            // Code editors
+            ["code"] = ApplicationCategory.CodeEditor,
+            ["code-oss"] = ApplicationCategory.CodeEditor,
+            ["codium"] = ApplicationCategory.CodeEditor,
+            ["vscodium"] = ApplicationCategory.CodeEditor,
+            ["cursor"] = ApplicationCategory.CodeEditor,
+            ["jetbrains-idea"] = ApplicationCategory.CodeEditor,
+            ["jetbrains-pycharm"] = ApplicationCategory.CodeEditor,
+            ["jetbrains-webstorm"] = ApplicationCategory.CodeEditor,
+            ["sublime_text"] = ApplicationCategory.CodeEditor,
+            ["neovide"] = ApplicationCategory.CodeEditor,
+            ["emacs"] = ApplicationCategory.CodeEditor,
+            ["devenv"] = ApplicationCategory.CodeEditor,
+            ["idea64"] = ApplicationCategory.CodeEditor,
+            ["pycharm64"] = ApplicationCategory.CodeEditor,
+            // Notes
+            ["obsidian"] = ApplicationCategory.Notes,
+            ["md.obsidian.obsidian"] = ApplicationCategory.Notes,
+            ["notion"] = ApplicationCategory.Notes,
+            // Messengers
+            ["slack"] = ApplicationCategory.Messaging,
+            ["discord"] = ApplicationCategory.Messaging,
+            ["org.telegram.desktop"] = ApplicationCategory.Messaging,
+            ["telegramdesktop"] = ApplicationCategory.Messaging,
+            ["telegram"] = ApplicationCategory.Messaging,
+            ["signal"] = ApplicationCategory.Messaging,
+            ["ms-teams"] = ApplicationCategory.Messaging,
+            // Mail
+            ["thunderbird"] = ApplicationCategory.Mail,
+            ["org.mozilla.thunderbird"] = ApplicationCategory.Mail,
+            ["org.gnome.evolution"] = ApplicationCategory.Mail,
+            ["outlook"] = ApplicationCategory.Mail,
+            // Browsers
+            ["firefox"] = ApplicationCategory.Browser,
+            ["chromium"] = ApplicationCategory.Browser,
+            ["google-chrome"] = ApplicationCategory.Browser,
+            ["brave-browser"] = ApplicationCategory.Browser,
+            ["chrome"] = ApplicationCategory.Browser,
+            ["msedge"] = ApplicationCategory.Browser,
+            ["brave"] = ApplicationCategory.Browser,
+            // Office
+            ["libreoffice-writer"] = ApplicationCategory.Office,
+            ["winword"] = ApplicationCategory.Office,
         };
 
     private static ApplicationCategory CategoryByName(string? name)
@@ -166,11 +238,11 @@ public sealed record PromptModePolicy
         string lowercased = name.ToLowerInvariant();
         // Only those words that themselves mean a category. "Code" is
         // not included here intentionally: too many things are called that way.
-        if (lowercased.Contains("terminal", StringComparison.Ordinal)
-            || lowercased.Contains("console", StringComparison.Ordinal))
-        {
-            return ApplicationCategory.Terminal;
-        }
+        //
+        // A name never makes a terminal. A terminal gets a real Return for
+        // "Send it.", and a name cannot earn that: Apple's Console is a log
+        // viewer, and a web app called "… console" is a web page. An unknown
+        // app is verbatim anyway, so nothing else is lost.
         if (lowercased.Contains("mail", StringComparison.Ordinal)) { return ApplicationCategory.Mail; }
         return ApplicationCategory.Unknown;
     }

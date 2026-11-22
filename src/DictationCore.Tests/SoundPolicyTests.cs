@@ -42,7 +42,7 @@ public sealed class SoundPolicyTests
             inserter: inserter,
             overlay: overlay,
             sounds: sounds,
-            pipeline: () => new TextPipeline(allowPressReturnCommand: allowPressReturnCommand));
+            pipeline: _ => new TextPipeline(allowPressReturnCommand: allowPressReturnCommand));
 
     private static async Task RunFullDictation(DictationController controller)
     {
@@ -132,7 +132,7 @@ public sealed class SoundPolicyTests
     public async Task TestLandedTextWithFailedReturnStaysSilent()
     {
         inserter.SetReturnError(new TextInsertionError.ModifiersStillHeld());
-        var controller = MakeController(recognized: "готово отправь", allowPressReturnCommand: true);
+        var controller = MakeController(recognized: "готово. отправь", allowPressReturnCommand: true);
         await RunFullDictation(controller);
 
         // The text itself must have landed.

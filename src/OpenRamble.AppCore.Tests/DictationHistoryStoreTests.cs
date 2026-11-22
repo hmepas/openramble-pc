@@ -66,14 +66,42 @@ public sealed class DictationHistoryStoreTests : IDisposable
     }
 
     /// <summary>
-    /// Empty text is not a dictation. Recording it would fill the list with blank rows after
-    /// every silent take.
+    /// Empty text is kept only together with its audio: a row with neither words nor a recording
+    /// would be a blank row and nothing else.
     /// </summary>
     [Fact]
     public void TestBlankTextIsNotRecorded()
     {
         IReadOnlyList<HistoryEntry> entries = store.Record("   \n ", null, 5);
         Assert.Empty(entries);
+    }
+
+    /// <summary>
+    /// A take with sound in which the model found no words is not nothing: it is kept with its
+    /// audio, so it can be played and recognized again.
+    /// </summary>
+    [Fact]
+    public void TestATakeWithAudioButNoWordsIsKept()
+    {
+        string audio = MakeAudio("unrecognized.wav");
+        IReadOnlyList<HistoryEntry> entries = store.Record("", audio, 5);
+
+        Assert.Equal([""], entries.Select(entry => entry.Text));
+        Assert.NotNull(store.AudioPath(entries[0]));
+    }
+
+    /// <summary>
+    /// Without its audio a wordless take is nothing at all, and is not kept. When the copy fails
+    /// the store says so: the take was handed over to be kept, and quietly keeping nothing would
+    /// look exactly like keeping it.
+    /// </summary>
+    [Fact]
+    public void TestATakeWithNoWordsWhoseAudioIsGoneIsNotKept()
+    {
+        string missing = Path.Combine(directory, "gone.wav");
+        Assert.ThrowsAny<IOException>(() => store.Record("", missing, 5));
+        Assert.Empty(store.Load());
+        Assert.Empty(store.Record("", null, 5));
     }
 
     // MARK: - Retention
@@ -88,6 +116,52 @@ public sealed class DictationHistoryStoreTests : IDisposable
 
         Assert.Equal(5, store.Load().Count);
         Assert.Equal("take 7", store.Load()[0].Text);
+    }
+
+    /// <summary>
+    /// A take with no words is kept to be heard again, not instead of a dictation. A fiddly
+    /// microphone giving three of them in a row must not cost three transcripts and their audio.
+    /// </summary>
+    [Fact]
+    public void TestTakesWithNoWordsNeverPushADictationOut()
+    {
+        for (int index = 0; index < 5; index++)
+        {
+            _ = store.Record($"dictation {index}", MakeAudio($"d{index}.wav"), 5);
+        }
+
+        for (int index = 0; index < 3; index++)
+        {
+            _ = store.Record("", MakeAudio($"w{index}.wav"), 5);
+        }
+
+        IReadOnlyList<HistoryEntry> entries = store.Load();
+        Assert.Equal(
+            ["dictation 4", "dictation 3", "dictation 2", "dictation 1", "dictation 0"],
+            entries.Where(entry => entry.Text.Length > 0).Select(entry => entry.Text));
+        Assert.Equal(3, entries.Count(entry => entry.Text.Length == 0));
+        Assert.True(entries.All(entry => store.AudioPath(entry) is not null), "a kept entry lost its audio");
+    }
+
+    /// <summary>
+    /// They are still bounded: by the same limit, counted among themselves, and the ones that
+    /// fall off take their audio with them.
+    /// </summary>
+    [Fact]
+    public void TestTakesWithNoWordsAreLimitedAmongThemselves()
+    {
+        _ = store.Record("dictation", null, 5);
+        for (int index = 0; index < 7; index++)
+        {
+            _ = store.Record("", MakeAudio($"w{index}.wav"), 5);
+        }
+
+        IReadOnlyList<HistoryEntry> entries = store.Load();
+        Assert.Equal(5, entries.Count(entry => entry.Text.Length == 0));
+        Assert.Equal(["dictation"], entries.Where(entry => entry.Text.Length > 0).Select(entry => entry.Text));
+        int stored = Directory.GetFiles(directory, "*.wav")
+            .Count(path => Guid.TryParse(Path.GetFileNameWithoutExtension(path), out _));
+        Assert.True(stored == 5, "evicted audio is still on disk");
     }
 
     /// <summary>
@@ -269,6 +343,48 @@ public sealed class KeptHistoryEntryTests : IDisposable
             kept.Any(entry => entry.Id == oldest.Id),
             "the starred one is the oldest and would have been evicted first");
         Assert.Equal(2, kept.Count(entry => !entry.IsKept));
+    }
+
+    /// <summary>
+    /// A new dictation trims the list the same way: the starred entry stays, with its audio,
+    /// however many takes come after it.
+    /// </summary>
+    [Fact]
+    public void TestANewDictationNeverEvictsAStarredOne()
+    {
+        DictationHistoryStore store = Store();
+        string audio = Path.Combine(directory, "keep.wav");
+        File.WriteAllText(audio, "fake wav");
+        _ = store.Record("keep me", audio, 2);
+        HistoryEntry starred = store.Load()[0];
+        _ = store.SetKept(true, starred);
+
+        for (int index = 0; index < 5; index++)
+        {
+            _ = store.Record($"dictation {index}", null, 2);
+        }
+
+        IReadOnlyList<HistoryEntry> entries = store.Load();
+        HistoryEntry? kept = entries.FirstOrDefault(entry => entry.Id == starred.Id);
+        Assert.True(kept is not null, "five later takes pushed out a starred one");
+        Assert.NotNull(kept.AudioFileName);
+        Assert.True(store.AudioPath(kept) is not null, "its audio was deleted");
+        Assert.Equal(2, entries.Count(entry => !entry.IsKept));
+    }
+
+    /// <summary>
+    /// Re-recognition stores what the take itself would have stored: trimmed the same way.
+    /// </summary>
+    [Fact]
+    public void TestReRecognitionIsTrimmedLikeATake()
+    {
+        DictationHistoryStore store = Store();
+        _ = store.Record("Dear John.", null, 10);
+        HistoryEntry entry = store.Load()[0];
+
+        IReadOnlyList<HistoryEntry> updated = store.ReplaceText("Dear John,\n\nthanks. ", entry);
+
+        Assert.Equal("Dear John,\n\nthanks.", updated.First(candidate => candidate.Id == entry.Id).Text);
     }
 
     /// <summary>

@@ -215,8 +215,8 @@ public sealed class AppStateEngineLifecycleTests : IDisposable
     // MARK: - Idle unload
 
     /// <summary>
-    /// The Handy-style idle unload: after the countdown the engine's memory goes back, and the next
-    /// key press brings it back under the voice.
+    /// After an hour without dictation the engine's memory goes back, and the next key press
+    /// brings it back under the voice.
     /// </summary>
     [Fact]
     public async Task IdleUnloadFreesTheEngineAfterTheCountdown()
@@ -228,7 +228,6 @@ public sealed class AppStateEngineLifecycleTests : IDisposable
         harness.IdleUnloadDelayOverride = TimeSpan.FromMilliseconds(40);
         AppState state = harness.MakeState();
         await TestWait.For("the engine warmed up", () => state.IsEngineReady);
-        Assert.Equal(IdleUnloadPolicy.AfterFiveMinutes, state.ModelUnloadTimeout);
 
         await TestWait.For("the countdown returned the memory", () => !state.IsEngineReady);
         Assert.Equal(1, engine.Unloads);
@@ -251,11 +250,11 @@ public sealed class AppStateEngineLifecycleTests : IDisposable
         await TestWait.For("the engine warmed up", () => state.IsEngineReady);
         int baseline = engine.Inferences;
 
-        state.ModelUnloadTimeout = IdleUnloadPolicy.Immediately;
+        state.IdleUnloadDelayOverride = TimeSpan.Zero;
         await TestWait.For("the engine rested", () => !state.IsEngineReady);
-        // "Immediately" would put the rewarmed engine straight back to rest; the question here
-        // is only whether the press wakes it.
-        state.ModelUnloadTimeout = IdleUnloadPolicy.Never;
+        // A zero countdown would put the rewarmed engine straight back to rest; the question
+        // here is only whether the press wakes it.
+        state.IdleUnloadDelayOverride = null;
 
         Monitor.OnHotkeyDown!();
         await TestWait.For("the press rewarmed the resting engine", () => state.IsEngineReady);
@@ -263,33 +262,34 @@ public sealed class AppStateEngineLifecycleTests : IDisposable
         Assert.True(engine.Inferences > baseline, "a reloaded generation is warmed before readiness");
     }
 
-    /// <summary>Never means the always-resident behaviour.</summary>
+    /// <summary>
+    /// The engine stays an hour after the last dictation, for everyone. Every other residency
+    /// test shortens the countdown, so this is the one that notices if the hour itself changes.
+    /// </summary>
     [Fact]
-    public async Task NeverKeepsTheEngineResidentForever()
+    public void TheEngineStaysLoadedForAnHourAfterTheLastDictation()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(60 * 60), AppState.EngineIdleUnloadDelay);
+    }
+
+    /// <summary>
+    /// The "Unload model" picker is gone. Somebody who once chose "Never" gets the same hour as
+    /// everyone else, and one reload after an idle hour.
+    /// </summary>
+    [Fact]
+    public async Task ALegacyNeverSettingNoLongerKeepsTheEngineForever()
     {
         harness.InstallModelMarker();
         FinishSetup();
+        string settings = Path.Combine(harness.Paths.Support(), "settings.json");
+        string stored = File.ReadAllText(settings);
+        File.WriteAllText(settings, stored.TrimEnd().TrimEnd('}').TrimEnd() + ",\n  \"modelUnloadTimeout\": \"never\"\n}\n");
         harness.WarmUpEngine = new CountingASREngine();
         harness.IdleUnloadDelayOverride = TimeSpan.FromMilliseconds(30);
         AppState state = harness.MakeState();
         await TestWait.For("the engine warmed up", () => state.IsEngineReady);
 
-        state.ModelUnloadTimeout = IdleUnloadPolicy.Never;
-        await Task.Delay(120);
-
-        Assert.True(state.IsEngineReady);
-        Assert.False(state.IsAwaitingIdleUnload);
-    }
-
-    /// <summary>The picker's choice survives a relaunch.</summary>
-    [Fact]
-    public void UnloadTimeoutPersistsAcrossAppStates()
-    {
-        AppState first = harness.MakeState();
-        first.ModelUnloadTimeout = IdleUnloadPolicy.AfterOneHour;
-
-        Assert.Equal(IdleUnloadPolicy.AfterOneHour, harness.MakeState().ModelUnloadTimeout);
-        Assert.Equal("afterOneHour", harness.Settings.Read().ModelUnloadTimeout);
+        await TestWait.For("a stored Never is ignored", () => !state.IsEngineReady);
     }
 
     /// <summary>
@@ -314,7 +314,8 @@ public sealed class AppStateEngineLifecycleTests : IDisposable
 
         // Once setup is done, the courtesy applies again.
         state.OnboardingCompleted = true;
-        state.ModelUnloadTimeout = IdleUnloadPolicy.AfterTwoMinutes;
+        // Re-arms the countdown, as the next dictation would.
+        state.IdleUnloadDelayOverride = TimeSpan.FromMilliseconds(30);
         await TestWait.For("after setup, idle memory goes back as promised", () => !state.IsEngineReady);
     }
 
@@ -393,9 +394,9 @@ public sealed class AppStateEngineLifecycleTests : IDisposable
         AppState state = harness.MakeState();
         await TestWait.For("the engine warmed up", () => state.IsEngineReady);
 
-        state.ModelUnloadTimeout = IdleUnloadPolicy.Immediately;
+        state.IdleUnloadDelayOverride = TimeSpan.Zero;
         await TestWait.For("the engine rested", () => !state.IsEngineReady);
-        state.ModelUnloadTimeout = IdleUnloadPolicy.Never;
+        state.IdleUnloadDelayOverride = null;
 
         // The press starts the reload under the voice; the release finds it still running.
         Monitor.OnHotkeyDown!();

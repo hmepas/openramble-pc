@@ -34,13 +34,13 @@ public interface IMicrophoneDevice : IAudioCapturing, IDisposable
     Action<AudioCaptureError>? Failed { get; set; }
 
     /// <summary>
-    /// The bounded in-memory take is full. Raised once per take; the owner finishes the complete
-    /// retained take through the ordinary transcription path instead of dropping audio or
-    /// continuing into what recovery can no longer guarantee.
+    /// The bounded in-memory take is full and its file could not be written. Raised once per
+    /// take; the owner finishes the complete retained take through the ordinary transcription
+    /// path instead of dropping audio or continuing into what recovery can no longer guarantee.
     /// </summary>
     /// <remarks>
-    /// Without a listener the capture keeps its previous behaviour and falls back to the WAV, so
-    /// a device that does not know the rule is still a correct device.
+    /// A take whose file is healthy never raises this: it outlives the memory cap, and
+    /// recognition reads the file.
     /// </remarks>
     Action? OnMemoryLimitReached { get; set; }
 

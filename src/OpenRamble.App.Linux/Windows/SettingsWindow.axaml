@@ -139,14 +139,6 @@
             <Button Grid.Column="2" Classes="revert" x:Name="RevertPlacement" Click="OnRevertPlacement" />
           </Grid>
 
-          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
-            <TextBlock Classes="row" Text="Unload model" />
-            <ComboBox Grid.Column="1" x:Name="UnloadPicker" Width="200"
-                      automation:AutomationProperties.Name="Unload model"
-                      automation:AutomationProperties.HelpText="Frees the speech model's memory after this much idle time. It reloads under your voice at the next dictation." />
-            <Button Grid.Column="2" Classes="revert" x:Name="RevertUnload" Click="OnRevertUnload" />
-          </Grid>
-
           <TextBlock Classes="section" Text="Permissions" />
           <TextBlock x:Name="PermissionTitle" />
           <TextBlock x:Name="PermissionDetail" Classes="hint" Margin="0,2,0,6" />

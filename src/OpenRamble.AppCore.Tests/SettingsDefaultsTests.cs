@@ -27,7 +27,6 @@ public sealed class SettingsDefaultsTests
         Assert.False(SettingsDefaults.DetailedLogging);
         Assert.Equal(DictationOverlayPlacement.Top, SettingsDefaults.OverlayPlacement);
         Assert.Equal(AppAppearance.System, SettingsDefaults.Appearance);
-        Assert.Equal(IdleUnloadPolicies.Default, SettingsDefaults.ModelUnloadTimeout);
         Assert.Null(SettingsDefaults.InputDeviceUid);
         Assert.Equal(5, SettingsDefaults.HistoryLimit);
     }

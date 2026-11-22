@@ -209,6 +209,22 @@ public class LocalTranscriberTests : IDisposable
         WavFixture.WriteFloat32(directory, seconds, sampleRate, channels: 1);
 
     [Fact]
+    public async Task CancellationDiscardsAResultFromAnEngineThatFinishesAnyway()
+    {
+        var engine = new WarmupGateEngine();
+        var transcriber = new LocalTranscriber(engine);
+        await transcriber.Prepare(directory);
+        using var cancellation = new CancellationTokenSource();
+        Task<ASRResult> work = Task.Run(() => transcriber.Transcribe([0.1f], cancellation.Token));
+        await WaitFor(() => engine.CallCount > 0);
+        cancellation.Cancel();
+        engine.OpenFirstCall();
+
+        // A cancelled request must not return a stale transcript.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => work);
+    }
+
+    [Fact]
     public async Task TranscribeBeforePrepareFails()
     {
         var transcriber = new LocalTranscriber(new StubEngine());
@@ -378,31 +394,11 @@ public class LocalTranscriberTests : IDisposable
             () => transcriber.Transcribe(path));
     }
 
-    // MARK: - A long recording goes into the engine whole
+    // MARK: - A short recording goes into the engine whole
 
-    /// <summary>
-    /// Recordings longer than twelve seconds used to be cut here at pauses. The cutting fell
-    /// in the middle of a phrase, slowed parsing down twice and on mixed speech lost more
-    /// text than the engine with its own window gluing (the measurements are in
-    /// docs/benchmarks.md). The test guards against the cutting returning unnoticed.
-    /// </summary>
-    [Fact]
-    public async Task LongRecordingGoesToEngineInOnePiece()
-    {
-        var engine = new StubEngine();
-        var transcriber = new LocalTranscriber(engine);
-        await transcriber.Prepare(directory);
-        // A minute: five times longer than the previous slicing threshold.
-        float[] samples = Enumerable.Range(0, 60 * 16_000)
-            .Select(index => (float)(Math.Sin(index * 0.05) * 0.3))
-            .ToArray();
-
-        await transcriber.Transcribe(samples);
-
-        IReadOnlyList<float[]> batches = engine.ReceivedBatches;
-        Assert.Single(batches);
-        Assert.Equal(samples.Length, batches[0].Length);
-    }
+    // `LongRecordingGoesToEngineInOnePiece` is gone, as upstream's is: past thirty seconds a
+    // recording is now cut at its pauses (LongInputRoutingTests). Upstream keeps the one-call
+    // contract only for engines without word timestamps; this port has one kind of engine.
 
     /// <summary>
     /// The most dangerous case of the previous cutting: a short tail after the cut was
@@ -437,7 +433,8 @@ public class LocalTranscriberTests : IDisposable
 
     /// <summary>
     /// Word timings come from the engine and must not change on the way: the previous gluing
-    /// of pieces added a segment offset to them.
+    /// of pieces added a segment offset to them. Thirty seconds, the longest input that still
+    /// goes to the engine in one call; a longer one is joined from pieces, whose words do move.
     /// </summary>
     [Fact]
     public async Task WordTimingsArePassedThroughUnchanged()
@@ -447,13 +444,13 @@ public class LocalTranscriberTests : IDisposable
             "раз два",
             [
                 new ASRResult.Word("раз", TimeSpan.FromSeconds(0.2), TimeSpan.FromSeconds(0.6), 0.9),
-                new ASRResult.Word("два", TimeSpan.FromSeconds(40.0), TimeSpan.FromSeconds(40.5), 0.8),
+                new ASRResult.Word("два", TimeSpan.FromSeconds(25.0), TimeSpan.FromSeconds(25.5), 0.8),
             ],
-            TimeSpan.FromSeconds(60),
+            TimeSpan.FromSeconds(30),
             TimeSpan.FromSeconds(0.5)));
         var transcriber = new LocalTranscriber(engine);
         await transcriber.Prepare(directory);
-        float[] samples = Enumerable.Range(0, 60 * 16_000)
+        float[] samples = Enumerable.Range(0, 30 * 16_000)
             .Select(index => (float)(Math.Sin(index * 0.05) * 0.3))
             .ToArray();
 
@@ -461,10 +458,10 @@ public class LocalTranscriberTests : IDisposable
 
         Assert.Equal("раз два", result.Text);
         Assert.Equal(
-            [TimeSpan.FromSeconds(0.2), TimeSpan.FromSeconds(40.0)],
+            [TimeSpan.FromSeconds(0.2), TimeSpan.FromSeconds(25.0)],
             result.Words.Select(word => word.Start));
         Assert.Equal(
-            [TimeSpan.FromSeconds(0.6), TimeSpan.FromSeconds(40.5)],
+            [TimeSpan.FromSeconds(0.6), TimeSpan.FromSeconds(25.5)],
             result.Words.Select(word => word.End));
     }
 

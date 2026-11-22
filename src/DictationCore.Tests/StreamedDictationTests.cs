@@ -23,14 +23,21 @@ public sealed class StreamedDictationTests
 
         /// <summary>Sample counts to ship as segments before the key comes up.</summary>
         private readonly int[] segments;
+
+        /// <summary>The take outgrew the memory cap: only its file holds it.</summary>
+        private readonly bool fileBacked;
         private Action<float[]>? sink;
         private int consumed;
 
-        public StreamingCapture(float[] samples, int[] segments)
+        public StreamingCapture(float[] samples, int[] segments, bool fileBacked = false)
         {
             this.samples = samples;
             this.segments = segments;
+            this.fileBacked = fileBacked;
         }
+
+        /// <summary>What reading the take's file back gives.</summary>
+        public float[] ReadSamples() => samples;
 
         public Task SetSegmentSink(Action<float[]>? sink)
         {
@@ -60,7 +67,7 @@ public sealed class StreamedDictationTests
         public Task<(string Url, TimeSpan Duration)> StopRecording() =>
             Task.FromResult((file, TimeSpan.FromSeconds(samples.Length / 16_000.0)));
 
-        public Task<float[]?> TakeBufferedSamples() => Task.FromResult<float[]?>(samples);
+        public Task<float[]?> TakeBufferedSamples() => Task.FromResult(fileBacked ? null : samples);
 
         public Task<int> ConsumedSampleCount()
         {
@@ -88,7 +95,8 @@ public sealed class StreamedDictationTests
             inserter: inserter,
             overlay: new FakeOverlay(),
             sounds: new FakeSounds(),
-            pipeline: () => new TextPipeline());
+            pipeline: () => new TextPipeline(),
+            readSamples: (_, _) => Task.FromResult(capture.ReadSamples()));
 
     private static async Task Run(DictationController controller)
     {
@@ -164,5 +172,105 @@ public sealed class StreamedDictationTests
 
         await Run(controller);
         Assert.Equal("One whole take.", inserter.InsertedTexts.FirstOrDefault());
+    }
+
+    [Fact]
+    public async Task TestEightMinuteFileBackedTakeReusesEveryStreamedPiece()
+    {
+        float[] samples = Enumerable.Repeat(0.5f, 480 * 16_000).ToArray();
+        var capture = new StreamingCapture(
+            samples,
+            Enumerable.Repeat(20 * 16_000, 23).ToArray(),
+            fileBacked: true);
+        var inserter = new FakeInserter();
+        var controller = MakeController(capture, inserter, chunk =>
+        {
+            Assert.True(chunk.Length == 20 * 16_000, "only the last 20 seconds need recognition at stop");
+            return "piece";
+        });
+
+        await Run(controller);
+
+        Assert.True(
+            inserter.InsertedTexts.FirstOrDefault()?.ToLowerInvariant().Split(' ').Length == 24,
+            "all 23 precomputed pieces and the tail must survive the memory boundary");
+    }
+
+    [Fact]
+    public async Task TestFileBackedShortTailIsJoinedToThePreviousSegment()
+    {
+        float[] samples = Enumerable.Repeat(0.5f, 360 * 16_000).ToArray();
+        var capture = new StreamingCapture(samples, [340 * 16_000, 19 * 16_000], fileBacked: true);
+        var inserter = new FakeInserter();
+        var controller = MakeController(capture, inserter, chunk => chunk.Length switch
+        {
+            340 * 16_000 => "first",
+            19 * 16_000 => "discard this version",
+            20 * 16_000 => "second and tail together.",
+            _ => throw new InvalidOperationException($"unexpected decode length: {chunk.Length}"),
+        });
+
+        await Run(controller);
+
+        Assert.Equal("First second and tail together.", inserter.InsertedTexts.FirstOrDefault());
+    }
+
+    [Fact]
+    public async Task TestFailedStreamStillRecognizesTheCompleteFile()
+    {
+        var capture = new StreamingCapture(
+            Enumerable.Repeat(0.5f, 360 * 16_000).ToArray(),
+            [20 * 16_000],
+            fileBacked: true);
+        var inserter = new FakeInserter();
+        var controller = new DictationController(
+            capture: capture,
+            transcribe: (_, _) => Task.FromResult(new ASRResult(
+                "complete recording.",
+                TimeSpan.FromSeconds(360),
+                TimeSpan.FromSeconds(1))),
+            transcribeSamples: (_, _) => throw new ASREngineError.InferenceFailed("failed segment"),
+            readSamples: (_, _) =>
+            {
+                Assert.Fail("failed prefix cannot be reused");
+                return Task.FromResult<float[]>([]);
+            },
+            inserter: inserter,
+            overlay: new FakeOverlay(),
+            sounds: new FakeSounds());
+
+        await Run(controller);
+
+        Assert.Equal("Complete recording.", inserter.InsertedTexts.FirstOrDefault());
+    }
+
+    [Fact]
+    public async Task TestTruncatedFileDoesNotPublishAPartialTranscript()
+    {
+        float[] samples = Enumerable.Repeat(0.5f, 360 * 16_000).ToArray();
+        var capture = new StreamingCapture(samples, [20 * 16_000], fileBacked: true);
+        var inserter = new FakeInserter();
+        var overlay = new FakeOverlay();
+        var controller = new DictationController(
+            capture: capture,
+            transcribe: (_, _) =>
+            {
+                Assert.Fail("must not hide an incomplete file");
+                throw new ASREngineError.Cancelled();
+            },
+            transcribeSamples: (_, _) => Task.FromResult(new ASRResult(
+                "prefix",
+                TimeSpan.FromSeconds(20),
+                TimeSpan.FromSeconds(0.01))),
+            readSamples: (_, _) => Task.FromResult(samples[..(25 * 16_000)]),
+            inserter: inserter,
+            overlay: overlay,
+            sounds: new FakeSounds());
+
+        await Run(controller);
+
+        Assert.Empty(inserter.InsertedTexts);
+        Assert.Contains(overlay.Notices, notice => notice.Kind == DictationNoticeKind.Failure);
+        Assert.Equal(DictationState.Idle, controller.State);
     }
 }

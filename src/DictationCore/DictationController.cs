@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace DictationCore;
 
 /// <summary>What to do with recognized text if it was not possible to insert it.</summary>
@@ -110,8 +112,21 @@ public sealed class DictationController
     /// that keeps a history gets both halves of the take while both still exist. Whether the
     /// words actually landed is not the question here - a person who watched an insertion fail
     /// wants that transcript more than anyone, not less.
+    ///
+    /// Empty text is a take with sound in which the model found no words. It is handed over
+    /// too, so it can be played and recognized again rather than lost; only a take of silence
+    /// is not.
+    ///
+    /// Returns whether the take was kept. With no words, the notice tells the person where the
+    /// take went, and only the owner knows.
     /// </summary>
-    public Action<string, string>? OnTakeFinished { get; set; }
+    public Func<string, string, bool>? OnTakeFinished { get; set; }
+
+    /// <summary>
+    /// The name of the microphone the takes are recorded from, for the one message that needs
+    /// it: a take that heard only silence.
+    /// </summary>
+    public Func<string?>? MicrophoneName { get; set; }
 
     /// <summary>
     /// The take is finished and the model is not resident yet, so the words are waiting for a
@@ -149,6 +164,11 @@ public sealed class DictationController
     /// delegate remains the compatibility and recovery path.
     /// </summary>
     private readonly Func<float[], CancellationToken, Task<ASRResult>>? transcribeSamples;
+
+    /// <summary>
+    /// Reopen file-backed PCM after the capture released its bounded memory copy.
+    /// </summary>
+    private readonly Func<string, CancellationToken, Task<float[]>>? readSamples;
 
     /// <summary>
     /// Recognizes the take in pieces while it is still being spoken.
@@ -278,6 +298,28 @@ public sealed class DictationController
     /// </remarks>
     public static TimeSpan DefaultCaptureStopDeadline { get; } = TimeSpan.FromSeconds(20);
 
+    /// <summary>
+    /// How long the microphone may take to start, from the key-down, before the person is told.
+    /// </summary>
+    /// <remarks>
+    /// Five seconds rather than three: the slowest successful start upstream measured in a week
+    /// took under three, and Bluetooth profile switches are unmeasured. An early notice ends a
+    /// real take; a late one only delays news about a broken one.
+    /// </remarks>
+    private readonly TimeSpan microphoneStartDeadline;
+
+    /// <summary>
+    /// How long a tap released before the microphone opened waits for it. A tap is a change of
+    /// mind, and this bound is what keeps a microphone that never opens from holding it.
+    /// </summary>
+    private readonly TimeSpan preparingStopDeadline;
+
+    /// <summary>
+    /// How long a take that came back without words may spend reading its file back to tell
+    /// silence from sound.
+    /// </summary>
+    private readonly TimeSpan recordingReadableDeadline;
+
     // MARK: - Session state
 
     /// <summary>
@@ -342,6 +384,13 @@ public sealed class DictationController
     /// <summary>Whether this session has already asked for the person's attention.</summary>
     private bool hasSoundedThisSession;
 
+    /// <summary>The key-down of the current session, on the real clock the watchdog runs on.</summary>
+    private MonotonicInstant? beganAt;
+
+    /// <summary>The one watchdog per take that ends a microphone which never started.</summary>
+    private CancellationTokenSource? microphoneStartWatchdog;
+    private MonotonicInstant? microphoneStartWatchdogDeadline;
+
     public DictationController(
         IAudioCapturing capture,
         Func<string, CancellationToken, Task<ASRResult>> transcribe,
@@ -363,11 +412,19 @@ public sealed class DictationController
         Func<TargetApplication?>? targetApplicationSnapshot = null,
         TimeSpan? enginePreparationNoticeDelay = null,
         TimeSpan? insertionDeadline = null,
-        TimeSpan? returnDeadline = null)
+        TimeSpan? returnDeadline = null,
+        Func<string, CancellationToken, Task<float[]>>? readSamples = null,
+        TimeSpan? microphoneStartDeadline = null,
+        TimeSpan? preparingStopDeadline = null,
+        TimeSpan? recordingReadableDeadline = null)
     {
         this.capture = capture;
         this.transcribe = transcribe;
         this.transcribeSamples = transcribeSamples;
+        this.readSamples = readSamples;
+        this.microphoneStartDeadline = microphoneStartDeadline ?? TimeSpan.FromSeconds(5);
+        this.preparingStopDeadline = preparingStopDeadline ?? TimeSpan.FromMilliseconds(500);
+        this.recordingReadableDeadline = recordingReadableDeadline ?? TimeSpan.FromSeconds(10);
         this.inserter = inserter;
         this.overlay = overlay;
         this.sounds = sounds;
@@ -413,6 +470,10 @@ public sealed class DictationController
             streamedSegments = transcribeSamples is { } recognizeSamples
                 ? new StreamedSegmentRecognizer(samples => recognizeSamples(samples, CancellationToken.None))
                 : null;
+            // One watchdog per take, armed at the key-down: a microphone that never opens is
+            // reported while the key is still held, not when it comes up.
+            beganAt = MonotonicInstant.Now;
+            ArmMicrophoneStartWatchdog(session, beganAt.Value.Advanced(microphoneStartDeadline));
             // We remember the target right away: the focus will go away later.
             targetApplication = targetApplicationSnapshot();
             SetState(DictationState.Preparing);
@@ -471,6 +532,7 @@ public sealed class DictationController
         lock (gate)
         {
             recordingStartedAt = now();
+            CancelMicrophoneStartWatchdog();
             SetState(DictationState.Listening);
         }
 
@@ -527,6 +589,7 @@ public sealed class DictationController
         }
 
         if (decision == DeferredStopDecision.StopNow) { Finish(); }
+        if (decision == DeferredStopDecision.DeferUntilListening) { StopArrivedBeforeTheMicrophoneOpened(); }
     }
 
     /// <summary>
@@ -534,9 +597,11 @@ public sealed class DictationController
     /// the ordinary transcription path, independent of hotkey/hands-free gesture policy. This is
     /// a graceful capacity stop, not a capture failure.
     /// </summary>
-    public void StopAtCaptureMemoryLimit()
+    /// <returns>Whether a running take was stopped by it, so its owner can say why.</returns>
+    public bool StopAtCaptureMemoryLimit()
     {
         bool stopNow = false;
+        bool deferred = false;
         lock (gate)
         {
             switch (state)
@@ -548,21 +613,25 @@ public sealed class DictationController
                 case DictationState.Preparing:
                     MarkStopRequested();
                     deferredStopRequested = true;
+                    deferred = true;
                     break;
                 case DictationState.Idle:
                 case DictationState.Transcribing:
                 case DictationState.Inserting:
-                    break;
+                    return false;
             }
         }
 
         if (stopNow) { Finish(); }
+        if (deferred) { StopArrivedBeforeTheMicrophoneOpened(); }
+        return true;
     }
 
     /// <summary>Stop in the mode without holding - by pressing the key a second time.</summary>
     public void StopHandsFree()
     {
         bool stopNow = false;
+        bool deferred = false;
         lock (gate)
         {
             if (!isHandsFree) { return; }
@@ -581,6 +650,7 @@ public sealed class DictationController
                     // one listening.
                     MarkStopRequested();
                     deferredStopRequested = true;
+                    deferred = true;
                     break;
                 case DictationState.Idle:
                 case DictationState.Transcribing:
@@ -590,6 +660,7 @@ public sealed class DictationController
         }
 
         if (stopNow) { Finish(); }
+        if (deferred) { StopArrivedBeforeTheMicrophoneOpened(); }
     }
 
     /// <summary>
@@ -615,6 +686,15 @@ public sealed class DictationController
             // forever.
             isHandsFree = true;
             deferredStopRequested = false;
+            // A tap's release may have pulled the watchdog in. That bound belonged to the tap; a
+            // hands-free take is ended only by a microphone that misses the deadline from its
+            // key-down.
+            CancelMicrophoneStartWatchdog();
+            if (state == DictationState.Preparing && beganAt is { } began)
+            {
+                ArmMicrophoneStartWatchdog(currentSession, began.Advanced(microphoneStartDeadline));
+            }
+
             // The release that promoted the session belonged to the previous gesture, and so
             // did its "stop" mark: in the new mode the stop is still to come.
             stopRequestedAt = null;
@@ -634,6 +714,7 @@ public sealed class DictationController
             // One entry for all the stop paths: Stop, StopHandsFree and the
             // deferred release - all of them come here.
             MarkStopRequested();
+            CancelMicrophoneStartWatchdog();
             session = currentSession;
             SetState(DictationState.Transcribing);
             finalization = new CancellationTokenSource();
@@ -644,6 +725,111 @@ public sealed class DictationController
         {
             await Finalize(session, token).ConfigureAwait(false);
             ForgetFinalization(session);
+        });
+    }
+
+    /// <summary>
+    /// A release (or the second press of a hands-free take) arrived before the microphone opened.
+    /// </summary>
+    /// <remarks>
+    /// The take can no longer record anything: it ends at the moment the microphone finally
+    /// opens, so its recording would be empty whatever happens next. Which empty take it is, the
+    /// hold decides, by the same rule as any other empty take
+    /// (<see cref="DictationDurationPolicy.OutcomeForShortRecording"/>). After a real hold the
+    /// person spoke into a microphone that was not there yet, and waiting for it only to drop an
+    /// empty take without a word is how a sentence vanished. They hear it now. A shorter press is
+    /// a change of mind; it stays quiet and waits at most <see cref="preparingStopDeadline"/> for
+    /// the microphone.
+    /// </remarks>
+    private void StopArrivedBeforeTheMicrophoneOpened()
+    {
+        int session;
+        bool reportNow;
+        lock (gate)
+        {
+            if (state != DictationState.Preparing) { return; }
+
+            session = currentSession;
+            TimeSpan held = beganAt is { } began ? began.DurationTo(MonotonicInstant.Now) : TimeSpan.Zero;
+            reportNow = DictationDurationPolicy.OutcomeForShortRecording(held)
+                == DictationDurationPolicy.ShortRecordingOutcome.ReportSilentInput;
+            if (!reportNow)
+            {
+                ArmMicrophoneStartWatchdog(session, MonotonicInstant.Now.Advanced(preparingStopDeadline));
+            }
+        }
+
+        if (reportNow) { MicrophoneStartTookTooLong(session); }
+    }
+
+    /// <summary>The gate must be held. Keeps the earlier of the current deadline and the new one.</summary>
+    /// <remarks>
+    /// On the real clock, not the injected one: the injected clock exists to script the speed
+    /// report's marks, and a watchdog reading it would consume them.
+    /// </remarks>
+    private void ArmMicrophoneStartWatchdog(int session, MonotonicInstant deadline)
+    {
+        if (microphoneStartWatchdog is not null
+            && microphoneStartWatchdogDeadline is { } armed
+            && armed.Timestamp <= deadline.Timestamp)
+        {
+            return;
+        }
+
+        microphoneStartWatchdog?.Cancel();
+        var watchdog = new CancellationTokenSource();
+        microphoneStartWatchdog = watchdog;
+        microphoneStartWatchdogDeadline = deadline;
+        TimeSpan remaining = MonotonicInstant.Now.DurationTo(deadline);
+        // A timer, not a task started now: nothing runs until the deadline, so arming this at the
+        // key-down takes no thread away from the capture start it is watching.
+        _ = Task.Delay(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, watchdog.Token).ContinueWith(
+            _ => MicrophoneStartTookTooLong(session),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnRanToCompletion,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>The gate must be held.</summary>
+    private void CancelMicrophoneStartWatchdog()
+    {
+        microphoneStartWatchdog?.Cancel();
+        microphoneStartWatchdog = null;
+        microphoneStartWatchdogDeadline = null;
+    }
+
+    /// <summary>
+    /// The microphone did not open in time. The take ends and says so; the notice carries the
+    /// attention sound.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is aborted here: the start is still running, and when it finally returns it
+    /// finds its session no longer preparing and closes the microphone itself - the same path a
+    /// cancellation during the start already takes.
+    /// </remarks>
+    private void MicrophoneStartTookTooLong(int session)
+    {
+        StreamedSegmentRecognizer? streamed;
+        lock (gate)
+        {
+            if (!IsCurrent(session) || state != DictationState.Preparing || finalization is not null) { return; }
+
+            CancelMicrophoneStartWatchdog();
+            cancellationRequested = true;
+            streamed = streamedSegments;
+            // Marks the session as ending, so neither a stop nor the late start can finish it.
+            finalization = new CancellationTokenSource();
+            SetState(DictationState.Transcribing);
+        }
+
+        streamed?.Cancel();
+        _ = Task.Run(async () =>
+        {
+            await Report(new DictationNotice(
+                kind: DictationNoticeKind.Failure,
+                message: "Starting the microphone took too long. Dictation was stopped.",
+                wordsDidNotLand: true)).ConfigureAwait(false);
+            await Cleanup(session).ConfigureAwait(false);
         });
     }
 
@@ -799,6 +985,11 @@ public sealed class DictationController
             return;
         }
 
+        // Judged before recognition, because recognition may level the buffer in place, and a
+        // levelled hiss is no longer silence. Stops at the first loud sample, so on an ordinary
+        // take this costs nothing.
+        bool? heardOnlySilence = bufferedSamples is null ? null : SilentTakePolicy.HeardOnlySilence(bufferedSamples);
+
         ASRResult recognized;
         // Stage boundaries for the speed report. Plain clock reads on the path that already
         // runs; none of them adds a wait, a lock or a reordered call.
@@ -898,6 +1089,35 @@ public sealed class DictationController
                         // recognized here exactly as it always was - a stream that could not
                         // finish costs latency, never words.
                         return await samples(bufferedSamples, workToken).ConfigureAwait(false);
+                    }
+
+                    // The memory cap changes where audio lives, not which words have already
+                    // been recognized. Reopen the complete local WAV and reuse the same
+                    // prefix/tail join, so a long take is not recognized again from the start.
+                    StreamedSegmentRecognizer.Outcome? fileOutcome = streamed is null
+                        ? null
+                        : await streamed.Finish().ConfigureAwait(false);
+                    if (transcribeSamples is { } tailRecognizer
+                        && readSamples is { } read
+                        && fileOutcome is StreamedSegmentRecognizer.Outcome.Recognized { Texts.Count: > 0 } filePieces)
+                    {
+                        long decodingStarted = Stopwatch.GetTimestamp();
+                        float[] fileSamples = await read(recording.Url, workToken).ConfigureAwait(false);
+                        TimeSpan decoding = Stopwatch.GetElapsedTime(decodingStarted);
+                        workToken.ThrowIfCancellationRequested();
+                        if (Math.Abs(fileSamples.Length - recording.Duration.TotalSeconds * SampleRate) >= 1)
+                        {
+                            throw new ASREngineError.UnsupportedAudioFormat("incomplete file-backed recording");
+                        }
+
+                        return await JoinStreamed(
+                            filePieces.Texts,
+                            streamed!.SubmittedSampleCounts,
+                            consumedSamples,
+                            fileSamples,
+                            tailRecognizer,
+                            workToken,
+                            decoding).ConfigureAwait(false);
                     }
 
                     return await transcribe(recording.Url, workToken).ConfigureAwait(false);
@@ -1024,24 +1244,18 @@ public sealed class DictationController
         TextPipeline.Output processed = run.Output;
         if (!RecognizedTextPolicy.CarriesWords(processed.Text))
         {
-            // An empty result is not an error: the person could have stayed
-            // silent, spoken too quietly or used the wrong microphone. But one
-            // cannot stay silent in response: a blank panel without text is
-            // indistinguishable from "inserted in the wrong place", and the
-            // person goes looking for the missing phrase in someone else's
-            // window. A press that is too short does not get here - it is
-            // filtered out above and needs no explanation.
+            // An empty result is not an error: the person could have stayed silent, spoken too
+            // quietly or used the wrong microphone. But one cannot stay silent in response: a
+            // blank panel without text is indistinguishable from "inserted in the wrong place",
+            // and the person goes looking for the missing phrase in someone else's window. A
+            // press that is too short does not get here - it is filtered out above and needs no
+            // explanation.
             //
-            // The original asks only whether the text is empty, because its
-            // engine answers silence with nothing. This one answers silence with
-            // punctuation, and a transcript without a single letter or digit in
-            // it is the same "nothing was recognized" - see RecognizedTextPolicy.
-            await Discard(recording.Url).ConfigureAwait(false);
-            await Report(new DictationNotice(
-                kind: DictationNoticeKind.Info,
-                message: "Nothing was recognized — nothing was inserted.",
-                wordsDidNotLand: true)).ConfigureAwait(false);
-            await Cleanup(session).ConfigureAwait(false);
+            // The original asks only whether the text is empty, because its engine answers
+            // silence with nothing. This one answers silence with punctuation, and a transcript
+            // without a single letter or digit in it is the same "nothing was recognized" - see
+            // RecognizedTextPolicy.
+            await EndWithoutWords(recording.Url, heardOnlySilence, session, token).ConfigureAwait(false);
             return;
         }
 
@@ -1056,11 +1270,89 @@ public sealed class DictationController
         // The last moment the take still exists. Whoever keeps a history has to take its copy
         // now; the next line deletes the original, and that deletion is the promise that a
         // recording does not outlive its use.
-        Action<string, string>? takeFinished;
+        Func<string, string, bool>? takeFinished;
         lock (gate) { takeFinished = OnTakeFinished; }
 
-        takeFinished?.Invoke(processed.Text, recording.Url);
+        _ = takeFinished?.Invoke(processed.Text, recording.Url);
         await Discard(recording.Url).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A take in which the model found no words. Never thrown away in silence.
+    /// </summary>
+    /// <remarks>
+    /// Silence is not kept, and it is a warning: a muted, dead or wrong input needs the person.
+    /// The microphone's name, when there is one, says where to look. Sound in which the model
+    /// found nothing is kept for History: it may hold words the person still wants, and
+    /// recognizing it again is one click. A take History does not keep is left where the
+    /// launch-time import looks, never deleted here.
+    ///
+    /// <para>
+    /// A take too long to hold in memory was recognized from its file, which is therefore whole
+    /// and answers the same question.
+    /// </para>
+    /// </remarks>
+    private async Task EndWithoutWords(string url, bool? heardOnlySilence, int session, CancellationToken token)
+    {
+        if (heardOnlySilence is null && readSamples is { } read)
+        {
+            try
+            {
+                float[] heard = await TranscriptionDeadline.WithTranscriptionDeadline(
+                    recordingReadableDeadline,
+                    workToken => read(url, workToken),
+                    token).ConfigureAwait(false);
+                heardOnlySilence = SilentTakePolicy.HeardOnlySilence(heard);
+            }
+            catch (Exception)
+            {
+                // A file that cannot be read back cannot prove silence; the take is kept.
+            }
+        }
+
+        if (!ShouldContinue(session, token))
+        {
+            await Discard(url).ConfigureAwait(false);
+            await FinishWithoutInsertion(session).ConfigureAwait(false);
+            return;
+        }
+
+        DictationNotice notice;
+        if (heardOnlySilence == true)
+        {
+            await Discard(url).ConfigureAwait(false);
+            Func<string?>? microphoneName;
+            lock (gate) { microphoneName = MicrophoneName; }
+
+            string? name = microphoneName?.Invoke();
+            notice = new DictationNotice(
+                kind: DictationNoticeKind.Warning,
+                message: name is null
+                    ? "Nothing was recognized — nothing was inserted."
+                    : $"Heard only silence from {name}.",
+                wordsDidNotLand: true);
+        }
+        else
+        {
+            // Handed over here, and nothing waits between this and the notice, so the person is
+            // told where the take went exactly when it got there.
+            Func<string, string, bool>? takeFinished;
+            lock (gate) { takeFinished = OnTakeFinished; }
+
+            bool kept = takeFinished?.Invoke(string.Empty, url) == true;
+            if (kept) { await Discard(url).ConfigureAwait(false); }
+
+            notice = new DictationNotice(
+                kind: DictationNoticeKind.Info,
+                message: kept
+                    ? "Nothing was recognized — the recording is in History."
+                    : "Nothing was recognized — nothing was inserted."
+                        + " The local take will be checked for automatic recovery on the next launch.",
+                wordsDidNotLand: true);
+        }
+
+        await Report(notice).ConfigureAwait(false);
+        await Cleanup(session).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1078,8 +1370,20 @@ public sealed class DictationController
         int consumedSamples,
         float[] samples,
         Func<float[], CancellationToken, Task<ASRResult>> transcribe,
-        CancellationToken token)
+        CancellationToken token,
+        TimeSpan decodingDuration = default)
     {
+        // A stream whose counts do not add up is not a prefix of this take, and joining it
+        // would publish a transcript with a hole or a repeat in it.
+        if (consumedSamples < 0
+            || consumedSamples > samples.Length
+            || texts.Count != segmentSampleCounts.Count
+            || segmentSampleCounts.Any(static count => count <= 0)
+            || segmentSampleCounts.Sum() != consumedSamples)
+        {
+            throw new ASREngineError.UnsupportedAudioFormat("incomplete streamed recording");
+        }
+
         var pieces = new List<string>(texts);
         int tailStart = Math.Min(Math.Max(0, consumedSamples), samples.Length);
 
@@ -1113,7 +1417,8 @@ public sealed class DictationController
             text,
             audioDuration: TimeSpan.FromSeconds((double)samples.Length / SampleRate),
             processingDuration: processing,
-            engineDispatchDuration: dispatch);
+            engineDispatchDuration: dispatch,
+            decodingDuration: decodingDuration);
     }
 
     /// <summary>A stage that did not run is absent, never zero. Zero is a measurement.</summary>
@@ -1344,6 +1649,7 @@ public sealed class DictationController
     {
         int session;
         CancellationTokenSource? running;
+        StreamedSegmentRecognizer? streamed;
         lock (gate)
         {
             if (!DictationStopPolicy.CanCancel(state)) { return; }
@@ -1354,9 +1660,13 @@ public sealed class DictationController
             cancellationRequested = true;
             running = finalization;
             session = currentSession;
+            streamed = streamedSegments;
         }
 
         running?.Cancel();
+        // Segments still queued belong to a take nobody will insert; left running they would
+        // hold the engine against the next dictation.
+        streamed?.Cancel();
 
         // Device containment continues in the background. It must never own the controller's
         // return to idle: a cancellation-deaf device edge cannot hold the panel.
@@ -1600,10 +1910,14 @@ public sealed class DictationController
         // session synchronously, and a dismiss issued after that would take its panel away.
         await overlay.Dismiss().ConfigureAwait(false);
 
+        StreamedSegmentRecognizer? streamed;
         lock (gate)
         {
             if (!IsCurrent(session)) { return; }
 
+            streamed = streamedSegments;
+            CancelMicrophoneStartWatchdog();
+            beganAt = null;
             finalization = null;
             deferredStopRequested = false;
             cancellationRequested = false;
@@ -1621,6 +1935,9 @@ public sealed class DictationController
             hasSoundedThisSession = false;
             SetState(DictationState.Idle);
         }
+
+        // Whatever the stream still had queued can never publish into the next take.
+        streamed?.Cancel();
     }
 
     /// <summary>The gate must be held.</summary>

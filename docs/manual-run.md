@@ -165,10 +165,9 @@ delivered nothing.
     clipboard after a paste, and not in Win+V history), "Finish hands-free
     dictation on silence" (double-press, speak, stay quiet two seconds — it
     ends by itself; a held key never does), "Dictation panel" Top/Bottom (the
-    panel moves on the screen holding the focused window), "Unload model"
-    Immediately (the Recognition tab says the model rests after a dictation;
-    the next key press reloads it under the voice, the panel says "Waking the
-    model…" if the take ends first).
+    panel moves on the screen holding the focused window). There is no
+    "Unload model" row: the model stays loaded for an hour after the last
+    dictation.
 15. Settings → About: Theme Light/Dark/System recolours every open window at
     once; System follows the Windows app theme live. "Keep detailed logs"
     writes `Logs/<date>.log` under the app data folder and "Open Logs" opens

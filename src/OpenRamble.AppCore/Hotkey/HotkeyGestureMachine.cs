@@ -143,6 +143,18 @@ public sealed class HotkeyGestureMachine
     /// <summary>The interval within which the second press is considered a double press.</summary>
     public TimeSpan DoubleTapWindow { get; }
 
+    /// <summary>
+    /// How far into a hold another key still means a shortcut.
+    /// </summary>
+    /// <remarks>
+    /// Ctrl+C follows its modifier by a tenth to a third of a second. A key that arrives later
+    /// lands in the middle of speech - a brushed key, a reflex - and ending the take on it would
+    /// throw away everything said so far. Past this window the key is ignored and the take
+    /// finishes at the release like any other. Ignored by the take, not swallowed: the front app
+    /// still receives the chord and acts on it before the paste.
+    /// </remarks>
+    public static TimeSpan ShortcutWindow { get; } = TimeSpan.FromSeconds(0.8);
+
     public bool IsHeld { get; private set; }
 
     /// <summary>
@@ -251,9 +263,10 @@ public sealed class HotkeyGestureMachine
     /// <summary>
     /// Someone else's key arrived while our own is held.
     ///
-    /// A regular key (Ctrl+C) always ends the gesture. Another modifier ends it only if it
-    /// turns the state into a chord: pressing the left Ctrl while the right one is held is
-    /// still just Ctrl, and the person is not reaching for a shortcut.
+    /// A regular key (Ctrl+C) early in the hold ends the gesture. Another modifier ends it only
+    /// if it turns the state into a chord: pressing the left Ctrl while the right one is held is
+    /// still just Ctrl, and the person is not reaching for a shortcut. Past
+    /// <see cref="ShortcutWindow"/> neither ends it: the take goes on.
     /// </summary>
     private HotkeyAction HandleForeignKey(HotkeyEvent keyboardEvent)
     {
@@ -264,6 +277,14 @@ public sealed class HotkeyGestureMachine
 
         bool isModifier = Keymap.IsModifierCode(keyboardEvent.KeyCode);
         if (isModifier && IsExclusivelyPressed(keyboardEvent.HeldModifiers))
+        {
+            return HotkeyAction.None;
+        }
+
+        // Past the window the key is not a shortcut; the take goes on. Whole milliseconds, as for
+        // the release: a sum of timestamps is not exact, and 0.8 s must not read as 0.7999.
+        if (pressedAt is DateTimeOffset start
+            && Math.Round((keyboardEvent.At - start).TotalMilliseconds) >= ShortcutWindow.TotalMilliseconds)
         {
             return HotkeyAction.None;
         }

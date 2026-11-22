@@ -68,8 +68,6 @@ public sealed partial class SettingsWindow : Window
     private readonly Button silenceRevert;
     private readonly ComboBox placementPicker = new() { Width = 140 };
     private readonly Button placementRevert;
-    private readonly ComboBox unloadPicker = new() { Width = 160 };
-    private readonly Button unloadRevert;
 
     // About
     private readonly ComboBox themePicker = new() { Width = 140 };
@@ -170,19 +168,6 @@ public sealed partial class SettingsWindow : Window
             "Places dictation feedback at the top or bottom of the active screen",
             out placementRevert,
             () => state.OverlayPlacement = SettingsDefaults.OverlayPlacement));
-
-        unloadPicker.ItemsSource = IdleUnloadPolicies.AllCases.Select(policy => policy.Label).ToArray();
-        unloadPicker.SelectionChanged += (_, _) =>
-        {
-            if (updating || unloadPicker.SelectedIndex < 0) { return; }
-            state.ModelUnloadTimeout = IdleUnloadPolicies.AllCases[unloadPicker.SelectedIndex];
-        };
-        BehaviorRows.Children.Add(Row(
-            "Unload model",
-            unloadPicker,
-            "Frees the speech model's memory after this much idle time. It reloads under your voice at the next dictation.",
-            out unloadRevert,
-            () => state.ModelUnloadTimeout = SettingsDefaults.ModelUnloadTimeout));
 
         // MARK: - History
 
@@ -306,8 +291,6 @@ public sealed partial class SettingsWindow : Window
 
             placementPicker.SelectedIndex = DictationOverlayPlacements.AllCases.ToList().IndexOf(state.OverlayPlacement);
             ShowRevert(placementRevert, state.OverlayPlacement != SettingsDefaults.OverlayPlacement);
-            unloadPicker.SelectedIndex = IdleUnloadPolicies.AllCases.ToList().IndexOf(state.ModelUnloadTimeout);
-            ShowRevert(unloadRevert, state.ModelUnloadTimeout != SettingsDefaults.ModelUnloadTimeout);
 
             LearnToggle.IsChecked = state.LearnFromEdits;
 

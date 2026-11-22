@@ -76,6 +76,21 @@ public sealed class FakeCapture : IAudioCapturing
 
     public void SetDuration(TimeSpan value) { lock (gate) { duration = value; } }
 
+    private float[]? bufferedSamples;
+
+    /// <summary>What the next take hands recognition from memory; <c>null</c> - file only.</summary>
+    public void SetBufferedSamples(float[]? samples) { lock (gate) { bufferedSamples = samples; } }
+
+    public Task<float[]?> TakeBufferedSamples()
+    {
+        lock (gate)
+        {
+            float[]? samples = bufferedSamples;
+            bufferedSamples = null;
+            return Task.FromResult(samples);
+        }
+    }
+
     public Task<string> StartRecording()
     {
         lock (gate)
@@ -529,6 +544,9 @@ public sealed class CountingASREngine : IASREngineAdapting
 
     public int Inferences => Volatile.Read(ref inferences);
 
+    /// <summary>What every inference answers.</summary>
+    public string Text { get; init; } = string.Empty;
+
     public Task LoadModels(string directory)
     {
         Interlocked.Increment(ref modelLoads);
@@ -538,7 +556,7 @@ public sealed class CountingASREngine : IASREngineAdapting
     public Task<ASRResult> Transcribe(float[] samples)
     {
         Interlocked.Increment(ref inferences);
-        return Task.FromResult(new ASRResult(string.Empty, TimeSpan.Zero, TimeSpan.Zero));
+        return Task.FromResult(new ASRResult(Text, TimeSpan.Zero, TimeSpan.Zero));
     }
 
     public Task Unload()

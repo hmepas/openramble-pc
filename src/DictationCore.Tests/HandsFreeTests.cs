@@ -81,10 +81,26 @@ public sealed class HandsFreeTests
     {
         // The release belonged to the previous gesture: in the new mode the key
         // is supposed to be released, so it must not break the recording.
-        var controller = MakeController();
+        //
+        // The microphone opens only after both gestures, the order the Swift original gets for
+        // free from its main actor. Without the gate a pool thread may open it between the
+        // release and the promotion, and the test would measure the scheduler.
+        var opening = new Gate();
+        var gated = new TrackedCapture();
+        gated.SetStartGate(opening);
+        var controller = new DictationController(
+            capture: gated,
+            transcribe: (_, _) => Task.FromResult(new ASRResult(
+                "текст",
+                audioDuration: TimeSpan.FromSeconds(2),
+                processingDuration: TimeSpan.FromSeconds(0.1))),
+            inserter: inserter,
+            overlay: new FakeOverlay(),
+            sounds: new FakeSounds());
         controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
         controller.Stop();
         controller.PromoteToHandsFree();
+        opening.Open();
         await Settle();
 
         // The recording must not break off.

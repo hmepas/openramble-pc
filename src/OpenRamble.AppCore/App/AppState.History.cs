@@ -46,18 +46,22 @@ public sealed partial class AppState
     }
 
     /// <summary>
-    /// Keep a finished take: its text, and a copy of its audio.
+    /// Keep a finished take: its text, and a copy of its audio. Empty text is a take with sound
+    /// and no words, kept for its audio.
     ///
     /// Failures here are reported rather than swallowed. A history that silently stops
     /// recording looks exactly like a history of someone who stopped dictating.
     /// </summary>
-    private void Archive(string text, string audio)
+    /// <returns>Whether History holds the take now - what a wordless take's notice says.</returns>
+    private bool Archive(string text, string audio)
     {
-        if (historyStore is null) { return; }
+        if (historyStore is null) { return false; }
         IReadOnlyList<HistoryEntry>? recorded = TryHistory(
             () => historyStore.Record(text, audio, HistoryLimit, now()),
             "history.record.failed");
-        if (recorded is not null) { History = recorded; }
+        if (recorded is null) { return false; }
+        History = recorded;
+        return true;
     }
 
     /// <summary>The take's audio, if it is still on disk.</summary>
@@ -99,6 +103,8 @@ public sealed partial class AppState
     /// The new text replaces the entry's text and nothing else. The audio stays where it is, so
     /// this can be done repeatedly, and a run that fails leaves the previous text intact rather
     /// than blanking a record of something the person actually said.
+    ///
+    /// A take that had no words and still has none says so, and keeps its row.
     /// </summary>
     public void RetranscribeHistoryEntry(HistoryEntry entry)
     {
@@ -124,6 +130,12 @@ public sealed partial class AppState
                 ASRResult result = await transcriber.Transcribe(audio).ConfigureAwait(false);
                 string text = MakePipeline().Run(result.Text).Output.Text;
                 if (historyStore is null) { return; }
+                if (entry.Text.Length == 0 && !RecognizedTextPolicy.CarriesWords(text))
+                {
+                    Notify(new DictationNotice(DictationNoticeKind.Info, "Still nothing recognized."));
+                    return;
+                }
+
                 History = TryHistory(() => historyStore.ReplaceText(text, entry)) ?? History;
             }
             catch (Exception error) when (error is ASREngineError or IOException or OperationCanceledException)
@@ -164,6 +176,11 @@ public sealed partial class AppState
         }
 
         History = [];
+        // Delete All means every copy of the words this app holds, not only the rows: the last
+        // dictation behind "Copy Last" and the recent ones in the menu go with them.
+        LastDictationValue = null;
+        RecentDictations = [];
+        RecoveredText = null;
     }
 
     /// <summary>

@@ -165,4 +165,90 @@ public sealed class StreamedDictationTests
         await Run(controller);
         Assert.Equal("One whole take.", inserter.InsertedTexts.FirstOrDefault());
     }
+
+    /// <summary>A take short enough to need no cut is the ordinary path, not a fallback.</summary>
+    [Fact]
+    public async Task TestAWholeTakeWithNoSegmentsReportsNoFallback()
+    {
+        float[] samples = Enumerable.Repeat(0.5f, 5 * 16_000).ToArray();
+        var capture = new StreamingCapture(samples, []);
+        var inserter = new FakeInserter();
+        var controller = MakeController(capture, inserter, _ => "one whole take.");
+        List<DictationFallbackReason> fallbackReasons = [];
+        controller.OnRecognitionFallback = (reason, _) => fallbackReasons.Add(reason);
+
+        await Run(controller);
+
+        Assert.Equal("One whole take.", inserter.InsertedTexts.FirstOrDefault());
+        Assert.Empty(fallbackReasons);
+    }
+
+    /// <summary>
+    /// testFailedStreamStillRecognizesTheCompleteFile, in memory: a failed segment costs a whole
+    /// re-decode, never the words - and the journal still learns why, with the engine's code.
+    /// </summary>
+    [Fact]
+    public async Task TestFailedStreamStillRecognizesTheCompleteTake()
+    {
+        float[] samples = Enumerable.Repeat(0.5f, 30 * 16_000).ToArray();
+        var capture = new StreamingCapture(samples, [8 * 16_000]);
+        var inserter = new FakeInserter();
+        var controller = new DictationController(
+            capture: capture,
+            transcribe: (_, _) => throw new InvalidOperationException("the file path is not used"),
+            transcribeSamples: (chunk, _) => chunk.Length == samples.Length
+                ? Task.FromResult(new ASRResult("complete recording.", TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1)))
+                : Task.FromException<ASRResult>(new ASREngineError.InferenceFailed("failed segment", code: -7)),
+            inserter: inserter,
+            overlay: new FakeOverlay(),
+            sounds: new FakeSounds(),
+            pipeline: () => new TextPipeline());
+        List<DictationFallbackReason> fallbackReasons = [];
+        int? code = null;
+        controller.OnRecognitionFallback = (reason, error) =>
+        {
+            fallbackReasons.Add(reason);
+            code = (error as ASREngineError.InferenceFailed)?.Code;
+        };
+
+        await Run(controller);
+
+        Assert.Equal("Complete recording.", inserter.InsertedTexts.FirstOrDefault());
+        Assert.Equal([DictationFallbackReason.SegmentFailed], fallbackReasons);
+        Assert.Equal(-7, code);
+    }
+
+    /// <summary>The technical cause reaches the owner before it becomes a short notice.</summary>
+    [Fact]
+    public async Task TestRecognitionFailureHandsTheTechnicalCauseToTheOwner()
+    {
+        float[] samples = Enumerable.Repeat(0.5f, 5 * 16_000).ToArray();
+        var capture = new StreamingCapture(samples, []);
+        var inserter = new FakeInserter();
+        var controller = new DictationController(
+            capture: capture,
+            transcribe: (_, _) => throw new InvalidOperationException("the file path is not used"),
+            transcribeSamples: (_, _) => Task.FromException<ASRResult>(new ASREngineError.UnsupportedAudioFormat("incomplete")),
+            inserter: inserter,
+            overlay: new FakeOverlay(),
+            sounds: new FakeSounds(),
+            pipeline: () => new TextPipeline());
+        Exception? failure = null;
+        List<DictationFailureStage> stages = [];
+        List<bool> timeouts = [];
+        controller.OnRecognitionFailure = error => failure = error;
+        controller.OnStageFailure = (stage, _, timedOut) =>
+        {
+            stages.Add(stage);
+            timeouts.Add(timedOut);
+        };
+
+        await Run(controller);
+
+        Assert.Empty(inserter.InsertedTexts);
+        Assert.IsType<ASREngineError.UnsupportedAudioFormat>(failure);
+        Assert.Equal([DictationFailureStage.Recognition], stages);
+        Assert.Equal([false], timeouts);
+        Assert.Equal(DictationState.Idle, controller.State);
+    }
 }

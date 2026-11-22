@@ -696,7 +696,41 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         Changed(RevertLogging, state.DetailedLogging != SettingsDefaults.DetailedLogging);
     }
 
-    private void OnOpenLogs(object? sender, RoutedEventArgs args) => state.RevealLogs();
+    private void OnSaveErrorReport(object? sender, RoutedEventArgs args) => _ = SaveErrorReport();
+
+    /// <summary>
+    /// One ZIP the person saves and shares themselves: local technical events, versions and any
+    /// crash records. Nothing is sent.
+    /// </summary>
+    private async Task SaveErrorReport()
+    {
+        IStorageFile? chosen = await StorageProvider.SaveFilePickerAsync(
+            new FilePickerSaveOptions
+            {
+                Title = "Save Error Report",
+                SuggestedFileName = "OpenRamble-Error-Report.zip",
+                DefaultExtension = "zip",
+                FileTypeChoices = [new FilePickerFileType("ZIP archive") { Patterns = ["*.zip"], MimeTypes = ["application/zip"] }],
+            }).ConfigureAwait(true);
+        if (chosen is null) { return; }
+        if (chosen.TryGetLocalPath() is not { } path)
+        {
+            Notice.Show("The report can only be saved to a folder on this PC.");
+            return;
+        }
+
+        SaveReportButton.IsEnabled = false;
+        SaveReportButton.Content = "Saving Report…";
+        try
+        {
+            await state.SaveErrorReport(path).ConfigureAwait(true);
+        }
+        finally
+        {
+            SaveReportButton.Content = "Save Error Report…";
+            SaveReportButton.IsEnabled = true;
+        }
+    }
 
     /// <summary>
     /// The one link in this window. An app whose whole claim is that speech never leaves the

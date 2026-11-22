@@ -213,9 +213,9 @@ public sealed partial class SettingsWindow : Window
 
         logsToggle.Click += (_, _) => state.DetailedLogging = logsToggle.IsChecked == true;
         PrivacyRows.Children.Add(Row(
-            "Keep detailed logs",
+            "Keep local diagnostics",
             logsToggle,
-            "Writes a plain text file you can open and send. Off by default, and nothing is written while it is off. Nothing you say is ever recorded - timings and reasons only.",
+            "Keeps technical events for up to 7 days, limited to 5 MB. No speech or personal content. Turning this off clears the journal.",
             out logsRevert,
             () => state.DetailedLogging = SettingsDefaults.DetailedLogging));
 
@@ -636,7 +636,28 @@ public sealed partial class SettingsWindow : Window
 
     private void OnOpenRecordings(object sender, RoutedEventArgs args) => state.OpenRecordingsFolder();
 
-    private void OnOpenLogs(object sender, RoutedEventArgs args) => state.RevealLogs();
+    private async void OnSaveErrorReport(object sender, RoutedEventArgs args)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "Save Error Report",
+            FileName = "OpenRamble-Error-Report.zip",
+            Filter = "ZIP archive (*.zip)|*.zip",
+        };
+        if (dialog.ShowDialog(this) != true) { return; }
+
+        SaveReportButton.IsEnabled = false;
+        SaveReportButton.Content = "Saving Report…";
+        try
+        {
+            await state.SaveErrorReport(dialog.FileName);
+        }
+        finally
+        {
+            SaveReportButton.Content = "Save Error Report…";
+            SaveReportButton.IsEnabled = true;
+        }
+    }
 
     private void OnRevealHistoryAudio(object sender, RoutedEventArgs args) => state.RevealHistoryAudio();
 

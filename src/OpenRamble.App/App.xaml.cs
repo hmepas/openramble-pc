@@ -143,6 +143,13 @@ public partial class App : Application
             MicrophoneRemedy = MicrophoneRemedy.Windows,
         });
 
+        // An exception nobody caught ends the process; a sanitized record of it stays in the
+        // journal's folder for the next error report.
+        AppDomain.CurrentDomain.UnhandledException += (_, unhandled) =>
+        {
+            if (unhandled.ExceptionObject is Exception error) { state?.RecordCrash(error); }
+        };
+
         state.OnInputLevel = level =>
         {
             overlay.UpdateInputLevel(level);

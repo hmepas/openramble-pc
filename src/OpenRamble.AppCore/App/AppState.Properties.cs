@@ -70,7 +70,18 @@ public sealed partial class AppState
     public DictationState DictationStateValue
     {
         get { lock (gate) { return dictationState; } }
-        private set => Set(ref dictationState, value);
+        private set
+        {
+            if (!Set(ref dictationState, value)) { return; }
+            journal.Record(value switch
+            {
+                DictationState.Preparing => DiagnosticEvent.DictationPreparing,
+                DictationState.Listening => DiagnosticEvent.DictationListening,
+                DictationState.Transcribing => DiagnosticEvent.DictationTranscribing,
+                DictationState.Inserting => DiagnosticEvent.DictationInserting,
+                _ => DiagnosticEvent.DictationIdle,
+            });
+        }
     }
 
     public ModelState ModelStateValue
@@ -94,7 +105,13 @@ public sealed partial class AppState
     public DictationNotice? LastNotice
     {
         get { lock (gate) { return lastNotice; } }
-        private set => Set(ref lastNotice, value);
+        private set
+        {
+            Set(ref lastNotice, value);
+            // The kind only: the message can carry an error description.
+            if (value?.Kind == DictationNoticeKind.Failure) { journal.Record(DiagnosticEvent.DictationFailed); }
+            if (value?.Kind == DictationNoticeKind.Warning) { journal.Record(DiagnosticEvent.DictationWarning); }
+        }
     }
 
     public bool IsPreparingEngine
@@ -122,6 +139,7 @@ public sealed partial class AppState
         private set
         {
             if (!Set(ref isEngineReady, value)) { return; }
+            journal.Record(value ? DiagnosticEvent.EngineReady : DiagnosticEvent.EngineUnavailable);
             if (value) { HasEngineBeenReady = true; }
         }
     }

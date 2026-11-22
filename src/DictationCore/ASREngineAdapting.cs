@@ -144,13 +144,20 @@ public abstract class ASREngineError : Exception
     /// <summary>The engine worked, but fell over inside.</summary>
     public sealed class InferenceFailed : ASREngineError
     {
-        public InferenceFailed(string reason)
+        public InferenceFailed(string reason, int? code = null)
             : base(reason)
         {
             Reason = reason;
+            Code = code;
         }
 
         public string Reason { get; }
+
+        /// <summary>
+        /// The engine's own numeric status, when it gave one. The only part of this error the
+        /// local journal may keep: the reason can carry a path or text.
+        /// </summary>
+        public int? Code { get; }
     }
 
     /// <summary>Recognition has been cancelled by the user.</summary>

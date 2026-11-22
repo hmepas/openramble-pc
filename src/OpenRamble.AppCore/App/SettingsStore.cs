@@ -38,8 +38,11 @@ public sealed record AppSettings
     /// <summary>Which microphone to record through, by its stable UID; <c>null</c> - the system default.</summary>
     public string? InputDeviceUid { get; init; }
 
-    /// <summary>Keep the plain-text log a person can send. Nothing is written while it is off.</summary>
-    public bool DetailedLogging { get; init; }
+    /// <summary>
+    /// Keep the local diagnostic journal. On when the file never said otherwise; a stored
+    /// <c>false</c> - the opt-out, or the old opt-in log never turned on - is kept.
+    /// </summary>
+    public bool DetailedLogging { get; init; } = SettingsDefaults.DetailedLogging;
 
     /// <summary>Finish a hands-free dictation on two seconds of quiet.</summary>
     public bool StopsOnSilence { get; init; }

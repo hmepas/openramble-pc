@@ -57,7 +57,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly MicrophoneRemedy microphoneRemedy;
     private readonly Func<DateTimeOffset> now;
     private readonly Func<MonotonicInstant> monotonicNow;
-    private readonly DictationLogFile logFile;
+    private readonly DictationLogFile journal;
     /// <summary>Keeps one level update in flight at a time. See <see cref="LevelUpdateGate"/>.</summary>
     private readonly LevelUpdateGate levelGate = new();
     private readonly ReplacementsStore replacementsStore;
@@ -107,7 +107,6 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         monotonicNow = environment.MonotonicNow ?? (static () => MonotonicInstant.Now);
         idleUnloadDelayOverride = environment.IdleUnloadDelayOverride;
         engineWarmupRetryDelayOverride = environment.EngineWarmupRetryDelay;
-        logFile = new DictationLogFile(DictationLogFile.DirectoryUnder(paths));
         transcriber = environment.LocalTranscriber;
         editWatcher = new EditLearningWatcher(
             environment.FocusedFieldReader ?? new NoFocusedField());
@@ -124,7 +123,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         appearance = AppAppearances.Parse(settings.Appearance);
         inputDeviceUid = string.IsNullOrEmpty(settings.InputDeviceUid) ? null : settings.InputDeviceUid;
         detailedLogging = settings.DetailedLogging;
-        logFile.IsEnabled = detailedLogging;
+        // The existing switch is the opt-out: off, nothing is written and nothing is kept.
+        journal = new DictationLogFile(DictationLogFile.DirectoryUnder(paths), detailedLogging);
+        journal.Record(DiagnosticEvent.AppLaunched);
         stopsOnSilence = settings.StopsOnSilence;
         overlayPlacement = DictationOverlayPlacements.Parse(settings.OverlayPlacement);
         modelUnloadTimeout = IdleUnloadPolicies.Parse(settings.ModelUnloadTimeout);
@@ -161,10 +162,13 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             IAudioCapturing capture = environment.MakeCapture(
                 paths.Takes(),
                 error =>
+                {
+                    journal.Record(DiagnosticEvent.AudioCaptureFailed, errorCode: error.HResult);
                     // The audio stream is no longer usable in the middle of a sentence. Waiting
                     // for a stop is not an option: the person is speaking into emptiness and the
                     // reason has to be shown exactly.
-                    controller?.Interrupt(CaptureFailureMessage(error, microphoneRemedy)),
+                    controller?.Interrupt(CaptureFailureMessage(error, microphoneRemedy));
+                },
                 samples =>
                 {
                     // The peak is enough for the waveform; RMS would hide the short consonant
@@ -317,7 +321,19 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 hotkeyMonitor.IsHandsFreeActive = active;
                 IsHandsFreeActive = active;
             };
-            built.OnTranscriptionStall = RecycleWedgedEngine;
+            built.OnTranscriptionStall = () =>
+            {
+                journal.Record(DiagnosticEvent.TranscriptionStalled);
+                RecycleWedgedEngine();
+            };
+            built.OnRecognitionFailure = journal.RecordRecognitionFailure;
+            built.OnStageFailure = (stage, elapsed, timedOut) =>
+                journal.Record(
+                    DiagnosticEvent.DictationStageFailed,
+                    milliseconds: DictationLogFile.Milliseconds(elapsed.TotalSeconds),
+                    stage: stage,
+                    timedOut: timedOut);
+            built.OnRecognitionFallback = journal.RecordFallback;
             built.OnTextInserted = text =>
             {
                 RecordSuccessfulDictation(text);
@@ -354,8 +370,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                     ("restored_ms", report.ToClipboardRestored),
                     ("mic_startup_ms", report.MicrophoneStartup));
                 // The stages travel with the total because the total alone cannot name the
-                // cause. Numbers only; the log file is off unless the person turned it on.
-                logFile.Write(DictationSpeedLine.Text(StagesOf(report)));
+                // cause. Numbers only, in the developer's log and in the local journal.
+                DiagnosticLog.Emit("dictation.stages", ("line", DictationSpeedLine.Text(StagesOf(report))));
+                journal.Record(
+                    DiagnosticEvent.DictationCompleted,
+                    milliseconds: DictationLogFile.Milliseconds(report.ToRecognizedText.TotalSeconds),
+                    recognition: DictationLogFile.Recognition.From(report));
                 LastSpeed = report;
             };
             built.OnDictationCompleted = provenance =>
@@ -765,6 +785,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// </summary>
     private void HandleSleep()
     {
+        journal.Record(DiagnosticEvent.SystemSleeping);
         switch (DictationStateValue)
         {
             case DictationState.Listening:
@@ -801,6 +822,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// </summary>
     private void HandleWake()
     {
+        journal.Record(DiagnosticEvent.SystemWoke);
         hotkeyMonitor.Stop();
         copyShortcutMonitor?.Stop();
         // The release never arrived, so nothing will ever say the key came up. Restarting
@@ -821,6 +843,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// </summary>
     private void HandleAudioConfigurationChange()
     {
+        journal.Record(DiagnosticEvent.AudioConfigurationChanged);
         if (DictationStateValue != DictationState.Listening) { return; }
         controller?.PreserveActiveRecording(
             "The microphone or audio device was disconnected. Dictation stopped.");
@@ -1060,12 +1083,15 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             RevokeRetryLocked();
         }
 
+        journal.Record(DiagnosticEvent.AppTerminating);
         systemEvents.WillSleep -= HandleSleep;
         systemEvents.DidWake -= HandleWake;
         systemEvents.AudioDeviceChanged -= HandleAudioConfigurationChange;
         systemEvents.ApplicationBecameActive -= HandleApplicationBecameActive;
         editWatcher.Cancel();
-        logFile.Dispose();
+        journal.Record(DiagnosticEvent.AppTerminationReady);
+        // Drains the queue: every event recorded so far reaches the disk.
+        journal.Dispose();
         hotkeyMonitor.Stop();
         if (copyShortcutMonitor is not null)
         {

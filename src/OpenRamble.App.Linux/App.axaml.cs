@@ -194,6 +194,12 @@ public sealed partial class App : Application
         });
 
         state = built;
+        // An exception nobody caught ends the process; a sanitized record of it stays in the
+        // journal's folder for the next error report. No core dump, no message, no upload.
+        AppDomain.CurrentDomain.UnhandledException += (_, unhandled) =>
+        {
+            if (unhandled.ExceptionObject is Exception error) { built.RecordCrash(error); }
+        };
         Apply(built.Appearance);
         built.OnInputLevel = level =>
         {

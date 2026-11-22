@@ -491,6 +491,7 @@ public sealed partial class AppState
 
         IsEngineReady = false;
         IsPreparingEngine = true;
+        journal.Record(DiagnosticEvent.EnginePreparing);
         // The retry loop owns one continuous countdown across its waits; a lone attempt owns its
         // own. Whoever owns it also ends it, so the indicator never blinks between two attempts
         // of the same preparation.
@@ -538,6 +539,7 @@ public sealed partial class AppState
         }
         catch (ASREngineError.ModelsUnavailable error)
         {
+            journal.Record(DiagnosticEvent.EngineFailed, errorCode: error.HResult);
             DiagnosticLog.EmitException(
                 "engine.load.failed",
                 error,
@@ -570,6 +572,7 @@ public sealed partial class AppState
         {
             // A momentary failure says nothing about the verified files on disk. Keep them and
             // try again in the background.
+            journal.Record(DiagnosticEvent.EngineFailed, errorCode: error.HResult);
             DiagnosticLog.EmitException(
                 "engine.load.retryable",
                 error,

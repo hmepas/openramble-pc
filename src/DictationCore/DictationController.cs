@@ -103,6 +103,15 @@ public sealed class DictationController
     /// </summary>
     public Action? OnTranscriptionStall { get; set; }
 
+    /// <summary>Technical cause, before it is replaced by a short user-facing notice.</summary>
+    public Action<Exception>? OnRecognitionFailure { get; set; }
+
+    /// <summary>Which stage a failed take was in, how long it had run, and whether it timed out.</summary>
+    public Action<DictationFailureStage, TimeSpan, bool>? OnStageFailure { get; set; }
+
+    /// <summary>Why the take had to be recognized whole again, with the error that caused it.</summary>
+    public Action<DictationFallbackReason, Exception?>? OnRecognitionFallback { get; set; }
+
     /// <summary>
     /// A take that produced text, with the audio still on disk.
     ///
@@ -726,6 +735,9 @@ public sealed class DictationController
         await overlay.Present(DictationState.Transcribing, elapsed).ConfigureAwait(false);
 
         (string Url, TimeSpan Duration) recording;
+        // Stage timings for the journal read the real clock, not the injected one: tests script
+        // that clock read by read for the speed report, and these reads must not shift it.
+        MonotonicInstant freezeStarted = MonotonicInstant.Now;
         try
         {
             // The caller's token is deliberately not passed in: Escape during the stop keeps the
@@ -738,11 +750,21 @@ public sealed class DictationController
         }
         catch (TranscriptionTimeout)
         {
+            if (ShouldContinue(session, token))
+            {
+                OnStageFailure?.Invoke(DictationFailureStage.CaptureFreeze, freezeStarted.DurationTo(MonotonicInstant.Now), true);
+            }
+
             await AbandonWedgedCapture(session, token).ConfigureAwait(false);
             return;
         }
         catch (Exception error)
         {
+            if (ShouldContinue(session, token))
+            {
+                OnStageFailure?.Invoke(DictationFailureStage.CaptureFreeze, freezeStarted.DurationTo(MonotonicInstant.Now), false);
+            }
+
             await Fail(session, new DictationError.Capture(error.ToString())).ConfigureAwait(false);
             return;
         }
@@ -808,6 +830,28 @@ public sealed class DictationController
         // transport: hopping threads, entering the transcriber, waiting for a turn. That span
         // held the whole of every slow take and had no number.
         TimeSpan? dispatch = null;
+        // For the local journal: which stage a failure happened in, and why a streamed take had
+        // to be recognized whole again. Numbers and case names only, never the error text.
+        DictationFailureStage? stage = null;
+        MonotonicInstant stageStarted = default;
+        Exception? fallbackError = null;
+        void RecordStageFailure(bool timedOut)
+        {
+            if (stage is { } failed)
+            {
+                OnStageFailure?.Invoke(failed, stageStarted.DurationTo(MonotonicInstant.Now), timedOut);
+            }
+        }
+
+        // Recovery does not erase it: a take that came back whole is still worth a line.
+        void ReportFallback()
+        {
+            if (fallbackError is { } error && ShouldContinue(session, token))
+            {
+                OnRecognitionFallback?.Invoke(DictationFallbackReason.SegmentFailed, error);
+            }
+        }
+
         try
         {
             // A residency-managed engine may be cold here; the reload has been
@@ -817,6 +861,8 @@ public sealed class DictationController
             // the words beats abandoning them.
             if (prepareForTranscription is { } prepare)
             {
+                stage = DictationFailureStage.ModelPreparation;
+                stageStarted = MonotonicInstant.Now;
                 // A resident engine answers this in microseconds, and flipping the panel to a
                 // loading message for every take would be a flicker on the overwhelmingly common
                 // path. The wait is announced only once it is long enough for someone to be
@@ -864,6 +910,8 @@ public sealed class DictationController
             // Stamped on this side of the deadline wrapper, so the transport into the engine is
             // inside the number rather than past every stamp.
             MonotonicInstant dispatchedAt = monotonicNow();
+            stage = DictationFailureStage.Recognition;
+            stageStarted = MonotonicInstant.Now;
             StreamedSegmentRecognizer? streamed;
             lock (gate) { streamed = streamedSegments; }
 
@@ -897,6 +945,11 @@ public sealed class DictationController
                         // No cuts were made, or a segment failed. Either way the whole take is
                         // recognized here exactly as it always was - a stream that could not
                         // finish costs latency, never words.
+                        if (outcome is StreamedSegmentRecognizer.Outcome.Failed failedStream)
+                        {
+                            fallbackError = failedStream.Error;
+                        }
+
                         return await samples(bufferedSamples, workToken).ConfigureAwait(false);
                     }
 
@@ -904,6 +957,7 @@ public sealed class DictationController
                 },
                 token).ConfigureAwait(false);
             dispatch = dispatchedAt.DurationTo(monotonicNow());
+            ReportFallback();
         }
         catch (DictationPreparationTimeout)
         {
@@ -913,6 +967,8 @@ public sealed class DictationController
                 await FinishWithoutInsertion(session).ConfigureAwait(false);
                 return;
             }
+
+            RecordStageFailure(true);
 
             // A cold engine may still be loading normally. Free the foreground session and keep
             // the take, but do not signal the inference-stall hook: the owner's own preparation
@@ -928,6 +984,7 @@ public sealed class DictationController
         }
         catch (TranscriptionTimeout)
         {
+            ReportFallback();
             if (!ShouldContinue(session, token))
             {
                 await Discard(recording.Url).ConfigureAwait(false);
@@ -935,6 +992,7 @@ public sealed class DictationController
                 return;
             }
 
+            RecordStageFailure(true);
             // Signal containment at the moment the deadline is known. Recovery file I/O and
             // user feedback must never postpone fencing the engine.
             lock (gate) { OnTranscriptionStall?.Invoke(); }
@@ -958,6 +1016,7 @@ public sealed class DictationController
             // its own cancellation while the session is still live - is not
             // Escape. It is a recognition that did not happen, and it is
             // reported like one rather than swallowed as a quiet exit.
+            ReportFallback();
             if (!ShouldContinue(session, token))
             {
                 await Discard(recording.Url).ConfigureAwait(false);
@@ -965,6 +1024,8 @@ public sealed class DictationController
                 return;
             }
 
+            OnRecognitionFailure?.Invoke(error);
+            RecordStageFailure(false);
             (string? saved, string suffix) = await PreserveForRetry(recording.Url).ConfigureAwait(false);
             await Report(new DictationNotice(
                 kind: DictationNoticeKind.Failure,
@@ -1694,6 +1755,20 @@ internal sealed class DictationPreparationTimeout : Exception
         : base("the engine did not become ready within the foreground budget")
     {
     }
+}
+
+/// <summary>Where a take failed, for the local journal. A case name, never an error description.</summary>
+public enum DictationFailureStage
+{
+    CaptureFreeze,
+    ModelPreparation,
+    Recognition,
+}
+
+/// <summary>Why a take had to be recognized whole again, for the local journal.</summary>
+public enum DictationFallbackReason
+{
+    SegmentFailed,
 }
 
 /// <summary>

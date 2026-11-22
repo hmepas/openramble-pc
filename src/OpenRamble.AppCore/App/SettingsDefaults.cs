@@ -29,7 +29,7 @@ public static class SettingsDefaults
     public const bool LearnFromEdits = false;
     public const DictationOverlayPlacement OverlayPlacement = DictationOverlayPlacement.Top;
     public const AppAppearance Appearance = AppAppearance.System;
-    public const bool DetailedLogging = false;
+    public const bool DetailedLogging = true;
     public const bool StopsOnSilence = false;
     public const IdleUnloadPolicy ModelUnloadTimeout = IdleUnloadPolicies.Default;
 

@@ -177,11 +177,11 @@
                     <TextBlock Text="Privacy" Style="{StaticResource SectionHeader}" />
                     <TextBlock Text="Speech stays on this PC" FontWeight="SemiBold" />
                     <TextBlock Style="{StaticResource Secondary}" Margin="0,4,0,8"
-                               Text="Speech is recognized by a model that lives on this machine. No audio and no text is ever sent anywhere; the only network request the app makes is downloading the model, when you ask it to. There is no telemetry, no analytics and no crash reporting. Dictated words are never written to a log." />
+                               Text="Speech is recognized by a model that lives on this machine. No audio and no text is ever sent anywhere; the only network request the app makes is downloading the model, when you ask it to. There is no telemetry and no analytics. Reports contain technical events and available crash details, never your speech, and nothing is sent automatically." />
                     <StackPanel x:Name="PrivacyRows" />
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                        <Button Content="Open Logs" Padding="12,4" Click="OnOpenLogs"
-                                AutomationProperties.Name="Open log folder" />
+                        <Button x:Name="SaveReportButton" Content="Save Error Report…" Padding="12,4" Click="OnSaveErrorReport"
+                                AutomationProperties.HelpText="Saves a ZIP with local technical events and available crash reports. Nothing is sent automatically." />
                         <Button Content="Open Recovered Recordings" Padding="12,4" Margin="8,0,0,0"
                                 Click="OnOpenRecordings"
                                 AutomationProperties.HelpText="Opens the folder with any recordings kept after a failure" />

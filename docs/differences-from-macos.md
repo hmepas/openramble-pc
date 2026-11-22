@@ -230,6 +230,8 @@ work at all.
   instead of dictating over it. Left Alt is still not offered — a bare Alt tap
   reaches the menu bar on Windows. `scripts/keyd-keys.py` prints what keyd
   actually emits for a key, which is the question to ask before choosing one.
+  When keyd's virtual keyboard is in `/proc/bus/input/devices`, choosing Right
+  Ctrl or Right Shift shows a warning saying so.
 - **F13 is no longer offered.** It was in the picker and is out: sending it
   takes a remapper or a macro key, so it is the one candidate a person cannot
   try on the keyboard they are choosing it with. The enum case survives only so
@@ -457,7 +459,11 @@ an application nothing about the rest of the desktop, and what is left is
   protocol publishes it, and the X11 answer read through XWayland is stale on
   some desktops. Right Alt composes on every layout but plain `us`, so the
   decision is to warn: one warning too many on a screen a person visits twice
-  costs less than a person silently losing their `@` and their `€`.
+  costs less than a person silently losing their `@` and their `€`. The
+  warning only matters when the key is actually taken: evdev reads alongside
+  and never grabs, so AltGr keeps composing and no warning is shown; it appears
+  when no keyboard could be opened and a compositor keybind - which consumes
+  its key - is the only way the hotkey arrives.
 - **There is no microphone settings page to open.** Windows has one page that
   owns the permission and a switch for this application in it. Here whether the
   microphone opens is decided by the sound server, the device and the user's

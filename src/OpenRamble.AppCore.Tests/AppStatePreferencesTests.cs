@@ -359,25 +359,49 @@ public sealed class AppStatePreferencesTests : IDisposable
         await TestWait.For("dictation ended", () => state.DictationStateValue == DictationState.Idle);
     }
 
-    // MARK: - The log file
+    // MARK: - The local journal
 
     /// <summary>
-    /// A switch writes a plain text file a person can send; while it is off nothing is written.
-    /// Timings and reasons only - the line has no room for words, by construction.
+    /// A dictation leaves numbers in the journal and nothing of what was said; an error report
+    /// is saved where the person chose and its folder is shown.
     /// </summary>
     [Fact]
-    public async Task TheDetailedLogExistsOnlyWhenAsked()
+    public async Task TheJournalKeepsTimingsAndTheReportIsSaved()
     {
         AppState state = await ReadyState();
+        Assert.True(state.DetailedLogging);
         await DictateOnce(state);
-        Assert.False(Directory.Exists(state.LogDirectory), "nothing is written while the switch is off");
+
+        await TestWait.For("the take reached the journal", () => LogText().Contains("\"event\":\"dictationCompleted\"", StringComparison.Ordinal));
+        Assert.DoesNotContain("Ping test", LogText(), StringComparison.Ordinal);
+        Assert.Contains("\"event\":\"appLaunched\"", LogText(), StringComparison.Ordinal);
+
+        string destination = Path.Combine(harness.MakeStateLogDirectory(), "..", "report.zip");
+        Assert.True(await state.SaveErrorReport(destination));
+        Assert.True(File.Exists(destination));
+        Assert.Equal(Path.GetDirectoryName(Path.GetFullPath(destination)), harness.Folders.Opened[^1]);
+    }
+
+    /// <summary>
+    /// testExistingDiagnosticsOptOutIsRespectedAtLaunch: a stored opt-out survives the upgrade,
+    /// and turning the switch off clears what was kept.
+    /// </summary>
+    [Fact]
+    public async Task TestExistingDiagnosticsOptOutIsRespectedAtLaunch()
+    {
+        harness.Settings.Write(new AppSettings { DetailedLogging = false });
+        AppState state = await ReadyState();
+        Assert.False(state.DetailedLogging);
+        await DictateOnce(state);
+        Assert.Equal(string.Empty, LogText());
 
         state.DetailedLogging = true;
         await DictateOnce(state);
+        await TestWait.For("the take reached the journal", () => LogText().Length > 0);
 
-        await TestWait.For("the line reached the file", () => LogText().Contains("dictation total=", StringComparison.Ordinal));
-        Assert.DoesNotContain("Ping test", LogText(), StringComparison.Ordinal);
-        Assert.True(harness.Settings.Read().DetailedLogging);
+        state.DetailedLogging = false;
+        Assert.Equal(string.Empty, LogText());
+        Assert.False(harness.Settings.Read().DetailedLogging);
     }
 
     // MARK: - Helpers
@@ -385,7 +409,7 @@ public sealed class AppStatePreferencesTests : IDisposable
     private string LogText()
     {
         if (!Directory.Exists(harness.MakeStateLogDirectory())) { return string.Empty; }
-        return string.Concat(Directory.GetFiles(harness.MakeStateLogDirectory(), "*.log").Select(File.ReadAllText));
+        return string.Concat(Directory.GetFiles(harness.MakeStateLogDirectory(), "events-*.jsonl").Select(File.ReadAllText));
     }
 
     /// <summary>One frame of sound, <paramref name="later"/> after the previous one.</summary>

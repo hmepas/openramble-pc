@@ -169,9 +169,10 @@ delivered nothing.
     "Unload model" row: the model stays loaded for an hour after the last
     dictation.
 15. Settings → About: Theme Light/Dark/System recolours every open window at
-    once; System follows the Windows app theme live. "Keep detailed logs"
-    writes `Logs/<date>.log` under the app data folder and "Open Logs" opens
-    on the newest file; while it is off no file is written.
+    once; System follows the Windows app theme live. "Keep local diagnostics"
+    (on by default) writes `SupportLogs/events-<date>.jsonl` under the app data
+    folder; turning it off empties that folder. "Save Error Report…" saves a ZIP
+    where chosen and opens its folder.
 
 ### VM keyboard quirk
 

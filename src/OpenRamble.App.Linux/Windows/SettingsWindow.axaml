@@ -291,21 +291,21 @@
           <TextBlock Classes="section" Text="Privacy" />
           <TextBlock FontWeight="SemiBold" Text="Speech stays on this PC" />
           <TextBlock Classes="hint" Margin="0,4,0,0"
-                     Text="Speech is recognized by a model that lives on this machine. No audio and no text is ever sent anywhere. There is no account, no analytics and no crash reporting; dictated words are never written to a log. The one network request in the app's life is downloading the recognition model, when you ask it to." />
+                     Text="Speech is recognized by a model that lives on this machine. No audio and no text is ever sent anywhere. There is no account and no analytics. Reports contain technical events and available crash details, never your speech, and nothing is sent automatically. The one network request in the app's life is downloading the recognition model, when you ask it to." />
 
           <Grid Classes="row" ColumnDefinitions="*,Auto,Auto" Margin="0,10,0,0">
-            <TextBlock Classes="row" Text="Keep detailed logs" />
+            <TextBlock Classes="row" Text="Keep local diagnostics" />
             <ToggleSwitch Grid.Column="1" x:Name="LoggingToggle"
-                          automation:AutomationProperties.Name="Keep detailed logs"
-                          automation:AutomationProperties.HelpText="Writes a plain text file you can open and send. Off by default, and nothing is written while it is off. Nothing you say is ever recorded — timings and reasons only." />
+                          automation:AutomationProperties.Name="Keep local diagnostics"
+                          automation:AutomationProperties.HelpText="Keeps technical events for up to 7 days, limited to 5 MB. No speech or personal content. Turning this off clears the journal." />
             <Button Grid.Column="2" Classes="revert" x:Name="RevertLogging" Click="OnRevertLogging" />
           </Grid>
           <TextBlock Classes="hint"
-                     Text="Writes a plain text file you can open and send, one per day. Off by default, and nothing is written while it is off. Nothing you say is ever recorded — timings and reasons only." />
+                     Text="Keeps technical events for up to 7 days, limited to 5 MB. No speech or personal content. Turning this off clears the journal." />
 
           <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-            <Button Content="Open Logs" Padding="12,4" Click="OnOpenLogs"
-                    automation:AutomationProperties.Name="Open log folder" />
+            <Button x:Name="SaveReportButton" Content="Save Error Report…" Padding="12,4" Click="OnSaveErrorReport"
+                    automation:AutomationProperties.HelpText="Saves a ZIP with local technical events and available crash reports. Nothing is sent automatically." />
             <Button Content="Open recordings folder" Padding="12,4" Margin="8,0,0,0" Click="OnOpenRecordings"
                     automation:AutomationProperties.HelpText="Opens the folder with any recordings kept after a failure" />
           </StackPanel>

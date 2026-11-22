@@ -63,7 +63,7 @@ Under `%LOCALAPPDATA%\OpenRambleData` on Windows and
 | Current take (`Takes`) | Deleted after success or explicit cancellation |
 | Recovery audio after a technical failure (`RecoveredAudio`) | Up to 10 WAV files, seven days, 1 GiB |
 | Dictation history: transcripts and their audio (`History`) | The last 5 by default (5–50 in Settings); starred entries are exempt; deleting an entry deletes its audio |
-| Plain-text log (`Logs`, one file per day) | Only while "Keep detailed logs" is on; timings and reasons, never words |
+| Diagnostic journal and crash records (`SupportLogs`) | Seven days, 5 MB; on by default, cleared when "Keep local diagnostics" is turned off; technical events and numbers, never words |
 | Settings and replacement dictionary (`settings.json`, `replacements.json`) | Until changed |
 
 ## Building (on Linux)

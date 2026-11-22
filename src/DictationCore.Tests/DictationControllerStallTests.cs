@@ -552,6 +552,35 @@ public sealed class DictationControllerStallTests : IDisposable
         Assert.Equal(1, capture.Aborts);
     }
 
+    /// <summary>
+    /// testReportsTheActualFailedStageWithoutAnErrorDescription, for the stage this port bounds:
+    /// a capture that never closes is reported as a timed-out capture freeze, with how long it ran.
+    /// </summary>
+    [Fact]
+    public async Task TestReportsTheActualFailedStageWithoutAnErrorDescription()
+    {
+        var controller = new DictationController(
+            capture: new WedgedStopCapture(),
+            transcribe: (_, _) => throw new InvalidOperationException("never reached"),
+            inserter: new NullInserter(),
+            overlay: new NullOverlay(),
+            sounds: new NullSounds(),
+            recordingRecovery: new RecordingRecoveryStore(recovered),
+            captureStopDeadline: TimeSpan.FromMilliseconds(40));
+        List<(DictationFailureStage Stage, TimeSpan Elapsed, bool TimedOut)> failures = [];
+        controller.OnStageFailure = (stage, elapsed, timedOut) => failures.Add((stage, elapsed, timedOut));
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        await WaitForIdle(controller);
+
+        var failure = Assert.Single(failures);
+        Assert.Equal(DictationFailureStage.CaptureFreeze, failure.Stage);
+        Assert.True(failure.TimedOut);
+        Assert.True(failure.Elapsed >= TimeSpan.FromMilliseconds(30));
+    }
+
     /// <summary>A healthy stop is untouched by the new budget: it is not even close to it.</summary>
     [Fact]
     public async Task TestAHealthyStopIsUnaffectedByTheCaptureBudget()

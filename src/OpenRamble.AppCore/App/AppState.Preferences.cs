@@ -132,12 +132,10 @@ public sealed partial class AppState
     public string? InputDeviceNotice => AudioInputDevicePolicy.Notice(InputDeviceUid, AvailableInputDevices);
 
     /// <summary>
-    /// Keep the plain-text log a person can open and send.
+    /// Keep the local diagnostic journal: technical events for up to seven days, at most 5 MB.
     ///
-    /// Off by default, and while it is off nothing is written at all - no file appears that
-    /// nobody asked for. It turns on no new measurement: every stage of every dictation is timed
-    /// and reported either way, because a number that only exists when a setting is on is a
-    /// number missing from the report you actually need. Nothing said is ever written to it.
+    /// On by default; turning it off also clears it. It turns on no new measurement: every stage
+    /// of every dictation is timed and reported either way. Nothing said is ever written to it.
     /// </summary>
     public bool DetailedLogging
     {
@@ -146,31 +144,39 @@ public sealed partial class AppState
         {
             if (!Set(ref detailedLogging, value)) { return; }
             UpdateSettings(current => current with { DetailedLogging = value });
-            logFile.IsEnabled = value;
+            journal.IsEnabled = value;
         }
     }
 
-    /// <summary>Where the log files live, for the button that opens the folder.</summary>
-    public string LogDirectory => logFile.Directory;
-
     /// <summary>
-    /// Open the app's own log folder, with the newest file selected when there is one.
-    ///
-    /// Someone asked to send their log should land on the file, not in a directory they have
-    /// to search.
+    /// Save the error report the person asked for to <paramref name="destination"/>, then show
+    /// the folder it went to. Nothing is sent anywhere. <c>false</c> - it could not be written,
+    /// and the person has been told.
     /// </summary>
-    public void RevealLogs()
+    public async Task<bool> SaveErrorReport(string destination)
     {
         try
         {
-            Directory.CreateDirectory(logFile.Directory);
-            folders?.Open(logFile.NewestPath() ?? logFile.Directory);
+            await Task.Run(() => ErrorReport.Save(destination, journal)).ConfigureAwait(false);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            Notify(new DictationNotice(DictationNoticeKind.Failure, "Couldn't open the log folder."));
+            DiagnosticLog.EmitException("report.save.failed", error);
+            Notify(new DictationNotice(
+                DictationNoticeKind.Failure,
+                "Couldn't save the report. Try another location with available disk space."));
+            return false;
         }
+
+        if (Path.GetDirectoryName(Path.GetFullPath(destination)) is { } folder) { folders?.Open(folder); }
+        return true;
     }
+
+    /// <summary>
+    /// The process is about to end on an exception nobody caught. Kept, sanitized, in the
+    /// journal's folder for the next error report - while the journal is on.
+    /// </summary>
+    public void RecordCrash(Exception error) => journal.RecordCrash(error);
 
     /// <summary>
     /// Finish a hands-free dictation when the talking stops.

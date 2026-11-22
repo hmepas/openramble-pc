@@ -221,6 +221,36 @@ session initialization (reading ~670 MB of weights + one silent inference);
 the state machine is identical but the figure has not been re-measured on
 real Windows hardware yet.
 
+## Local diagnostics and "Save Error Report…"
+
+Ported from upstream 0.31.0–0.31.2: the opt-in plain-text log became the
+allowlisted event journal (`events-YYYY-MM-DD.jsonl`, seven UTC dates, 5 MB),
+on by default behind the same switch, now "Keep local diagnostics"; turning it
+off clears it. It lives in `<Support>/SupportLogs` — `~/.local/share/OpenRamble/SupportLogs`
+on Linux, `%LOCALAPPDATA%\OpenRambleData\SupportLogs` on Windows. Settings →
+About → "Save Error Report…" writes one ZIP (`system.json`, `events.jsonl`,
+`README.txt`, crash records) where the person chooses and opens its folder.
+
+Where it differs:
+
+- **An existing settings file keeps the journal off.** The settings file
+  stores every value, so a `false` written by the old opt-in log cannot be told
+  from a deliberate opt-out; both are respected. Fresh installs start with it on.
+- **Crash records are the app's own.** macOS leaves `.ips` reports that
+  upstream sanitizes. A managed process here leaves nothing comparable, so an
+  unhandled exception writes `crash-*.json` beside the journal: exception
+  types, HResults and the methods on the stack — no message, no file names, no
+  core dump — and only while the journal is on. A native crash inside the
+  speech engine ends the process without one.
+- **Fewer fields.** The journal carries what this port measures. Total engine
+  time, lost audio, the first read of a paste, disk reads and engine idle time
+  (0.33.x–0.38.0) are not measured here and not written; neither is the
+  allowlisted failure reason of a notice (`failureReason`, including the 0.39.0
+  paste kinds), because this port's notices do not carry one yet. The stage
+  list has no `readableFile`: this port has no separate wait for the WAV.
+- **Old plain-text logs are not migrated or deleted.** `<Support>/Logs` from
+  the opt-in log is left as it was.
+
 ## What the Linux build does not do
 
 Everything above is about the port as a whole and holds on both platforms. This

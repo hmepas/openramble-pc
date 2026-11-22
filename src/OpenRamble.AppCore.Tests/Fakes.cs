@@ -794,7 +794,7 @@ public sealed class AppHarness : IDisposable
     /// </summary>
     public MonotonicInstant MonotonicNow { get; set; } = MonotonicInstant.Now;
 
-    /// <summary>Where a state built here writes its plain-text log.</summary>
+    /// <summary>Where a state built here keeps its local journal.</summary>
     public string MakeStateLogDirectory() => DictationLogFile.DirectoryUnder(Paths);
 
     public FakeOverlay Overlay { get; } = new();

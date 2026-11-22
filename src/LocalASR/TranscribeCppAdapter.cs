@@ -58,10 +58,8 @@ public sealed partial class TranscribeCppAdapter : IASREngineAdapting
     public static int DefaultThreadCount { get; } = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
 
     private readonly Lock gate = new();
-    private Runtime? runtime;
+    private RuntimeLease<Runtime>? runtime;
     private string? loadedDirectory;
-    private int activeDecodes;
-    private Runtime? retiring;
     private string[] vocabulary = [];
     private readonly int threadCount;
 
@@ -150,7 +148,7 @@ public sealed partial class TranscribeCppAdapter : IASREngineAdapting
             superseded = runtime is not null;
             if (!superseded)
             {
-                runtime = built;
+                runtime = new RuntimeLease<Runtime>(built);
                 loadedDirectory = directory;
             }
         }
@@ -199,17 +197,19 @@ public sealed partial class TranscribeCppAdapter : IASREngineAdapting
     /// </remarks>
     public async Task<ASRResult> Transcribe(float[] samples)
     {
-        Runtime engine;
+        RuntimeLease<Runtime> lease;
         string[] terms;
         lock (gate)
         {
             if (runtime is null) { throw new ASREngineError.ModelsNotLoaded(); }
             if (samples.Length == 0) { throw new ASREngineError.UnsupportedAudioFormat("empty buffer"); }
 
-            engine = runtime;
+            lease = runtime;
+            lease.Acquire();
             terms = vocabulary;
-            activeDecodes++;
         }
+
+        Runtime engine = lease.Value;
 
         try
         {
@@ -252,18 +252,7 @@ public sealed partial class TranscribeCppAdapter : IASREngineAdapting
         }
         finally
         {
-            Runtime? orphan = null;
-            lock (gate)
-            {
-                activeDecodes--;
-                if (activeDecodes == 0 && retiring is not null)
-                {
-                    orphan = retiring;
-                    retiring = null;
-                }
-            }
-
-            orphan?.Dispose();
+            lease.Release();
         }
     }
 
@@ -277,19 +266,15 @@ public sealed partial class TranscribeCppAdapter : IASREngineAdapting
     /// </remarks>
     public Task Unload()
     {
-        Runtime? orphan = null;
+        RuntimeLease<Runtime>? taken;
         lock (gate)
         {
-            Runtime? taken = runtime;
+            taken = runtime;
             runtime = null;
             loadedDirectory = null;
-            if (taken is null) { return Task.CompletedTask; }
-
-            if (activeDecodes == 0) { orphan = taken; }
-            else { retiring = taken; }
         }
 
-        orphan?.Dispose();
+        taken?.Retire();
         return Task.CompletedTask;
     }
 

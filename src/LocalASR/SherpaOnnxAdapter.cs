@@ -116,13 +116,8 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
     /// </remarks>
     private readonly Lock gate = new();
 
-    private OfflineRecognizer? recognizer;
-
-    /// <summary>Decodes in flight on <see cref="recognizer"/> or on an already-orphaned handle.</summary>
-    private int activeDecodes;
-
-    /// <summary>A handle taken out of service that is only waiting for its last decode to finish.</summary>
-    private OfflineRecognizer? retiring;
+    /// <summary>The handle in service, with the decodes running on it. See <see cref="RuntimeLease{T}"/>.</summary>
+    private RuntimeLease<OfflineRecognizer>? recognizer;
 
     private readonly EncoderPrecision precision;
     private readonly int numThreads;
@@ -254,7 +249,7 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
             superseded = recognizer is not null;
             if (!superseded)
             {
-                recognizer = built;
+                recognizer = new RuntimeLease<OfflineRecognizer>(built);
             }
         }
 
@@ -311,7 +306,7 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
     /// </remarks>
     public async Task<ASRResult> Transcribe(float[] samples)
     {
-        OfflineRecognizer engine;
+        RuntimeLease<OfflineRecognizer> lease;
         lock (gate)
         {
             if (recognizer is null)
@@ -324,9 +319,11 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
                 throw new ASREngineError.UnsupportedAudioFormat("empty buffer");
             }
 
-            engine = recognizer;
-            activeDecodes++;
+            lease = recognizer;
+            lease.Acquire();
         }
+
+        OfflineRecognizer engine = lease.Value;
 
         try
         {
@@ -371,18 +368,7 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
         }
         finally
         {
-            OfflineRecognizer? orphan = null;
-            lock (gate)
-            {
-                activeDecodes--;
-                if (activeDecodes == 0 && retiring is not null)
-                {
-                    orphan = retiring;
-                    retiring = null;
-                }
-            }
-
-            orphan?.Dispose();
+            lease.Release();
         }
     }
 
@@ -467,27 +453,14 @@ public sealed class SherpaOnnxAdapter : IASREngineAdapting
     /// </remarks>
     public Task Unload()
     {
-        OfflineRecognizer? orphan = null;
+        RuntimeLease<OfflineRecognizer>? taken;
         lock (gate)
         {
-            OfflineRecognizer? taken = recognizer;
+            taken = recognizer;
             recognizer = null;
-            if (taken is null)
-            {
-                return Task.CompletedTask;
-            }
-
-            if (activeDecodes == 0)
-            {
-                orphan = taken;
-            }
-            else
-            {
-                retiring = taken;
-            }
         }
 
-        orphan?.Dispose();
+        taken?.Retire();
         return Task.CompletedTask;
     }
 

@@ -71,13 +71,15 @@ public sealed class TranscribeCppAdapterTests : IDisposable
     }
 
     /// <summary>
-    /// Upstream's processor-only build (Intel Mac) uses four, and one would put the whole encoder
-    /// on one core: measured here, a 6 s take 0.66 s at one thread against 0.18 s at four.
+    /// One thread would put the whole encoder on one core (a 6 s take 0.66 s at one thread
+    /// against 0.18 s at four), and the encoder keeps scaling past four (a 45 s clip 1.34 s at
+    /// four, 0.82 s at eight), so the default is half the logical processors, within [1, 8].
     /// </summary>
     [Fact]
-    public void ShipsFourThreadsAndNeverFewerThanOne()
+    public void ShipsHalfTheLogicalProcessorsWithinOneToEightThreads()
     {
-        Assert.Equal(4, new TranscribeCppAdapter().Threads);
+        Assert.Equal(Math.Clamp(Environment.ProcessorCount / 2, 1, 8), new TranscribeCppAdapter().Threads);
+        Assert.InRange(TranscribeCppAdapter.DefaultThreadCount, 1, 8);
         Assert.Equal(1, new TranscribeCppAdapter(threadCount: 0).Threads);
     }
 

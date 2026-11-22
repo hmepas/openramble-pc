@@ -46,12 +46,16 @@ public sealed partial class TranscribeCppAdapter : IASREngineAdapting
     /// front-end and the decoder all take this session count.
     /// </summary>
     /// <remarks>
-    /// Upstream's choice for a processor that runs the encoder itself - its Intel Mac build -
-    /// is four, and this is that build's situation exactly: no GPU backend is compiled in.
-    /// (Upstream's desktop core passes one on Windows and Linux, a value chosen for an encoder
-    /// on Metal or Vulkan; on the CPU it serializes the whole encoder onto one core.)
+    /// Half the logical processors - roughly the physical cores - clamped to [1, 8]. No GPU
+    /// backend is compiled in, so the encoder runs on the CPU and scales with cores: on a
+    /// 16-core desktop a 45 s clip took 1.34 s at four threads and 0.82 s at eight. Halving
+    /// leaves the other hyperthreads to the app and to whatever the person is typing into;
+    /// eight is the cap because past it the gain is small and the machine is shared. Upstream's
+    /// own CPU-only build, the Intel Mac, fixes four; its desktop core passes one on Windows and
+    /// Linux, a value chosen for an encoder on Metal or Vulkan that on the CPU serializes the
+    /// whole encoder onto one core.
     /// </remarks>
-    public const int DefaultThreadCount = 4;
+    public static int DefaultThreadCount { get; } = Math.Clamp(Environment.ProcessorCount / 2, 1, 8);
 
     private readonly Lock gate = new();
     private Runtime? runtime;
@@ -61,9 +65,9 @@ public sealed partial class TranscribeCppAdapter : IASREngineAdapting
     private string[] vocabulary = [];
     private readonly int threadCount;
 
-    public TranscribeCppAdapter(int threadCount = DefaultThreadCount)
+    public TranscribeCppAdapter(int? threadCount = null)
     {
-        this.threadCount = Math.Max(1, threadCount);
+        this.threadCount = Math.Max(1, threadCount ?? DefaultThreadCount);
     }
 
     /// <summary>For the test that guards the shipped thread count.</summary>

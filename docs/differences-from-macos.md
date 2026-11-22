@@ -69,12 +69,14 @@ library before use).
 
 Where it differs from upstream's own adapters, on purpose:
 
-- **Four threads.** Upstream's desktop core passes one thread on Windows and
-  Linux — a value chosen for an encoder on Metal or Vulkan. Its build has no
-  GPU backend, and neither has this one, and on the processor one thread puts
-  the whole encoder on one core: 0.66 s for a 6 s take against 0.18 s at four
-  (16-core desktop). Four is what upstream gives its other CPU-only build, the
-  Intel Mac, and what its Mac adapter documents as the safe count under load.
+- **Half the logical processors, 1 to 8 threads.** Upstream's desktop core
+  passes one thread on Windows and Linux — a value chosen for an encoder on
+  Metal or Vulkan. Its build has no GPU backend, and neither has this one, and
+  on the processor one thread puts the whole encoder on one core: 0.66 s for a
+  6 s take against 0.18 s at four (16-core desktop). Upstream's other CPU-only
+  build, the Intel Mac, fixes four; here the encoder keeps scaling past that
+  (a 45 s clip: 1.34 s at four, 0.82 s at eight), so the count follows the
+  machine, capped at eight.
 - **Word times on every run.** Upstream's dictation asks for text only; this
   port marks paragraph breaks from word times, so it asks for words. The runtime
   builds them either way.

@@ -422,7 +422,7 @@ public sealed class PipeWireCaptureTests : IDisposable
         Directory.Move(folder, Path.Combine(takes, "moved"));
         await File.WriteAllTextAsync(folder, "occupied");
 
-        await Assert.ThrowsAnyAsync<IOException>(() => capture.StartRecording(2, null));
+        await Assert.ThrowsAsync<AudioCaptureError.EngineUnavailable>(() => capture.StartRecording(2, null));
 
         Assert.True(stale.StopRequests > 0, "the superseded recorder must not keep the microphone");
         Assert.Null(await capture.TakeBufferedSamples(1));
@@ -485,6 +485,28 @@ public sealed class PipeWireCaptureTests : IDisposable
         Assert.Null(await capture.TakeBufferedSamples(1));
         Assert.Equal(100, (await capture.TakeBufferedSamples(2))!.Length);
         Assert.Empty(failures);
+    }
+
+    /// <summary>
+    /// A takes folder that cannot be created, or a WAV that cannot be opened, is a capture that
+    /// did not start - said in the capture's own error, which every caller handles, not as a raw
+    /// file-system exception that reaches the interface.
+    /// </summary>
+    [Fact]
+    public async Task ATakeFileThatCannotBeCreatedIsACaptureError()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(takes)!);
+        File.WriteAllText(takes, "a file where the takes folder should be");
+        try
+        {
+            using var capture = new PipeWireCapture(takes, _ => new FakeRecorderProcess());
+
+            await Assert.ThrowsAsync<AudioCaptureError.EngineUnavailable>(capture.StartRecording);
+        }
+        finally
+        {
+            File.Delete(takes);
+        }
     }
 
     [Fact]

@@ -224,7 +224,25 @@ public sealed class PipeWireCapture : IMicrophoneDevice
                     current = null;
                 }
 
-                session = BuildSession(number, sink);
+                try
+                {
+                    session = BuildSession(number, sink);
+                }
+                catch (Exception error)
+                {
+                    // A takes folder that cannot be created, a WAV that cannot be opened: the
+                    // capture did not start, and says so in its own error like the Windows peer -
+                    // a raw file-system exception would reach the interface past every handler.
+                    DiagnosticLog.EmitException(
+                        "capture.start",
+                        error,
+                        ("session", number),
+                        ("ok", false),
+                        ("stage", "build"));
+                    if (error is AudioCaptureError) { throw; }
+                    throw new AudioCaptureError.EngineUnavailable(error.Message);
+                }
+
                 current = session;
                 latest = session;
                 target = preferredDeviceUid;

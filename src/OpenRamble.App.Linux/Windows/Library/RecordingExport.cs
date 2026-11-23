@@ -17,7 +17,12 @@ internal static class RecordingExport
         if (await ChooseDestination(anchor, recording, "Export Transcript", "Markdown", "md").ConfigureAwait(true) is not { } path) { return; }
         try
         {
-            string markdown = state.ExportTranscript(recording.Id);
+            // Null: the recording is not finished yet, or nothing in it was recognized.
+            if (state.ExportTranscript(recording.Id) is not { } markdown)
+            {
+                Notice.Show("There is no transcript to export yet.");
+                return;
+            }
             await File.WriteAllTextAsync(path, markdown).ConfigureAwait(true);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or NotSupportedException)

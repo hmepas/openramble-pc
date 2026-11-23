@@ -45,15 +45,25 @@ public class PunctuationReattachmentCostTests
         (string Original, string Rescored) warm = Text(500);
         PunctuationReattachment.Restore(warm.Original, warm.Rescored);
 
-        (string Original, string Rescored) small = Text(2000);
-        long smallStarted = Stopwatch.GetTimestamp();
-        PunctuationReattachment.Restore(small.Original, small.Rescored);
-        TimeSpan smallElapsed = Stopwatch.GetElapsedTime(smallStarted);
+        // The fastest of a few runs: a single run measures whatever else the machine was doing -
+        // a parallel test suite preempting the small run, or a GC landing on the large one.
+        static TimeSpan Fastest((string Original, string Rescored) text, out string result)
+        {
+            TimeSpan fastest = TimeSpan.MaxValue;
+            result = string.Empty;
+            for (int run = 0; run < 5; run++)
+            {
+                long started = Stopwatch.GetTimestamp();
+                result = PunctuationReattachment.Restore(text.Original, text.Rescored);
+                TimeSpan elapsed = Stopwatch.GetElapsedTime(started);
+                if (elapsed < fastest) { fastest = elapsed; }
+            }
 
-        (string Original, string Rescored) large = Text(8000);
-        long largeStarted = Stopwatch.GetTimestamp();
-        string result = PunctuationReattachment.Restore(large.Original, large.Rescored);
-        TimeSpan largeElapsed = Stopwatch.GetElapsedTime(largeStarted);
+            return fastest;
+        }
+
+        TimeSpan smallElapsed = Fastest(Text(2000), out _);
+        TimeSpan largeElapsed = Fastest(Text(8000), out string result);
 
         Assert.NotEqual(string.Empty, result);
         double ratio = largeElapsed.Ticks / Math.Max(1, (double)smallElapsed.Ticks);

@@ -111,6 +111,23 @@ public class LocalTranscriberResidencyTests
         }
     }
 
+    /// <summary>
+    /// Wait until the load is inside the engine, which is when the transcriber holds it in flight.
+    /// </summary>
+    /// <remarks>
+    /// A fixed settle is not enough: on a starved thread pool the <c>Task.Run</c> has not started
+    /// yet, and an unload that lands before the load is no longer "during" it.
+    /// </remarks>
+    private static async Task LoadStarted(GatedEngine engine)
+    {
+        for (int index = 0; index < 5_000 && engine.LoadCount == 0; index++)
+        {
+            await Task.Delay(2);
+        }
+
+        Assert.Equal(1, engine.LoadCount);
+    }
+
     /// <summary>Two concurrent prepares - one load.</summary>
     [Fact]
     public async Task ConcurrentPreparesCoalesceIntoOneLoad()
@@ -159,7 +176,7 @@ public class LocalTranscriberResidencyTests
         var transcriber = new LocalTranscriber(engine);
 
         Task load = Task.Run(() => transcriber.Prepare(directory));
-        await Settle();
+        await LoadStarted(engine);
         await transcriber.Unload();
         engine.OpenGate();
 
@@ -179,7 +196,7 @@ public class LocalTranscriberResidencyTests
         var transcriber = new LocalTranscriber(engine);
 
         Task load = Task.Run(() => transcriber.Prepare(directory));
-        await Settle();
+        await LoadStarted(engine);
         Assert.False(await transcriber.UnloadIfIdle(), "a polite unload must never interleave with a load");
 
         engine.OpenGate();

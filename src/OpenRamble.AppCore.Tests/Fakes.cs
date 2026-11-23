@@ -914,7 +914,7 @@ public sealed class AppHarness : IDisposable
 
     public FakeRecordingTrasher RecordingTrasher { get; } = new();
 
-    internal FakeCompressor RecordingCompressor { get; } = new(succeeds: true);
+    internal FakeCompressor RecordingCompressor { get; set; } = new(succeeds: true);
 
     public FakeMeetingCapture MeetingCapture { get; } = new();
 

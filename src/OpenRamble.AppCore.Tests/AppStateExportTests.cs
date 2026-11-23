@@ -17,6 +17,10 @@ public sealed class AppStateExportTests : IDisposable
 
     public AppStateExportTests()
     {
+        // The stored recordings are Complete and still hold their WAV, which the launch compacts
+        // into an m4a in the background. A compaction that never succeeds keeps the WAV where the
+        // tests read it, instead of racing them for which file the export starts from.
+        harness.RecordingCompressor = new FakeCompressor(succeeds: false);
         harness.AudioExporter = new MeetingAudioExporter("/usr/bin/ffmpeg", (_, arguments, _) =>
         {
             runs.Add(arguments);

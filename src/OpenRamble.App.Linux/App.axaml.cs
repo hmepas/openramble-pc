@@ -208,6 +208,8 @@ public sealed partial class App : Application
         });
 
         state = built;
+        // The panel's button copies; the dictation key is the way to paste again. See OverlayWindow.
+        panel.OnWaitingCopy = built.CopyWaitingWords;
         // An exception nobody caught ends the process; a sanitized record of it stays in the
         // journal's folder for the next error report. No core dump, no message, no upload.
         AppDomain.CurrentDomain.UnhandledException += (_, unhandled) =>

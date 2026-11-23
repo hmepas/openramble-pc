@@ -16,28 +16,32 @@ namespace OpenRamble.LinuxInput.Tests;
 [Collection(LinuxInputCollection.Name)]
 public sealed class LinuxTextInserterTests
 {
-    /// <summary>Two sentences - the ordinary dictation, and short enough to be typed.</summary>
+    /// <summary>Two sentences - the ordinary dictation, and short enough to be typed as a fallback.</summary>
     private const string Short = "The quick brown fox jumps over the lazy dog.";
 
-    /// <summary>Past <c>InsertionPathPolicy.SynthesizedKeystrokeLimit</c>: the clipboard path.</summary>
+    /// <summary>Past <c>InsertionPathPolicy.SynthesizedKeystrokeLimit</c>: never typed, not even as a fallback.</summary>
     private static readonly string Long = new('x', InsertionPathPolicy.SynthesizedKeystrokeLimit + 1);
 
     private static readonly TimeSpan QuickRestore = TimeSpan.FromMilliseconds(60);
 
+    private static bool IsKeyboardTool(string executable) =>
+        executable is SynthesizedKeyboard.Wtype or SynthesizedKeyboard.Ydotool;
+
     [Fact]
-    public async Task TheOrdinaryDictationIsTypedAndTheClipboardIsNeverTouched()
+    public async Task TheOrdinaryDictationIsPastedAndThePersonGetsTheirsBack()
     {
-        // The whole reason the direct path exists: nothing to borrow, nothing to lose, and nothing
-        // for a clipboard manager to see.
+        // Short text is pasted too, as upstream does: only a paste can be seen to land, and typed
+        // words that went nowhere are lost without a trace.
         var desktop = new FakeWaylandDesktop();
         desktop.SomebodyCopies("something the person copied");
-        var inserter = new LinuxTextInserter(desktop);
+        var inserter = new LinuxTextInserter(desktop, QuickRestore);
 
         await inserter.Insert(Short, inserter.FrontmostApplication());
+        await Task.Delay(QuickRestore * 3);
 
-        Assert.Equal([Short], desktop.Typed);
+        Assert.Empty(desktop.Typed);
+        Assert.Equal(1, desktop.Pastes);
         Assert.Equal("something the person copied", desktop.ClipboardText);
-        Assert.DoesNotContain(desktop.Runs, run => run.Executable is WaylandClipboard.Copy or WaylandClipboard.Paste);
     }
 
     [Fact]
@@ -234,6 +238,7 @@ public sealed class LinuxTextInserterTests
         // protocol - GNOME, or anything on X11 - which is what makes falling through safe.
         using var diagnostics = new DiagnosticRecorder();
         var desktop = new FakeWaylandDesktop();
+        desktop.Missing.Add(WaylandClipboard.Copy);
         desktop.Broken.Add(SynthesizedKeyboard.Wtype);
         var inserter = new LinuxTextInserter(desktop);
 
@@ -242,7 +247,7 @@ public sealed class LinuxTextInserterTests
         Assert.Equal([Short], desktop.Typed);
         Assert.Equal(
             [SynthesizedKeyboard.Wtype, SynthesizedKeyboard.Ydotool],
-            desktop.Runs.Select(run => run.Executable));
+            desktop.Runs.Select(run => run.Executable).Where(IsKeyboardTool));
         Assert.Equal(SynthesizedKeyboard.Wtype, diagnostics.Field("insert.tool-failed", "tool"));
         Assert.Equal("true", diagnostics.Field("insert.tool-failed", "installed"));
     }
@@ -252,6 +257,7 @@ public sealed class LinuxTextInserterTests
     {
         using var diagnostics = new DiagnosticRecorder();
         var desktop = new FakeWaylandDesktop();
+        desktop.Missing.Add(WaylandClipboard.Copy);
         desktop.Missing.Add(SynthesizedKeyboard.Wtype);
         var inserter = new LinuxTextInserter(desktop);
 
@@ -265,6 +271,7 @@ public sealed class LinuxTextInserterTests
     public async Task TheToolThatWorkedIsTriedFirstNextTime()
     {
         var desktop = new FakeWaylandDesktop();
+        desktop.Missing.Add(WaylandClipboard.Copy);
         desktop.Missing.Add(SynthesizedKeyboard.Wtype);
         var inserter = new LinuxTextInserter(desktop);
         TargetApplication? target = inserter.FrontmostApplication();
@@ -275,7 +282,7 @@ public sealed class LinuxTextInserterTests
 
         // Otherwise the missing tool is paid for on every dictation, and the failure written to the
         // log on every dictation with it.
-        Assert.Equal([SynthesizedKeyboard.Ydotool], desktop.Runs.Select(run => run.Executable));
+        Assert.Equal([SynthesizedKeyboard.Ydotool], desktop.Runs.Select(run => run.Executable).Where(IsKeyboardTool));
     }
 
     [Fact]
@@ -283,6 +290,7 @@ public sealed class LinuxTextInserterTests
     {
         using var diagnostics = new DiagnosticRecorder();
         var desktop = new FakeWaylandDesktop();
+        desktop.Missing.Add(WaylandClipboard.Copy);
         desktop.Missing.Add(SynthesizedKeyboard.Wtype);
         desktop.Missing.Add(SynthesizedKeyboard.Ydotool);
         var inserter = new LinuxTextInserter(desktop);
@@ -300,7 +308,8 @@ public sealed class LinuxTextInserterTests
     public async Task AClipboardThatCannotBeWrittenStopsBeforeTheKeystroke()
     {
         // The order is the product: nothing irreversible happens until the text is actually on the
-        // clipboard, or Ctrl+V would paste whatever was there before.
+        // clipboard, or Ctrl+V would paste whatever was there before. Long text is not typed
+        // instead: a few hundred synthesised characters land slowly and can tear.
         var desktop = new FakeWaylandDesktop();
         desktop.Missing.Add(WaylandClipboard.Copy);
         var inserter = new LinuxTextInserter(desktop, QuickRestore);
@@ -309,6 +318,37 @@ public sealed class LinuxTextInserterTests
             () => inserter.Insert(Long, inserter.FrontmostApplication()));
 
         Assert.Equal(0, desktop.Pastes);
+        Assert.Empty(desktop.Typed);
+    }
+
+    [Fact]
+    public async Task WithoutAClipboardShortTextIsTypedInstead()
+    {
+        using var diagnostics = new DiagnosticRecorder();
+        var desktop = new FakeWaylandDesktop();
+        desktop.Missing.Add(WaylandClipboard.Copy);
+        var inserter = new LinuxTextInserter(desktop, QuickRestore);
+
+        await inserter.Insert(Short, inserter.FrontmostApplication());
+
+        Assert.Equal([Short], desktop.Typed);
+        Assert.Equal(0, desktop.Pastes);
+        Assert.NotNull(diagnostics.Event("insert.clipboard.unavailable"));
+        Assert.Equal("SynthesizedKeystrokes", diagnostics.Field("insert.end", "path"));
+    }
+
+    [Fact]
+    public async Task WithoutAClipboardALineBreakIsNotTypedIntoAChat()
+    {
+        // A typed line break is Return, and Return in a chat sends half the message.
+        var desktop = new FakeWaylandDesktop();
+        desktop.Missing.Add(WaylandClipboard.Copy);
+        var inserter = new LinuxTextInserter(desktop, QuickRestore);
+
+        await Assert.ThrowsAsync<TextInsertionError.ClipboardWriteFailed>(
+            () => inserter.Insert("Hi.\n\nBye.", inserter.FrontmostApplication()));
+
+        Assert.Empty(desktop.Typed);
     }
 
     [Fact]
@@ -341,23 +381,22 @@ public sealed class LinuxTextInserterTests
         held = HotkeyModifiers.None;
         await insertion;
 
-        Assert.Equal([Short], desktop.Typed);
+        Assert.Equal(1, desktop.Pastes);
     }
 
     [Fact]
-    public async Task ThePathIsChosenByTheSharedPolicyAndNotByAThresholdOfItsOwn()
+    public async Task EveryDictationIsPastedWhateverItsLength()
     {
         var desktop = new FakeWaylandDesktop();
         var inserter = new LinuxTextInserter(desktop, QuickRestore);
         TargetApplication? target = inserter.FrontmostApplication();
 
+        await inserter.Insert("a", target);
         await inserter.Insert(new string('a', InsertionPathPolicy.SynthesizedKeystrokeLimit), target);
-        Assert.Single(desktop.Typed);
-        Assert.Equal(0, desktop.Pastes);
-
         await inserter.Insert(new string('a', InsertionPathPolicy.SynthesizedKeystrokeLimit + 1), target);
-        Assert.Single(desktop.Typed);
-        Assert.Equal(1, desktop.Pastes);
+
+        Assert.Empty(desktop.Typed);
+        Assert.Equal(3, desktop.Pastes);
     }
 
     [Fact]

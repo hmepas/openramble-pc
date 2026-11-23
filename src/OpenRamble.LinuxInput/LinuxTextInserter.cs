@@ -8,12 +8,13 @@ namespace OpenRamble.LinuxInput;
 /// Insert recognized text into whatever the person is typing in, on Linux.
 ///
 /// The peer of <c>OpenRamble.App</c>'s <c>TextInserter</c>, and deliberately the same shape: the
-/// path is chosen by <see cref="InsertionPathPolicy"/>, the refusals come from
-/// <see cref="TextInsertionPolicy"/>, the clipboard is borrowed under
+/// refusals come from <see cref="TextInsertionPolicy"/>, the clipboard is borrowed under
 /// <see cref="ClipboardSnapshotLedger"/>, and the diagnostics are the same <c>insert.*</c> events.
-/// Only the two irreversible acts differ - synthesised typing is <c>wtype</c> or <c>ydotool</c>
-/// rather than <c>SendInput</c>, and the clipboard is <c>wl-clipboard</c> rather than
-/// <c>user32</c>.
+/// One difference is a choice: every dictation is pasted, as upstream does everywhere, because only
+/// a paste can be seen to land. Typing is the fallback where the clipboard cannot be written, and
+/// only for text <see cref="InsertionPathPolicy"/> would type. The other differences are the tools
+/// - synthesised typing is <c>wtype</c> or <c>ydotool</c> rather than <c>SendInput</c>, and the
+/// clipboard is <c>wl-clipboard</c> rather than <c>user32</c>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -238,7 +239,9 @@ public sealed class LinuxTextInserter : ITextInserting
     {
         // Length, never content: the log has to be able to say "the text was there and the
         // insertion still did not happen", and that takes a number, not the words.
-        InsertionPath path = InsertionPathPolicy.Choose(text, target);
+        // Always the clipboard, as upstream inserts on every platform: only a paste can be seen to
+        // land (see the class remarks), and typed words that went nowhere are simply lost.
+        InsertionPath path = InsertionPath.ClipboardPaste;
         int session = DiagnosticLog.Session;
         DiagnosticLog.Emit(
             "insert.begin",
@@ -277,11 +280,25 @@ public sealed class LinuxTextInserter : ITextInserting
 
         try
         {
-            InsertionMarks marks = path switch
+            InsertionMarks marks;
+            if (await PasteThroughClipboard(text, destination).ConfigureAwait(false) is InsertionMarks pasted)
             {
-                InsertionPath.SynthesizedKeystrokes => TypeDirectly(text, destination),
-                _ => await PasteThroughClipboard(text, destination).ConfigureAwait(false),
-            };
+                marks = pasted;
+            }
+            else
+            {
+                // No clipboard to borrow - wl-copy missing, or no Wayland session for it. Typing is
+                // the fallback, but only for what the shared policy would type anyway: long text
+                // is not typed, and a typed line break is Return, which sends a chat half-written.
+                DiagnosticLog.Emit("insert.clipboard.unavailable", ("session", session));
+                if (InsertionPathPolicy.Choose(text, destination) != InsertionPath.SynthesizedKeystrokes)
+                {
+                    throw new TextInsertionError.ClipboardWriteFailed();
+                }
+
+                path = InsertionPath.SynthesizedKeystrokes;
+                marks = TypeDirectly(text, destination);
+            }
             DiagnosticLog.Emit(
                 "insert.end",
                 ("session", session),
@@ -336,7 +353,8 @@ public sealed class LinuxTextInserter : ITextInserting
     public void CopyForPerson(string text) => clipboard.Write(text);
 
     /// <summary>
-    /// The direct path: the tool types the characters, and the clipboard is never touched.
+    /// The fallback where the clipboard cannot be written: the tool types the characters. Nothing
+    /// can tell whether they landed.
     /// </summary>
     private InsertionMarks TypeDirectly(string text, TargetApplication target)
     {
@@ -358,10 +376,11 @@ public sealed class LinuxTextInserter : ITextInserting
     ///
     /// <see cref="LinuxClipboardRestrictions"/> says what that is worth here. There is no history
     /// service to opt out of, so the promise is the clearing - after the restore the dictation is
-    /// not on the clipboard - plus the one marker KDE honours, which
+    /// not on the clipboard - plus the sensitive marker Klipper and cliphist honour, which
     /// <see cref="WaylandClipboard"/> sets when the tool is new enough to know it.
     /// </summary>
-    private async Task<InsertionMarks> PasteThroughClipboard(string text, TargetApplication target)
+    /// <returns><c>null</c> when the clipboard could not be written, before anything was touched.</returns>
+    private async Task<InsertionMarks?> PasteThroughClipboard(string text, TargetApplication target)
     {
         // Open from the start: a press before Ctrl+V still leaves the target the floor to read.
         var wait = new ReadWait();
@@ -377,10 +396,22 @@ public sealed class LinuxTextInserter : ITextInserting
         }
     }
 
-    private async Task<InsertionMarks> PasteThroughClipboard(string text, TargetApplication target, ReadWait wait)
+    private async Task<InsertionMarks?> PasteThroughClipboard(string text, TargetApplication target, ReadWait wait)
     {
         ClipboardContents before = clipboard.Read();
         uint fingerprintBefore = ClipboardFingerprint.Of(before);
+
+        // The offer goes up before the ledger is consulted: a write that fails has touched nothing,
+        // the clipboard and the ledger alike, so the caller is free to type instead.
+        using Receipt? receipt = CurrentReceiptSupport() == ReceiptSupport.Unavailable ? null : readReceipts?.Open();
+        try
+        {
+            clipboard.Write(text, receipt);
+        }
+        catch (TextInsertionError.ClipboardWriteFailed)
+        {
+            return null;
+        }
 
         // A second dictation inside the restore window of the first lands on OUR text. Taking a
         // fresh snapshot there would capture the dictation instead of the person's clipboard, and
@@ -409,8 +440,6 @@ public sealed class LinuxTextInserter : ITextInserting
                 break;
         }
 
-        using Receipt? receipt = CurrentReceiptSupport() == ReceiptSupport.Unavailable ? null : readReceipts?.Open();
-        clipboard.Write(text, receipt);
         uint owned = ClipboardFingerprint.Of(text);
         Guid transaction = inheritsLostContents
             ? ledger.InsertExpired(owned)

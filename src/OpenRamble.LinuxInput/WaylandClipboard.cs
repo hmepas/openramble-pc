@@ -111,9 +111,9 @@ internal static class ClipboardFingerprint
 /// policy; this is the half that carries it out. The promise kept here is the clearing: the
 /// dictation does not stay on the clipboard after the paste - the person's own text comes back, or
 /// the clipboard is emptied. The best-effort marker is <c>wl-copy --sensitive</c>, which offers
-/// KDE's <c>x-kde-passwordManagerHint</c> so that Klipper does not record the entry; nothing else
-/// on Linux honours anything, and a wl-clipboard too old to know the flag is detected once and not
-/// asked again.
+/// KDE's <c>x-kde-passwordManagerHint</c> so that Klipper does not record the entry, and which a
+/// <c>wl-paste --watch cliphist store</c> sees as <c>CLIPBOARD_STATE=sensitive</c> and skips; a
+/// wl-clipboard too old to know the flag is detected once and not asked again.
 /// </para>
 /// <para>
 /// <b>The limitation, stated rather than hidden.</b> Only text can be put back. If the person had

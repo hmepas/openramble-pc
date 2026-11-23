@@ -59,8 +59,8 @@ internal sealed class SynthesizedKeyboard
     /// How long a typing run may take.
     /// </summary>
     /// <remarks>
-    /// Generous because <c>ydotool</c> pauses between keystrokes by default, and the direct path
-    /// carries up to <c>InsertionPathPolicy.SynthesizedKeystrokeLimit</c> characters. The deadline
+    /// Generous because <c>ydotool</c> pauses between keystrokes by default, and the typing
+    /// fallback carries up to <c>InsertionPathPolicy.SynthesizedKeystrokeLimit</c> characters. The deadline
     /// is not a performance budget - it is the guarantee that a tool which has wedged does not hold
     /// the dictation open for the rest of the session.
     /// </remarks>

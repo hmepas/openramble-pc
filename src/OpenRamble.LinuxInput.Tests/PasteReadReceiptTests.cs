@@ -16,7 +16,7 @@ namespace OpenRamble.LinuxInput.Tests;
 [System.Runtime.Versioning.SupportedOSPlatform("linux")]
 public sealed class PasteReadReceiptTests : IDisposable
 {
-    /// <summary>Past <c>InsertionPathPolicy.SynthesizedKeystrokeLimit</c>: the clipboard path.</summary>
+    /// <summary>Past <c>InsertionPathPolicy.SynthesizedKeystrokeLimit</c>: pasted however typing is decided.</summary>
     private static readonly string Long = new('x', InsertionPathPolicy.SynthesizedKeystrokeLimit + 1);
 
     private static readonly TimeSpan Floor = TimeSpan.FromMilliseconds(60);
@@ -90,6 +90,21 @@ public sealed class PasteReadReceiptTests : IDisposable
 
         Assert.Equal(1, desktop.Pastes);
         Assert.Equal("theirs", desktop.ClipboardText);
+    }
+
+    /// <summary>
+    /// Short text is pasted too, so a few words that went nowhere wait instead of vanishing.
+    /// </summary>
+    [Fact]
+    public async Task AShortDictationNobodyReadIsReportedToo()
+    {
+        var desktop = new FakeWaylandDesktop { TargetReadsPaste = false };
+        LinuxTextInserter inserter = Inserter(desktop, readLimit: TimeSpan.FromMilliseconds(300));
+
+        await Assert.ThrowsAsync<TextInsertionError.PasteNotRead>(
+            () => inserter.Insert("Hi.", inserter.FrontmostApplication()));
+
+        Assert.Empty(desktop.Typed);
     }
 
     /// <summary>

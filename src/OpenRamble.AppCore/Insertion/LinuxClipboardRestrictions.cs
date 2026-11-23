@@ -18,12 +18,13 @@ namespace OpenRamble.AppCore;
 /// <para>
 /// <b>What does keep it is a clipboard manager.</b> Klipper, GPaste, clipman, cliphist and the
 /// rest are ordinary applications that watch the selection and write it to their own store, and
-/// they are installed by default on most desktops. Only KDE's Klipper honours an opt-out, and it
-/// honours exactly one: an offer carrying the <see cref="KdePasswordManagerHint"/> MIME type with
-/// the body <see cref="KdePasswordManagerHintSecret"/> is not recorded. It is listed here because
-/// a best-effort marker that costs one extra offer is worth setting; it is not listed as
-/// <i>required</i>, because on GNOME, on Sway and on anything using GPaste it does nothing at all,
-/// and a promise that only holds on one desktop is not a promise.
+/// they are installed by default on most desktops. Few honour an opt-out, and those that do honour
+/// one: an offer carrying the <see cref="KdePasswordManagerHint"/> MIME type with the body
+/// <see cref="KdePasswordManagerHintSecret"/> is not recorded. KDE's Klipper reads the type itself;
+/// <c>wl-paste --watch</c> (wl-clipboard 2.2+) sees it and sets <c>CLIPBOARD_STATE=sensitive</c>,
+/// which cliphist 0.7 skips - checked live. It is listed here because a best-effort marker that
+/// costs one extra offer is worth setting; it is not listed as <i>required</i>, because GPaste and
+/// older managers ignore it, and a promise that only holds for some managers is not a promise.
 /// </para>
 /// <para>
 /// <b>The guarantee is the clearing.</b> What the insertion path can actually promise everywhere

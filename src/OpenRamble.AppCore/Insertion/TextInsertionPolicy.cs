@@ -119,8 +119,8 @@ public static class TextInsertionPolicy
 public enum InsertionPath
 {
     /// <summary>
-    /// Synthesised characters. The clipboard is never touched, so there is nothing to leak into
-    /// history and nothing to give back.
+    /// Synthesised characters. The clipboard is never touched, but nothing can tell whether the
+    /// characters landed.
     /// </summary>
     SynthesizedKeystrokes,
 
@@ -144,14 +144,19 @@ public enum InsertionPath
 /// the destination's mercy: a few hundred of them interleave with real typing, take visible time
 /// to land, and a partial injection would tear a sentence in half. Pasting a paragraph is one
 /// event.
+///
+/// Linux does not ask this for every dictation: it always pastes, as upstream does, because only a
+/// paste can be seen to land, and asks here only when the clipboard cannot be written - typing
+/// what this would type, refusing the rest. Windows still types short text; whether it should
+/// paste everything too is a later decision.
 /// </summary>
 public static class InsertionPathPolicy
 {
     /// <summary>
     /// Above this many UTF-16 units the clipboard wins.
     ///
-    /// Two ordinary spoken sentences. Chosen so that the common dictation - a chat reply, a
-    /// commit message, a search query - never touches the clipboard at all.
+    /// Two ordinary spoken sentences. Chosen so that, on Windows, the common dictation - a chat
+    /// reply, a commit message, a search query - never touches the clipboard at all.
     /// </summary>
     public const int SynthesizedKeystrokeLimit = 256;
 

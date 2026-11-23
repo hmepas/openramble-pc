@@ -389,13 +389,13 @@ public sealed partial class AppState
         RecentDictations = [.. RecentDictations.Where(take => take.HistoryId is not { } id || !ids.Contains(id))];
     }
 
-    /// <summary>Open the recording's folder in the file manager.</summary>
+    /// <summary>Show the recording's audio in the file manager; its folder when there is no audio.</summary>
     public void RevealRecording(Guid id)
     {
         if (meetingStore is null || !meetingStore.IsPublished(id)) { return; }
         try
         {
-            folders?.Open(meetingStore.Directory(id));
+            folders?.Open(meetingStore.AudioPath(id) ?? meetingStore.Directory(id));
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {

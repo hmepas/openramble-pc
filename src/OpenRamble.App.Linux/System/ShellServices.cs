@@ -26,14 +26,63 @@ public sealed class HostOnlyClipboard : IHostOnlyClipboard
     public void Copy(string text) => inserter.CopyForPerson(text);
 }
 
-/// <summary>Show a folder to the person.</summary>
+/// <summary>Show a file or folder to the person in their file manager.</summary>
 /// <remarks>
-/// <c>xdg-open</c> rather than a named file manager: which one is installed is the desktop's
-/// business, and the tool exists to answer exactly that question.
+/// <para>
+/// The freedesktop file manager interface (<c>org.freedesktop.FileManager1</c>, which Dolphin,
+/// Nautilus, Nemo and Thunar answer on the session bus) rather than <c>xdg-open</c>: a file is
+/// shown selected in its folder, as "Show in Finder" does, and the folder is opened by a file
+/// manager. <c>xdg-open</c> hands a folder to whatever claims <c>inode/directory</c>, which on
+/// plenty of desktops is a terminal or an editor - that opens nothing worth looking at.
+/// </para>
+/// <para>
+/// <c>busctl</c> (systemd) first, <c>gdbus</c> (GLib) if it is missing; <c>xdg-open</c> on the
+/// folder only when no file manager answered. The call waits for the file manager to start, so
+/// it runs off the caller's thread.
+/// </para>
 /// </remarks>
 public sealed class FolderOpening : IFolderOpening
 {
-    public void Open(string path) => DesktopTools.Start("xdg-open", path);
+    private const string Service = "org.freedesktop.FileManager1";
+    private const string ObjectPath = "/org/freedesktop/FileManager1";
+    private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(30);
+
+    private readonly Func<string, string[], bool> run;
+    private readonly Action<string, string[]> start;
+
+    public FolderOpening()
+        : this((tool, arguments) => DesktopTools.Run(tool, Deadline, arguments),
+               (tool, arguments) => DesktopTools.Start(tool, arguments))
+    {
+    }
+
+    /// <param name="run">Runs a tool and waits: <c>true</c> - it succeeded.</param>
+    /// <param name="start">Starts a tool without waiting.</param>
+    internal FolderOpening(Func<string, string[], bool> run, Action<string, string[]> start)
+    {
+        this.run = run;
+        this.start = start;
+    }
+
+    public void Open(string path) => _ = Task.Run(() => Reveal(path));
+
+    internal void Reveal(string path)
+    {
+        string full = Path.GetFullPath(path);
+        bool isFolder = Directory.Exists(full);
+        string method = isFolder ? "ShowFolders" : "ShowItems";
+        string uri = FileUri(full);
+
+        if (run("busctl", ["--user", "call", Service, ObjectPath, Service, method, "ass", "1", uri, ""])) { return; }
+        if (run("gdbus", ["call", "--session", "--dest", Service, "--object-path", ObjectPath,
+            "--method", Service + "." + method, $"['{uri}']", ""])) { return; }
+
+        start("xdg-open", [isFolder ? full : Path.GetDirectoryName(full) ?? full]);
+    }
+
+    /// <summary>A <c>file://</c> URI with every path segment percent-encoded (spaces, Cyrillic, quotes).</summary>
+    internal static string FileUri(string absolutePath) =>
+        "file://" + string.Join('/', absolutePath.Split('/').Select(Uri.EscapeDataString));
 }
 
 /// <summary>

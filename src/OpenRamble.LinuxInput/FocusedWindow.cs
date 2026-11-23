@@ -1,6 +1,3 @@
-using System.Diagnostics;
-using System.Net.Sockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DictationCore;
@@ -101,70 +98,12 @@ internal static class FocusedWindow
         return id.Success && id.Groups[1].Value != "0x0" ? id.Groups[1].Value : null;
     }
 
-    private static TargetApplication? Hyprland(string signature)
-    {
-        string runtime = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR") ?? "";
-        // Hyprland moved its sockets from /tmp into the runtime directory; either may be live.
-        return AskHyprland(
-            [
-                Path.Combine(runtime, "hypr", signature, ".socket.sock"),
-                Path.Combine("/tmp/hypr", signature, ".socket.sock"),
-            ],
-            Budget);
-    }
+    private static TargetApplication? Hyprland(string signature) =>
+        AskHyprland(HyprlandIpc.Sockets(signature), Budget);
 
-    /// <summary>
-    /// Ask the first socket that answers, all of it - connect, send, read - within one
-    /// <paramref name="budget"/>.
-    /// </summary>
-    /// <remarks>
-    /// One budget for the whole question, not one per call: a compositor that accepts the
-    /// connection and then says nothing used to cost a receive timeout per socket, and a connect
-    /// to a socket whose listener had stopped accepting had no bound at all.
-    /// </remarks>
-    internal static TargetApplication? AskHyprland(IReadOnlyList<string> sockets, TimeSpan budget)
-    {
-        long began = Stopwatch.GetTimestamp();
-        TimeSpan Remaining() => budget - Stopwatch.GetElapsedTime(began);
-
-        foreach (string path in sockets)
-        {
-            if (!File.Exists(path)) { continue; }
-            if (Remaining() <= TimeSpan.Zero) { break; }
-
-            try
-            {
-                using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                using (var expiry = new CancellationTokenSource(Remaining()))
-                {
-                    socket.ConnectAsync(new UnixDomainSocketEndPoint(path), expiry.Token).AsTask().GetAwaiter().GetResult();
-                }
-
-                socket.SendTimeout = Milliseconds(Remaining());
-                socket.Send("j/activewindow"u8);
-                var answer = new MemoryStream();
-                byte[] buffer = new byte[4096];
-                while (true)
-                {
-                    socket.ReceiveTimeout = Milliseconds(Remaining());
-                    int read = socket.Receive(buffer);
-                    if (read <= 0) { break; }
-                    answer.Write(buffer, 0, read);
-                }
-
-                return FromHyprland(Encoding.UTF8.GetString(answer.ToArray()));
-            }
-            catch (Exception error) when (error is SocketException or OperationCanceledException)
-            {
-                // A stale socket, or a compositor that did not answer in time: unknown.
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>A socket timeout for what is left; zero would mean "wait forever".</summary>
-    private static int Milliseconds(TimeSpan remaining) => Math.Max(1, (int)remaining.TotalMilliseconds);
+    /// <summary>The focused window from the first socket that answers within <paramref name="budget"/>.</summary>
+    internal static TargetApplication? AskHyprland(IReadOnlyList<string> sockets, TimeSpan budget) =>
+        HyprlandIpc.Ask(sockets, "j/activewindow", budget) is { } answer ? FromHyprland(answer) : null;
 
     private static TargetApplication? X11(ICommandRunner runner)
     {

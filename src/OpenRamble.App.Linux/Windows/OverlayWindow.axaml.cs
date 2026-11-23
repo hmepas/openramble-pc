@@ -83,6 +83,8 @@ public sealed partial class OverlayWindow : Window,
         {
             if (change.Property == ClientSizeProperty && IsVisible) { Place(); }
         };
+        // A bar that appears, moves or goes away moves the work area under an open panel.
+        WorkArea.Changed += () => Dispatcher.UIThread.Post(() => { if (IsVisible) { Place(); } });
 
         for (int index = 0; index < bars.Length; index++)
         {
@@ -333,7 +335,8 @@ public sealed partial class OverlayWindow : Window,
     /// <see cref="OverlayPlacementPolicy"/>'s.
     /// </summary>
     /// <remarks>
-    /// The work area is in physical pixels and the window's size is in device-independent ones, so
+    /// The work area is the compositor's where it says (see <see cref="WorkArea"/>), and it is in
+    /// physical pixels and the window's size is in device-independent ones, so
     /// the scaling has to be applied by hand - the one piece of arithmetic WPF did for us. On a
     /// desktop that refuses to place a window where it is asked, this is a no-op and the panel
     /// lands wherever the compositor puts it.
@@ -343,7 +346,7 @@ public sealed partial class OverlayWindow : Window,
         Screen? screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
         if (screen is null) { return; }
 
-        PixelRect work = screen.WorkingArea;
+        PixelRect work = WorkArea.For(screen, Screens.ScreenCount);
         double scale = screen.Scaling;
         var size = new OverlaySize(
             Math.Round(Bounds.Width * scale),

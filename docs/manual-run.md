@@ -161,10 +161,8 @@ delivered nothing.
 14. Settings → General: every row shows a ↺ arrow only once its value differs
     from the default, and the arrow puts back that one setting only. Check
     "Add a space after each dictation" (a dictation ending in "new line" gets
-    no space), "Also copy dictations to the clipboard" (the text is on the
-    clipboard after a paste, and not in Win+V history), "Finish hands-free
-    dictation on silence" (double-press, speak, stay quiet two seconds — it
-    ends by itself; a held key never does), "Dictation panel" Top/Bottom (the
+    no space), "Finish hands-free dictation on silence" (double-press, speak,
+    stay quiet two seconds — it ends by itself; a held key never does), "Dictation panel" Top/Bottom (the
     panel moves on the screen holding the focused window). There is no
     "Unload model" row: the model stays loaded for an hour after the last
     dictation.

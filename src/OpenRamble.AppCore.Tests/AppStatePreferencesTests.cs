@@ -43,7 +43,6 @@ public sealed class AppStatePreferencesTests : IDisposable
         Assert.Equal(SettingsDefaults.Hotkey, state.Hotkey);
         Assert.Equal(state.DefaultLastTakeShortcut, state.LastTakeShortcut);
         Assert.Equal(SettingsDefaults.SoundsEnabled, state.SoundsEnabled);
-        Assert.Equal(SettingsDefaults.CopiesToClipboard, state.CopiesToClipboard);
         Assert.Equal(SettingsDefaults.AppendsTrailingSpace, state.AppendsTrailingSpace);
         Assert.Equal(SettingsDefaults.OverlayPlacement, state.OverlayPlacement);
         Assert.Equal(SettingsDefaults.Appearance, state.Appearance);
@@ -106,7 +105,6 @@ public sealed class AppStatePreferencesTests : IDisposable
     {
         AppState state = harness.MakeState();
         Assert.Null(state.LastTakeShortcut);
-        Assert.False(state.CopiesToClipboard);
         Assert.False(harness.CopyMonitor.IsRunning);
     }
 
@@ -193,20 +191,16 @@ public sealed class AppStatePreferencesTests : IDisposable
     // MARK: - Dictations on the clipboard
 
     /// <summary>
-    /// Off by default because the clipboard is shared with everything else running here; on,
-    /// every finished dictation is also left there.
+    /// The clipboard is shared with everything else running here: a finished dictation is never
+    /// left there (upstream 0.33 removed the setting that did).
     /// </summary>
     [Fact]
-    public async Task AFinishedDictationIsLeftOnTheClipboardOnlyWhenAsked()
+    public async Task AFinishedDictationIsNotLeftOnTheClipboard()
     {
         AppState state = await ReadyState();
 
         await DictateOnce(state);
         Assert.Empty(harness.Clipboard.Copied);
-
-        state.CopiesToClipboard = true;
-        await DictateOnce(state);
-        Assert.Equal(["Ping test"], harness.Clipboard.Copied);
     }
 
     // MARK: - The trailing space
@@ -424,7 +418,7 @@ public sealed class AppStatePreferencesTests : IDisposable
         await TestWait.For("the take reached the journal", () => LogText().Length > 0);
         // Written back at once, so the next launch reads a file that is already current.
         string stored = File.ReadAllText(file);
-        Assert.Contains("\"schemaVersion\": 1", stored, StringComparison.Ordinal);
+        Assert.Contains($"\"schemaVersion\": {SettingsStore.CurrentSchemaVersion}", stored, StringComparison.Ordinal);
         Assert.Contains("\"detailedLogging\": true", stored, StringComparison.Ordinal);
         Assert.DoesNotContain("modelUnloadTimeout", stored, StringComparison.Ordinal);
 

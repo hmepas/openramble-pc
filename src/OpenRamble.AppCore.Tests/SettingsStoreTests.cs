@@ -117,6 +117,31 @@ public sealed class SettingsStoreTests : IDisposable
         Assert.False(store.Read().DetailedLogging);
     }
 
+    /// <summary>
+    /// A version 1 file still carrying the removed clipboard switch loses it once; nothing else
+    /// in it moves - in particular a chosen <c>false</c> for the journal stays.
+    /// </summary>
+    [Fact]
+    public void TestTheRemovedClipboardSwitchIsDroppedFromAVersionOneFile()
+    {
+        File.WriteAllText(Path_, """
+            {
+              "hotkey": "CapsLock",
+              "copiesToClipboard": true,
+              "detailedLogging": false,
+              "schemaVersion": 1
+            }
+            """);
+        var store = new SettingsStore(Path_);
+
+        AppSettings read = store.Read();
+
+        Assert.Equal(SettingsStore.CurrentSchemaVersion, read.SchemaVersion);
+        Assert.False(read.DetailedLogging);
+        Assert.Equal(nameof(DictationHotkey.CapsLock), read.Hotkey);
+        Assert.DoesNotContain("copiesToClipboard", File.ReadAllText(Path_), StringComparison.Ordinal);
+    }
+
     /// <summary>A settings file that was never written reads as the defaults, silently.</summary>
     [Fact]
     public void TestAMissingFileIsNotAProblem()

@@ -24,7 +24,6 @@ public static class SettingsDefaults
     public const DictationHotkey Hotkey = DictationHotkey.RightCtrl;
 
     public const bool SoundsEnabled = true;
-    public const bool CopiesToClipboard = false;
     public const bool AppendsTrailingSpace = false;
     public const bool LaunchAtLogin = false;
     public const bool LearnFromEdits = false;

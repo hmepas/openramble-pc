@@ -18,7 +18,6 @@ public sealed class SettingsDefaultsTests
         Assert.Equal(DictationHotkey.RightCtrl, SettingsDefaults.Hotkey);
         Assert.Contains(SettingsDefaults.Hotkey, DictationHotkeyInfo.AllCases);
         Assert.True(SettingsDefaults.SoundsEnabled);
-        Assert.False(SettingsDefaults.CopiesToClipboard);
         Assert.False(SettingsDefaults.AppendsTrailingSpace);
         Assert.False(SettingsDefaults.LaunchAtLogin);
         Assert.False(SettingsDefaults.LearnFromEdits);

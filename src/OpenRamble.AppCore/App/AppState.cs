@@ -139,7 +139,6 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         soundsEnabled = settings.SoundsEnabled;
         // Every one of these reads through the defaults the revert arrow uses, so what the app
         // starts with and what the arrow gives back cannot be two different values.
-        copiesToClipboard = settings.CopiesToClipboard;
         defaultLastTakeShortcut = environment.DefaultLastTakeShortcut;
         copyShortcut = settings.CopyShortcut is null
             ? defaultLastTakeShortcut
@@ -413,21 +412,6 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             built.OnTextInserted = text =>
             {
                 RecordSuccessfulDictation(text);
-                if (CopiesToClipboard)
-                {
-                    // Host-only, like every other copy this app makes: asking for the clipboard
-                    // is not asking for it to be synced to other devices.
-                    try
-                    {
-                        clipboard?.Copy(text);
-                    }
-                    catch (Exception error) when (error is InvalidOperationException
-                        or System.Runtime.InteropServices.ExternalException)
-                    {
-                        DiagnosticLog.EmitException("clipboard.copy.failed", error);
-                    }
-                }
-
                 if (!LearnFromEdits) { return; }
                 editWatcher.BeginWatching(text, (original, edited) => Learn(original, edited));
             };

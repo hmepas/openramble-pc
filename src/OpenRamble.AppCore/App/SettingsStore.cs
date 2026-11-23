@@ -7,7 +7,7 @@ namespace OpenRamble.AppCore;
 /// <summary>
 /// Everything the person chose, and nothing else.
 ///
-/// Fifteen values, every one of them a choice made in Settings. There is no telemetry
+/// Twelve values, every one of them a choice made in Settings. There is no telemetry
 /// identifier, no install date, no counters: a settings file that grows things the person never
 /// set is a settings file that has started reporting. The one value nobody chose is
 /// <see cref="SchemaVersion"/>, and it describes the file, not the person.
@@ -18,12 +18,6 @@ public sealed record AppSettings
     public string? Hotkey { get; init; }
 
     public bool SoundsEnabled { get; init; } = true;
-
-    /// <summary>
-    /// Also leave each finished dictation on the clipboard. Off by default: dictated text on the
-    /// clipboard is dictated text handed to every clipboard manager on the machine.
-    /// </summary>
-    public bool CopiesToClipboard { get; init; }
 
     /// <summary>
     /// The chord that pastes the last take, stored as <see cref="KeyCombination.RawValue"/>;
@@ -107,7 +101,7 @@ public sealed class SettingsStore
     private static readonly JsonNodeOptions NodeOptions = new() { PropertyNameCaseInsensitive = true };
 
     /// <summary>The shape <see cref="Write"/> produces; see <see cref="Migrate"/> for the steps up to it.</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private readonly string path;
 
@@ -196,6 +190,12 @@ public sealed class SettingsStore
             document["detailedLogging"] = true;
             // The "Unload model" picker is gone; the engine keeps one fixed hour for everyone.
             document.Remove("modelUnloadTimeout");
+        }
+
+        if (version < 2)
+        {
+            // 1 -> 2: "Also copy dictations to the clipboard" is gone (upstream 0.33).
+            document.Remove("copiesToClipboard");
         }
 
         document["schemaVersion"] = CurrentSchemaVersion;

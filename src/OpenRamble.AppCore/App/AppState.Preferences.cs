@@ -6,7 +6,6 @@ namespace OpenRamble.AppCore;
 /// <summary>The settings that arrived with upstream 0.12–0.22, and the small rules behind each.</summary>
 public sealed partial class AppState
 {
-    private bool copiesToClipboard;
     private KeyCombination? copyShortcut;
     private readonly KeyCombination? defaultLastTakeShortcut;
 
@@ -24,24 +23,6 @@ public sealed partial class AppState
 
     /// <summary>Tracks the quiet. Reset per take, never shared between them.</summary>
     private SilencePolicy silence;
-
-    /// <summary>
-    /// Also leave the finished text on the clipboard.
-    ///
-    /// Off by default, and deliberately: dictated text on the clipboard is dictated text handed
-    /// to every clipboard manager on the machine, and the product's promise is that what you say
-    /// stays here. Someone who wants it can ask, and then it is written host-only, the same as
-    /// every other copy this app makes.
-    /// </summary>
-    public bool CopiesToClipboard
-    {
-        get { lock (gate) { return copiesToClipboard; } }
-        set
-        {
-            if (!Set(ref copiesToClipboard, value)) { return; }
-            UpdateSettings(current => current with { CopiesToClipboard = value });
-        }
-    }
 
     /// <summary>
     /// The shortcut that pastes the last take into the app in front, or nothing.

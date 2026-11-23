@@ -56,8 +56,6 @@ public sealed partial class SettingsWindow : Window
     private readonly Button copyRevert;
     private readonly CheckBox launchToggle = new();
     private readonly Button launchRevert;
-    private readonly CheckBox clipboardToggle = new();
-    private readonly Button clipboardRevert;
     private readonly CheckBox spaceToggle = new();
     private readonly Button spaceRevert;
     private readonly CheckBox soundsToggle = new();
@@ -115,14 +113,6 @@ public sealed partial class SettingsWindow : Window
             "Starts OpenRamble automatically when you sign in",
             out launchRevert,
             () => state.LaunchAtLogin = SettingsDefaults.LaunchAtLogin));
-
-        clipboardToggle.Click += (_, _) => state.CopiesToClipboard = clipboardToggle.IsChecked == true;
-        BehaviorRows.Children.Add(Row(
-            "Also copy dictations to the clipboard",
-            clipboardToggle,
-            "Leaves each finished dictation on the clipboard of this PC. Off by default - the clipboard is shared with everything else running here.",
-            out clipboardRevert,
-            () => state.CopiesToClipboard = SettingsDefaults.CopiesToClipboard));
 
         spaceToggle.Click += (_, _) => state.AppendsTrailingSpace = spaceToggle.IsChecked == true;
         BehaviorRows.Children.Add(Row(
@@ -278,8 +268,6 @@ public sealed partial class SettingsWindow : Window
 
             launchToggle.IsChecked = state.LaunchAtLogin;
             ShowRevert(launchRevert, state.LaunchAtLogin != SettingsDefaults.LaunchAtLogin);
-            clipboardToggle.IsChecked = state.CopiesToClipboard;
-            ShowRevert(clipboardRevert, state.CopiesToClipboard != SettingsDefaults.CopiesToClipboard);
             spaceToggle.IsChecked = state.AppendsTrailingSpace;
             ShowRevert(spaceRevert, state.AppendsTrailingSpace != SettingsDefaults.AppendsTrailingSpace);
             soundsToggle.IsChecked = state.SoundsEnabled;

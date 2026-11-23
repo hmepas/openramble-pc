@@ -49,6 +49,7 @@ public sealed partial class App : Application
     private PipeWireCapture? capture;
     private AppState? state;
     private SettingsWindow? settings;
+    private LibraryWindow? library;
     private OnboardingWindow? onboarding;
     private DiagnosticLog? diagnostics;
     private PosixSignalRegistration[] signals = [];
@@ -506,6 +507,9 @@ public sealed partial class App : Application
                 }
                 else
                 {
+                    // The Library sits beside Settings, as upstream's "Library…" does. Added here
+                    // rather than as a MenuRow: the Windows shell has no Library yet.
+                    if (row == MenuRow.Settings) { menu.Items.Add(Item("Library…", ShowLibrary)); }
                     menu.Items.Add(Row(row));
                 }
             }
@@ -594,6 +598,7 @@ public sealed partial class App : Application
     {
         if (onboarding is { IsActive: true }) { return onboarding; }
         if (settings is { IsActive: true }) { return settings; }
+        if (library is { IsActive: true }) { return library; }
         return null;
     }
 
@@ -608,6 +613,20 @@ public sealed partial class App : Application
 
         settings.Show();
         settings.Activate();
+    }
+
+    /// <summary>One Library: a second click brings the open one forward.</summary>
+    private void ShowLibrary()
+    {
+        if (state is null) { return; }
+        if (library is null)
+        {
+            library = new LibraryWindow(state);
+            library.Closed += (_, _) => library = null;
+        }
+
+        library.Show();
+        library.Activate();
     }
 
     /// <summary>

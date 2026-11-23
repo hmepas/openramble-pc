@@ -89,14 +89,6 @@
           </Grid>
 
           <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
-            <TextBlock Classes="row" Text="Also copy dictations to the clipboard" />
-            <ToggleSwitch Grid.Column="1" x:Name="ClipboardToggle"
-                          automation:AutomationProperties.Name="Also copy dictations to the clipboard"
-                          automation:AutomationProperties.HelpText="Leaves each finished dictation on the clipboard of this PC. Off by default — the clipboard is shared with everything else running here." />
-            <Button Grid.Column="2" Classes="revert" x:Name="RevertClipboard" Click="OnRevertClipboard" />
-          </Grid>
-
-          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
             <TextBlock Classes="row" Text="Add a space after each dictation" />
             <ToggleSwitch Grid.Column="1" x:Name="TrailingSpaceToggle"
                           automation:AutomationProperties.Name="Add a space after each dictation"
@@ -210,9 +202,9 @@
         <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
           <Separator Margin="0,0,0,10" />
           <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
-            <TextBlock Text="Keep" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBlock Text="History keeps" VerticalAlignment="Center" Margin="0,0,8,0" />
             <ComboBox Grid.Column="1" x:Name="HistoryLimitPicker" Width="120"
-                      automation:AutomationProperties.Name="Keep"
+                      automation:AutomationProperties.Name="History keeps"
                       automation:AutomationProperties.HelpText="How many dictations to keep, with their audio" />
             <Button Grid.Column="3" x:Name="ShowHistoryButton" Content="Show in folder" Padding="12,4"
                     Click="OnRevealHistory"
@@ -224,13 +216,9 @@
                      Text="The last dictations are kept on this PC with the audio that produced them, so you can hear what was actually said when the text is wrong. A starred one stays: it does not count against the limit and is not deleted when newer dictations push past it. Nothing here ever leaves this PC." />
         </StackPanel>
 
-        <TextBlock x:Name="HistoryEmpty" TextAlignment="Center" VerticalAlignment="Center"
-                   TextWrapping="Wrap" Foreground="Gray"
-                   Text="No dictations yet&#10;Finished dictations appear here with their audio." />
-        <ScrollViewer x:Name="HistoryScroller">
-          <StackPanel x:Name="HistoryList"
-                      automation:AutomationProperties.Name="Dictation history" />
-        </ScrollViewer>
+        <!-- The dictations themselves are in the Library (upstream 0.37); this pane keeps the limit. -->
+        <TextBlock Classes="hint" Margin="0,12,0,0"
+                   Text="Your dictations are listed in the Library, with your recordings. Open it from the OpenRamble menu." />
       </DockPanel>
     </TabItem>
 

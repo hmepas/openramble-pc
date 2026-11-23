@@ -732,4 +732,41 @@ public sealed class MeetingCaptureTests : IDisposable
             for (int i = 1; i < segments.Count; i++) { Assert.Equal(segments[i - 1].EndFrame, segments[i].StartFrame); }
         }
     }
+
+    /// <summary>
+    /// Failures are raised with no capture lock held: a handler that stops the recording -
+    /// directly, or by handing the stop to another thread and waiting - does not deadlock.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TestAFailureHandlerCanStopTheCapture(bool fromAnotherThread)
+    {
+        var microphone = new ScriptedAudioSource();
+        var system = new ScriptedAudioSource();
+        MeetingCapture.Summary? stopped = null;
+        MeetingCapture? capture = null;
+        capture = new MeetingCapture(
+            directory,
+            microphone,
+            system,
+            onFailure: _ =>
+            {
+                if (fromAnotherThread)
+                {
+                    var stop = Task.Run(capture!.Stop);
+                    Assert.True(stop.Wait(TimeSpan.FromSeconds(5)), "the stop deadlocked");
+                    Volatile.Write(ref stopped, stop.Result);
+                }
+                else
+                {
+                    Volatile.Write(ref stopped, capture!.Stop());
+                }
+            });
+        capture.Start();
+        microphone.Deliver(Constant(0.5f, 1_600));
+        system.Fail(new MeetingSourceFailure.StartFailed("gone"));
+        await WaitUntil(() => Volatile.Read(ref stopped) is not null, TimeSpan.FromSeconds(10));
+        Assert.Equal(MeetingCapture.CaptureState.Stopped, capture.State);
+    }
 }

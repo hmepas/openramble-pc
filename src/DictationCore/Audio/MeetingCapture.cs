@@ -100,6 +100,12 @@ public sealed class MeetingCapture
     private MeetingEndReason? endReason;
     private bool microphoneRecoveryAttempted;
 
+    /// <summary>
+    /// Failures noticed under <see cref="gate"/>, raised after it is released (like the pipeline's
+    /// segment and level events) so a handler may call <see cref="Stop"/> synchronously.
+    /// </summary>
+    private readonly List<Failure> pendingFailures = [];
+
     /// <param name="directory">Where <c>audio.wav</c> and <c>peaks.bin</c> go; created if needed.</param>
     /// <param name="microphone">The person's side. <c>null</c> only in tests.</param>
     /// <param name="systemAudio">
@@ -186,6 +192,7 @@ public sealed class MeetingCapture
         finally
         {
             pipeline.DeliverPending();
+            DeliverFailures();
         }
     }
 
@@ -260,6 +267,7 @@ public sealed class MeetingCapture
             StartSources();
             state = CaptureState.Recording;
         }
+        DeliverFailures();
     }
 
     /// <summary>
@@ -343,7 +351,7 @@ public sealed class MeetingCapture
                     throw new MeetingCaptureException(new Failure.Microphone(error.Failure));
                 }
                 pipeline.MarkDown(MeetingChannel.Microphone, MeetingGap.GapReason.MicrophoneUnavailable);
-                onFailure(new Failure.Microphone(error.Failure));
+                pendingFailures.Add(new Failure.Microphone(error.Failure));
             }
         }
         if (systemAudio is null) { return; }
@@ -356,7 +364,7 @@ public sealed class MeetingCapture
             // The other side could not be started. The microphone is already recording and stays
             // that way: it costs the person a channel, never the recording, and that is said.
             pipeline.MarkDown(MeetingChannel.System, MeetingGap.GapReason.SystemAudioStalled);
-            onFailure(new Failure.SystemAudio(error.Failure));
+            pendingFailures.Add(new Failure.SystemAudio(error.Failure));
         }
     }
 
@@ -377,10 +385,23 @@ public sealed class MeetingCapture
             MeetingSourceFailure failure = error is MeetingSourceException sourceError
                 ? sourceError.Failure
                 : new MeetingSourceFailure.StartFailed(error.Message);
-            onFailure(channel == MeetingChannel.Microphone
+            pendingFailures.Add(channel == MeetingChannel.Microphone
                 ? new Failure.Microphone(failure)
                 : new Failure.SystemAudio(failure));
         }
+    }
+
+    /// <summary>Raise the queued failures with no capture lock held.</summary>
+    private void DeliverFailures()
+    {
+        Failure[] batch;
+        lock (gate)
+        {
+            if (pendingFailures.Count == 0) { return; }
+            batch = [.. pendingFailures];
+            pendingFailures.Clear();
+        }
+        foreach (Failure failure in batch) { onFailure(failure); }
     }
 
     private void StopSources()
@@ -405,9 +426,16 @@ public sealed class MeetingCapture
             microphone.PrepareForRecovery();
             RestartSource(microphone, MeetingChannel.Microphone);
         }
+        DeliverFailures();
     }
 
     private void SourceFailed(MeetingChannel channel, MeetingSourceFailure failure)
+    {
+        SourceFailedLocked(channel, failure);
+        DeliverFailures();
+    }
+
+    private void SourceFailedLocked(MeetingChannel channel, MeetingSourceFailure failure)
     {
         lock (gate)
         {
@@ -421,7 +449,7 @@ public sealed class MeetingCapture
             IMeetingAudioSource? source = channel == MeetingChannel.Microphone ? microphone : systemAudio;
             if (!moved)
             {
-                onFailure(channel == MeetingChannel.Microphone
+                pendingFailures.Add(channel == MeetingChannel.Microphone
                     ? new Failure.Microphone(failure)
                     : new Failure.SystemAudio(failure));
                 return;
@@ -437,6 +465,12 @@ public sealed class MeetingCapture
 
     private void PipelineFailed(MeetingPipeline.Failure failure)
     {
+        PipelineFailedLocked(failure);
+        DeliverFailures();
+    }
+
+    private void PipelineFailedLocked(MeetingPipeline.Failure failure)
+    {
         lock (gate)
         {
             if (state != CaptureState.Recording) { return; }
@@ -444,11 +478,11 @@ public sealed class MeetingCapture
             {
                 case MeetingPipeline.Failure.DiskFull:
                     endReason = MeetingEndReason.DiskFull;
-                    onFailure(new Failure.DiskFull());
+                    pendingFailures.Add(new Failure.DiskFull());
                     break;
                 case MeetingPipeline.Failure.Write write:
                     endReason = MeetingEndReason.WriteFailed;
-                    onFailure(new Failure.WriteFailed(write.Detail));
+                    pendingFailures.Add(new Failure.WriteFailed(write.Detail));
                     break;
             }
         }

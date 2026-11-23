@@ -47,6 +47,7 @@ public sealed partial class App : Application
     private EvdevShortcutMonitor? recordingShortcut;
     private ControlSocketServer? control;
     private OverlayWindow? overlay;
+    private RecordingHudWindow? recordingHud;
     private PipeWireCapture? capture;
     private AppState? state;
     private SettingsWindow? settings;
@@ -284,6 +285,10 @@ public sealed partial class App : Application
             () => state?.DictationStateValue.ToString() ?? "starting",
             openLibrary: () => Dispatcher.UIThread.Post(ShowLibrary));
         control.Start();
+
+        // The pill that says a recording is running; it shows and hides itself with the state.
+        WorkArea.Refresh();
+        recordingHud = new RecordingHudWindow(built, () => Dispatcher.UIThread.Post(ShowLibrary));
 
         RefreshTray();
 
@@ -720,7 +725,7 @@ public sealed partial class App : Application
         if (lifetime is null) { return; }
         foreach (Window open in lifetime.Windows)
         {
-            if (open is OverlayWindow) { continue; }
+            if (open is OverlayWindow or RecordingHudWindow) { continue; }
             open.Activate();
         }
 

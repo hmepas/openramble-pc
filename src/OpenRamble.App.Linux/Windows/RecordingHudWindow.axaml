@@ -1,0 +1,34 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+        x:Class="OpenRamble.App.Linux.RecordingHudWindow"
+        Title="OpenRamble recording"
+        SystemDecorations="None"
+        CanResize="False"
+        Background="Transparent"
+        TransparencyLevelHint="Transparent"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        SizeToContent="WidthAndHeight"
+        Focusable="False"
+        Cursor="Hand"
+        automation:AutomationProperties.Name="OpenRamble recording indicator">
+  <Border x:Name="Pill"
+          CornerRadius="16"
+          Padding="12,6"
+          Background="#E61C1C1E"
+          BorderBrush="#33FFFFFF"
+          BorderThickness="1"
+          ToolTip.Tip="Open the Library">
+    <StackPanel Orientation="Horizontal" Spacing="8">
+      <Ellipse x:Name="Dot" Width="10" Height="10" VerticalAlignment="Center" />
+      <TextBlock x:Name="TitleText" FontSize="13" Foreground="#FFF5F5F7" VerticalAlignment="Center" />
+      <TextBlock x:Name="TimeText"
+                 FontSize="13"
+                 FontFeatures="tnum"
+                 Foreground="#B3F5F5F7"
+                 VerticalAlignment="Center" />
+    </StackPanel>
+  </Border>
+</Window>

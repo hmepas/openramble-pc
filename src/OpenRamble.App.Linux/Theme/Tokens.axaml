@@ -77,10 +77,12 @@
   <SolidColorBrush x:Key="NeutralTint" Color="#1F8B8D98" />
 
   <!-- Type. Sans is the app's voice; the serif is the person's words. -->
-  <FontFamily x:Key="SansFont">Inter, Inter Nerd Font Propo, Adwaita Sans, Cantarell, Noto Sans, Open Sans, Liberation Sans, sans-serif</FontFamily>
+  <!-- No Nerd-patched Inter here: its tabular colon is replaced by a glyph, so every clock
+       drew a globe between minutes and seconds. Adwaita Sans is Inter-based and clean. -->
+  <FontFamily x:Key="SansFont">Inter, Adwaita Sans, Cantarell, Noto Sans, Open Sans, Liberation Sans, sans-serif</FontFamily>
   <FontFamily x:Key="SerifFont">avares://OpenRamble.App.Linux/Assets/Fonts#Source Serif 4, Noto Serif, Liberation Serif, FreeSerif, DejaVu Serif, serif</FontFamily>
   <!-- Fluent's windows and text take their family from this key: the whole app speaks in SansFont. -->
-  <FontFamily x:Key="ContentControlThemeFontFamily">Inter, Inter Nerd Font Propo, Adwaita Sans, Cantarell, Noto Sans, Open Sans, Liberation Sans, sans-serif</FontFamily>
+  <FontFamily x:Key="ContentControlThemeFontFamily">Inter, Adwaita Sans, Cantarell, Noto Sans, Open Sans, Liberation Sans, sans-serif</FontFamily>
 
   <!-- Radius. A capsule is height/2; Skia clamps an oversized radius to exactly that. -->
   <CornerRadius x:Key="RadiusSurface">24</CornerRadius>

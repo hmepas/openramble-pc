@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using DictationCore;
+using DictationCore.Audio;
 
 namespace OpenRamble.AppCore.Tests;
 
@@ -44,35 +45,26 @@ public sealed class MeetingStoreTests : IDisposable
             endReason: MeetingEndReason.StoppedByUser);
 
     /// <summary>
-    /// A recording as the capture leaves it: audio and peaks in the incomplete directory, header
-    /// sealed or not. Upstream drives MeetingWriter here; until that port lands (wave 4a task B)
-    /// the fixture writes the same stereo 16-bit layout by hand.
+    /// A recording as the capture leaves it: audio and peaks in the incomplete directory, sealed
+    /// by a normal finish or abandoned with the header still claiming nothing, as a crash leaves it.
     /// </summary>
     private void WriteAudio(Guid id, int frames, bool sealed_)
     {
+        MeetingWriter writer = OpenWriter(id, frames);
+        if (sealed_) { writer.Finish(); }
+        else { writer.Abandon(); }
+    }
+
+    /// <summary>A writer mid-recording: <paramref name="frames"/> appended, still open.</summary>
+    private MeetingWriter OpenWriter(Guid id, int frames)
+    {
         string directory = store.IncompleteDirectory(id);
         Directory.CreateDirectory(directory);
-        int dataBytes = frames * 4;
-        byte[] file = new byte[44 + dataBytes];
-        "RIFF"u8.CopyTo(file.AsSpan(0));
-        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(4), sealed_ ? (uint)(36 + dataBytes) : 0);
-        "WAVEfmt "u8.CopyTo(file.AsSpan(8));
-        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(16), 16);
-        BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(20), 1);
-        BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(22), 2);
-        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(24), 16_000);
-        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(28), 16_000 * 4);
-        BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(32), 4);
-        BinaryPrimitives.WriteUInt16LittleEndian(file.AsSpan(34), 16);
-        "data"u8.CopyTo(file.AsSpan(36));
-        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(40), sealed_ ? (uint)dataBytes : 0);
-        for (int frame = 0; frame < frames; frame++)
-        {
-            BinaryPrimitives.WriteInt16LittleEndian(file.AsSpan(44 + (frame * 4)), 16_384);
-        }
-
-        File.WriteAllBytes(Path.Combine(directory, MeetingStore.AudioFileName), file);
-        File.WriteAllBytes(Path.Combine(directory, MeetingStore.PeaksFileName), new byte[16]);
+        var writer = new MeetingWriter(directory);
+        writer.Open();
+        float[] half = Enumerable.Repeat(0.5f, frames).ToArray();
+        writer.Append(half, new float[frames]);
+        return writer;
     }
 
     private static uint DeclaredDataBytes(string wav)
@@ -246,14 +238,20 @@ public sealed class MeetingStoreTests : IDisposable
         MeetingRecordingMetadata recording = Metadata();
         store.Write(recording, incomplete: true);
         string directory = store.IncompleteDirectory(recording.Id);
-        WriteAudio(recording.Id, frames: 1_600, sealed_: false);
-        // Still open: the lease is held, as it would be by a live sibling. SEAM(wave4a-B): upstream
-        // keeps a MeetingWriter open here; the port's writer must hold audio.wav with FileShare.None.
-        using (new FileStream(Path.Combine(directory, MeetingStore.AudioFileName), FileMode.Open, FileAccess.Write, FileShare.None))
+        // A live writer, as a sibling instance would hold it mid-recording.
+        MeetingWriter writer = OpenWriter(recording.Id, frames: 1_600);
+        try
         {
             Assert.Empty(store.RecoverIncomplete());
             Assert.True(Directory.Exists(directory));
         }
+        finally
+        {
+            writer.Abandon();
+        }
+
+        // Once the writer is gone, the same directory is recovered.
+        Assert.Equal([recording.Id], store.RecoverIncomplete().Select(m => m.Id));
     }
 
     [Fact]

@@ -60,13 +60,13 @@ public sealed class MeetingUtteranceAssembler
         {
             open = merging with
             {
-                End = merging.End > segment.End ? merging.End : segment.End,
+                End = Math.Max(merging.End, segment.End.TotalSeconds),
                 Text = merging.Text.Length == 0 ? text : merging.Text + " " + text,
             };
         }
         else
         {
-            open = new MeetingUtterance(segment.Channel, segment.Start, segment.End, segment.IsFailed ? "" : text, segment.IsFailed);
+            open = new MeetingUtterance(segment.Channel, segment.Start.TotalSeconds, segment.End.TotalSeconds, segment.IsFailed ? "" : text, segment.IsFailed);
             // A failure is its own paragraph, closed at once: nothing merges
             // into a hole in the transcript.
             if (segment.IsFailed)
@@ -93,8 +93,8 @@ public sealed class MeetingUtteranceAssembler
     {
         if (current.IsFailed || segment.IsFailed) { return true; }
         if (segment.Channel != current.Channel) { return true; }
-        if (segment.Start - current.End > Params.Gap) { return true; }
-        TimeSpan duration = current.End - current.Start;
+        if (segment.Start - TimeSpan.FromSeconds(current.End) > Params.Gap) { return true; }
+        TimeSpan duration = TimeSpan.FromSeconds(current.End - current.Start);
         if (duration >= Params.HardDuration) { return true; }
         if (duration >= Params.SoftDuration && EndsSentence(current.Text)) { return true; }
         return false;

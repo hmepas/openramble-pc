@@ -94,6 +94,13 @@ public sealed record RecordingsPlaceholder(string Symbol, string Title, string D
         _ => throw new ArgumentOutOfRangeException(nameof(reason)),
     };
 
+    /// <summary>The line a recording carries forever when a requested side never arrived.</summary>
+    public static string? DegradedNote(MeetingRecordingMetadata recording) =>
+        DegradedNote(
+            recording.MicrophoneEverDeliveredAudio,
+            recording.SystemAudio.WasRequested,
+            recording.SystemAudio.EverDeliveredAudio);
+
     /// <summary>
     /// The line a recording carries forever when a requested side never arrived.
     /// <paramref name="microphoneEverDeliveredAudio"/> is <c>null</c> for files older than the field.

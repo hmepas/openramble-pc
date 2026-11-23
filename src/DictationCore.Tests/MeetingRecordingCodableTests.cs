@@ -136,13 +136,27 @@ public sealed class MeetingRecordingCodableTests
         Assert.Empty(decoded.DecodedFrames);
     }
 
+    /// <summary>Not upstream: a transcript.json as the macOS app writes it reads back here.</summary>
+    [Fact]
+    public void AnUpstreamTranscriptFileReadsItsResumptionPoint()
+    {
+        MeetingTranscript decoded = Decode<MeetingTranscript>(
+            """{"schemaVersion":1,"utterances":[],"decodedFrames":["microphone",67200,"system",96000]}""");
+        Assert.Equal(67_200, decoded.DecodedFrames[MeetingChannel.Microphone]);
+        Assert.Equal(96_000, decoded.DecodedFrames[MeetingChannel.System]);
+    }
+
     /// <summary>Not upstream: pins the on-disk spelling the spec names (channel keys, enum values).</summary>
     [Fact]
     public void ChannelsAndStatesAreSpelledAsUpstreamWritesThem()
     {
         var transcript = new MeetingTranscript(decodedFrames: new Dictionary<MeetingChannel, int> { [MeetingChannel.System] = 1 });
         string text = Encoding.UTF8.GetString(MeetingRecordingCoding.Encode(transcript));
-        Assert.Contains("\"system\": 1", text, StringComparison.Ordinal);
+        using (JsonDocument document = JsonDocument.Parse(text))
+        {
+            // Swift encodes [MeetingChannel: Int] as a flat key/value array.
+            Assert.Equal("[\"system\",1]", document.RootElement.GetProperty("decodedFrames").GetRawText().Replace(" ", "").Replace("\n", ""));
+        }
 
         MeetingRecordingMetadata waiting = Sample();
         waiting.TranscriptionState = MeetingTranscriptionState.WaitingForModel;

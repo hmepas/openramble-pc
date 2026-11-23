@@ -357,6 +357,11 @@ public sealed record MeetingTranscript
 
     public List<MeetingUtterance> Utterances { get; set; } = [];
 
+    /// <summary>
+    /// On disk as upstream's Swift <c>Codable</c> writes a dictionary keyed by an enum that is not
+    /// <c>CodingKeyRepresentable</c>: a flat array <c>["microphone", 67200, "system", 96000]</c>.
+    /// </summary>
+    [JsonConverter(typeof(DecodedFramesConverter))]
     public Dictionary<MeetingChannel, int> DecodedFrames { get; set; } = [];
 
     public bool Equals(MeetingTranscript? other) =>
@@ -430,4 +435,35 @@ internal sealed class RecordingImportLanguageConverter : JsonConverter<Recording
 
     public override void Write(Utf8JsonWriter writer, RecordingImportLanguage value, JsonSerializerOptions options) =>
         writer.WriteStringValue(value == RecordingImportLanguage.Hebrew ? "hebrew" : "automatic");
+}
+
+/// <summary>A per-channel frame count as a flat <c>[key, value, ...]</c> array, as Swift encodes it.</summary>
+internal sealed class DecodedFramesConverter : JsonConverter<Dictionary<MeetingChannel, int>>
+{
+    public override Dictionary<MeetingChannel, int> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.StartArray) { throw new JsonException("decodedFrames is not an array"); }
+
+        var frames = new Dictionary<MeetingChannel, int>();
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            MeetingChannel channel = JsonSerializer.Deserialize<MeetingChannel>(ref reader, options);
+            if (!reader.Read() || reader.TokenType != JsonTokenType.Number) { throw new JsonException("decodedFrames has a key without a value"); }
+            frames[channel] = reader.GetInt32();
+        }
+
+        return frames;
+    }
+
+    public override void Write(Utf8JsonWriter writer, Dictionary<MeetingChannel, int> value, JsonSerializerOptions options)
+    {
+        writer.WriteStartArray();
+        foreach ((MeetingChannel channel, int frames) in value.OrderBy(pair => pair.Key))
+        {
+            JsonSerializer.Serialize(writer, channel, options);
+            writer.WriteNumberValue(frames);
+        }
+
+        writer.WriteEndArray();
+    }
 }

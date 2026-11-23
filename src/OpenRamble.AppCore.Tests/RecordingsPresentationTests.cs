@@ -37,11 +37,10 @@ public class RecordingsPresentationTests
     [Fact]
     public void ChannelHeadingsGroupWithoutMergingOrLosingParagraphs()
     {
-        static TimeSpan S(double seconds) => TimeSpan.FromSeconds(seconds);
-        var first = new MeetingUtterance(MeetingChannel.System, S(0), S(2), "First");
-        var second = new MeetingUtterance(MeetingChannel.System, S(2), S(4), "Second");
-        var you = new MeetingUtterance(MeetingChannel.Microphone, S(4), S(5), "Yes");
-        var failed = new MeetingUtterance(MeetingChannel.System, S(5), S(6), "", isFailed: true);
+        var first = new MeetingUtterance(MeetingChannel.System, 0, 2, "First");
+        var second = new MeetingUtterance(MeetingChannel.System, 2, 4, "Second");
+        var you = new MeetingUtterance(MeetingChannel.Microphone, 4, 5, "Yes");
+        var failed = new MeetingUtterance(MeetingChannel.System, 5, 6, "", isFailed: true);
         var sections = TranscriptSection.Make([failed, second, you, first]);
         Assert.Equal(3, sections.Count);
         Assert.Equal([first, second], sections[0].Utterances);

@@ -1,7 +1,7 @@
-using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text.Json;
 using DictationCore;
+using DictationCore.Audio;
 
 namespace OpenRamble.AppCore;
 
@@ -99,11 +99,8 @@ public sealed class MeetingStore
     public const string VideoFileName = "video.mp4";
     public const string CompressedAudioFileName = "audio.m4a";
 
-    // SEAM(wave4a-B): upstream reads these three from MeetingWriter (audioFileName, peaksFileName,
-    // sampleRate). Point them there once MeetingWriter lands.
-    public const string AudioFileName = "audio.wav";
-    public const string PeaksFileName = "peaks.bin";
-    private const int SampleRate = 16_000;
+    public const string AudioFileName = MeetingWriter.AudioFileName;
+    public const string PeaksFileName = MeetingWriter.PeaksFileName;
 
     private readonly string root;
     private readonly IRecordingTrasher trasher;
@@ -300,12 +297,12 @@ public sealed class MeetingStore
 
             if (IsActivelyHeld(audio)) { continue; }
 
-            int frames;
+            long frames;
             try
             {
-                frames = RepairHeader(audio);
+                frames = MeetingWriter.RepairHeader(audio);
             }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            catch (MeetingWriter.Failure)
             {
                 continue;
             }
@@ -326,7 +323,7 @@ public sealed class MeetingStore
                     id: id,
                     startedAt: CreationTime(audio) ?? now ?? DateTimeOffset.Now,
                     systemAudio: new SystemAudioSummary(wasRequested: false));
-            metadata.Duration = (double)frames / SampleRate;
+            metadata.Duration = (double)frames / MeetingWriter.SampleRate;
             metadata.EndReason = MeetingEndReason.CrashRecovered;
             if (metadata.TranscriptionState == MeetingTranscriptionState.Live)
             {
@@ -369,8 +366,8 @@ public sealed class MeetingStore
     /// proved is the worse mistake.
     /// </summary>
     /// <remarks>
-    /// SEAM(wave4a-B): the writer must keep <c>audio.wav</c> open with <see cref="FileShare.None"/>
-    /// for the whole recording, or a live recording is not seen here.
+    /// <see cref="MeetingWriter"/> holds <c>audio.wav</c> open for writing (sharing reads only) for
+    /// the whole recording, so this probe fails against a live recording on both platforms.
     /// </remarks>
     private static bool IsActivelyHeld(string path)
     {
@@ -387,41 +384,5 @@ public sealed class MeetingStore
         {
             return true;
         }
-    }
-
-    private const int HeaderBytes = 44;
-    private const int BytesPerFrame = 4;
-
-    /// <summary>
-    /// Rewrite the RIFF and data sizes from the file's actual length; returns the frame count the
-    /// file now declares.
-    /// </summary>
-    /// <remarks>
-    /// SEAM(wave4a-B): a local copy of upstream <c>MeetingWriter.repairHeader(at:)</c> (stereo
-    /// 16-bit, 44-byte header). Replace with <c>MeetingWriter.RepairHeader</c> once it lands.
-    /// </remarks>
-    /// <exception cref="IOException">The file is not a WAV this app wrote, or cannot be updated.</exception>
-    internal static int RepairHeader(string path)
-    {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        Span<byte> head = stackalloc byte[HeaderBytes];
-        if (stream.ReadAtLeast(head, HeaderBytes, throwOnEndOfStream: false) != HeaderBytes
-            || !head[0..4].SequenceEqual("RIFF"u8)
-            || !head[8..12].SequenceEqual("WAVE"u8)
-            || !head[36..40].SequenceEqual("data"u8))
-        {
-            throw new IOException("not a WAV this app wrote");
-        }
-
-        long dataBytes = Math.Max(0, stream.Length - HeaderBytes) / BytesPerFrame * BytesPerFrame;
-        Span<byte> size = stackalloc byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(size, (uint)(36 + dataBytes));
-        stream.Position = 4;
-        stream.Write(size);
-        BinaryPrimitives.WriteUInt32LittleEndian(size, (uint)dataBytes);
-        stream.Position = 40;
-        stream.Write(size);
-        stream.Flush(flushToDisk: true);
-        return (int)(dataBytes / BytesPerFrame);
     }
 }

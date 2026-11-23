@@ -25,8 +25,8 @@ public class MeetingUtteranceAssemblerTests
         var closed = assembler.Flush();
         Assert.Single(closed);
         Assert.Equal("Right, can everyone hear me?", closed[0].Text);
-        Assert.Equal(TimeSpan.Zero, closed[0].Start);
-        Assert.Equal(TimeSpan.FromSeconds(6), closed[0].End);
+        Assert.Equal(0, closed[0].Start);
+        Assert.Equal(6, closed[0].End);
         Assert.Equal(MeetingChannel.Microphone, closed[0].Channel);
     }
 
@@ -82,7 +82,7 @@ public class MeetingUtteranceAssemblerTests
         Assert.Equal(2, closed.Count);
         Assert.Equal("Before.", closed[0].Text);
         Assert.True(closed[1].IsFailed);
-        Assert.Equal(TimeSpan.FromSeconds(4), closed[1].Start);
+        Assert.Equal(4, closed[1].Start);
         // The next one opens fresh.
         Assert.Empty(assembler.Append(Segment(MeetingChannel.Microphone, 8, 10, "After.")));
         Assert.Equal(["After."], assembler.Flush().Select(u => u.Text));

@@ -38,9 +38,23 @@ public sealed partial class AppState
     /// <summary>The chord as the menu and Settings print it, or <c>null</c> when there is none.</summary>
     public string? RecordingShortcutDisplay => RecordingShortcut?.DisplayString(shortcutKeymap);
 
+    /// <summary>What a shortcut press has asked for and is not done yet. Under <c>gate</c>.</summary>
+    private enum RecordingToggleIntent
+    {
+        None,
+        Start,
+        Stop,
+    }
+
+    private RecordingToggleIntent pendingToggle;
+
+    /// <summary>The presses' starts and stops, run one after the other in press order.</summary>
+    private Task toggleChain = Task.CompletedTask;
+
     /// <summary>
-    /// The shortcut's press: idle starts a recording of both sides, a running or paused one stops.
-    /// Starting and stopping are already under way, so a press then is dropped.
+    /// The shortcut's press, decided against what the last press is already doing: idle starts a
+    /// recording of both sides; a running, paused or still starting one stops (once started); a
+    /// press while a stop is under way is dropped - it would start a recording nobody expects.
     /// </summary>
     /// <remarks>
     /// Off the caller's thread: the monitor calls on the keyboard reader, and starting a recording
@@ -48,20 +62,34 @@ public sealed partial class AppState
     /// </remarks>
     public void ToggleRecording()
     {
-        switch (RecordingState)
+        lock (gate)
         {
-            case MeetingRecordingState.Idle:
-                _ = Task.Run(() => StartRecording(includeSystemAudio: true));
-                break;
-            case MeetingRecordingState.Recording:
-            case MeetingRecordingState.Paused:
-                _ = Task.Run(() => StopRecording());
-                break;
-            case MeetingRecordingState.Starting:
-            case MeetingRecordingState.Stopping:
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(RecordingState));
+            bool stopping = pendingToggle == RecordingToggleIntent.Stop || recordingState == MeetingRecordingState.Stopping;
+            if (stopping) { return; }
+            RecordingToggleIntent intent = pendingToggle == RecordingToggleIntent.None && recordingState == MeetingRecordingState.Idle
+                ? RecordingToggleIntent.Start
+                : RecordingToggleIntent.Stop;
+            pendingToggle = intent;
+            Task previous = toggleChain;
+            toggleChain = Task.Run(() => RunToggle(intent, previous));
+        }
+    }
+
+    private async Task RunToggle(RecordingToggleIntent intent, Task previous)
+    {
+        await previous.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        try
+        {
+            await (intent == RecordingToggleIntent.Start
+                ? StartRecording(includeSystemAudio: true)
+                : StopRecording()).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (gate)
+            {
+                if (pendingToggle == intent) { pendingToggle = RecordingToggleIntent.None; }
+            }
         }
     }
 

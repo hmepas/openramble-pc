@@ -1147,6 +1147,9 @@ public sealed class FakeMeetingCapture : IMeetingCapturing
 
     public MeetingEndReason EndReason { get; set; } = MeetingEndReason.StoppedByUser;
 
+    /// <summary>Reset it to hold <see cref="Start"/> - the recorder still starting - until set.</summary>
+    public ManualResetEventSlim StartGate { get; } = new(initialState: true);
+
     public int StartCount { get { lock (gate) { return startCount; } } }
 
     public int StopCount { get { lock (gate) { return stopCount; } } }
@@ -1201,6 +1204,7 @@ public sealed class FakeMeetingCapture : IMeetingCapturing
 
     public void Start()
     {
+        StartGate.Wait(TimeSpan.FromSeconds(10));
         lock (gate)
         {
             if (StartError is { } error) { throw new MeetingCaptureException(error); }

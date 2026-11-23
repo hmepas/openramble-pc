@@ -63,19 +63,26 @@ public sealed partial class AppState
     private long liveRecordingStartedAt;
     private Timer? liveTimer;
 
-    private MeetingTranscriptionQueue? transcriptionQueue;
+    /// <summary>
+    /// The transcripts being written, oldest first: the live recording's, and those of recordings
+    /// already stopped whose backlog is still draining. Under <see cref="meetingGate"/>.
+    /// </summary>
+    private readonly List<TranscriptionJob> transcriptionJobs = [];
     private Guid? transcribingRecordingId;
-    private MeetingUtteranceAssembler utteranceAssembler = new();
-    private List<MeetingUtterance> closedUtterances = [];
     private double transcriptBacklogSeconds;
     private bool isTranscriptionPaused;
-    private bool transcriptWriteFailureReported;
+
+    /// <summary>
+    /// Recordings, from their start until their transcript is done, that need the engine: one
+    /// hold each, released exactly once.
+    /// </summary>
+    private int recordingEngineHolds;
 
     /// <summary>
     /// A recording or its transcript needs the engine: the idle unload waits. Read under
     /// <c>gate</c> by the countdown, like the importer's activity.
     /// </summary>
-    private volatile bool recordingHoldsEngine;
+    private bool recordingHoldsEngine => Volatile.Read(ref recordingEngineHolds) > 0;
 
     /// <summary>Whether this build can record at all.</summary>
     public bool CanRecord => makeMeetingCapture is not null && meetingStore is not null;
@@ -138,25 +145,28 @@ public sealed partial class AppState
         private set => Set(ref liveMicrophoneHealth, value);
     }
 
-    /// <summary>Which recording's transcript is being written live (during and just after it).</summary>
+    /// <summary>
+    /// Which recording's transcript is being written live (during and just after it): the oldest
+    /// one still being written, when a stopped recording's backlog drains while the next records.
+    /// </summary>
     public Guid? TranscribingRecordingId
     {
         get { lock (gate) { return transcribingRecordingId; } }
-        private set => Set(ref transcribingRecordingId, value);
     }
 
-    /// <summary>Seconds of speech waiting for the engine, measured from what went in and came back.</summary>
+    /// <summary>
+    /// Seconds of speech waiting for the engine, measured from what went in and came back - over
+    /// every transcript being written, since they wait for the same engine.
+    /// </summary>
     public double TranscriptBacklogSeconds
     {
         get { lock (gate) { return transcriptBacklogSeconds; } }
-        private set => Set(ref transcriptBacklogSeconds, value);
     }
 
-    /// <summary>The queue stopped itself after repeated failures. The audio is safe.</summary>
+    /// <summary>A queue stopped itself after repeated failures. The audio is safe.</summary>
     public bool IsTranscriptionPaused
     {
         get { lock (gate) { return isTranscriptionPaused; } }
-        private set => Set(ref isTranscriptionPaused, value);
     }
 
     private void SetUpRecording(AppEnvironment environment)
@@ -199,7 +209,7 @@ public sealed partial class AppState
             }
 
             // Before any synchronous setup: the countdown must not unload the engine under it.
-            recordingHoldsEngine = true;
+            Interlocked.Increment(ref recordingEngineHolds);
             CancelIdleUnload();
             MeetingRecordingMetadata metadata = MeetingRecordingMetadata.Create(
                 now(),
@@ -212,21 +222,23 @@ public sealed partial class AppState
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
-                recordingHoldsEngine = false;
-                RescheduleIdleUnload();
+                ReleaseRecordingEngineHold();
                 Notify(new DictationNotice(DictationNoticeKind.Failure, $"Couldn't start recording: {error.Message}"));
                 return;
             }
 
-            IMeetingCapturing capture = make(
+            // Off the caller's thread, which may be the UI's: resolving the microphone may start
+            // a process.
+            string? deviceUid = InputDeviceUid;
+            IMeetingCapturing capture = await Task.Run(() => make(
                 directory,
-                InputDeviceUid,
+                deviceUid,
                 system,
                 levels => LiveLevels = levels,
-                SegmentReady,
+                segment => SegmentReady(metadata.Id, segment),
                 // Off the reporting thread: a failure may stop the recording, which waits for
                 // the lifecycle this start may still hold.
-                failure => _ = Task.Run(() => RecordingFailed(failure)));
+                failure => _ = Task.Run(() => RecordingFailed(failure)))).ConfigureAwait(false);
             lock (gate)
             {
                 meetingCapture = capture;
@@ -250,7 +262,7 @@ public sealed partial class AppState
                 RecordingState = MeetingRecordingState.Idle;
                 LiveCaptureHealth = new CaptureHealth.NotRequested();
                 LiveMicrophoneHealth = new MicrophoneHealth.Idle();
-                AbandonTranscription();
+                AbandonTranscription(metadata.Id);
                 // Nothing was recorded: the directory prepared for it is not a recording anyone
                 // wants back.
                 try { Directory.Delete(directory, recursive: true); }
@@ -303,7 +315,7 @@ public sealed partial class AppState
             StopLiveTimer();
             MeetingRecordingMetadata metadata = live with { };
             bool hasQueue;
-            lock (meetingGate) { hasQueue = transcriptionQueue is not null; }
+            lock (meetingGate) { hasQueue = JobLocked(live.Id) is not null; }
             metadata.TranscriptionState = !hasQueue
                 ? MeetingTranscriptionState.None
                 : IsEngineReady && ModelStateValue.IsReady
@@ -336,6 +348,8 @@ public sealed partial class AppState
                 {
                     store.Write(metadata, incomplete: true);
                     store.Publish(metadata.Id);
+                    // Its transcript follows it into the list, and is guarded there like the rest.
+                    if (JobLocked(metadata.Id) is { } job) { job.IsPublished = true; }
                 }
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
@@ -599,14 +613,72 @@ public sealed partial class AppState
 
     // MARK: - Live transcript
 
+    /// <summary>
+    /// One recording's transcript, from its start until its backlog has drained. Each recording
+    /// has its own, so a new recording never takes the place of one still catching up; they
+    /// share the engine through the turn they wait for. Fields under <see cref="meetingGate"/>.
+    /// </summary>
+    private sealed class TranscriptionJob(Guid id)
+    {
+        public Guid Id { get; } = id;
+
+        public MeetingTranscriptionQueue Queue { get; set; } = null!;
+
+        public MeetingUtteranceAssembler Assembler { get; } = new();
+
+        public List<MeetingUtterance> Closed { get; } = [];
+
+        /// <summary>The recording went to the Trash: nothing more is read, decoded or written.</summary>
+        public CancellationTokenSource Cancellation { get; } = new();
+
+        /// <summary>Filed into the list: its transcript is written there, not under .incomplete.</summary>
+        public bool IsPublished { get; set; }
+
+        public double BacklogSeconds { get; set; }
+
+        public bool WriteFailureReported { get; set; }
+    }
+
+    /// <summary>Caller holds <see cref="meetingGate"/>.</summary>
+    private TranscriptionJob? JobLocked(Guid id) => transcriptionJobs.Find(job => job.Id == id);
+
     /// <summary>Take the held segments up again after failures paused the queue.</summary>
     public void ResumeTranscription()
     {
-        MeetingTranscriptionQueue? queue;
-        lock (meetingGate) { queue = transcriptionQueue; }
-        if (queue is null) { return; }
-        IsTranscriptionPaused = false;
-        queue.Resume();
+        List<MeetingTranscriptionQueue> queues;
+        lock (meetingGate) { queues = [.. transcriptionJobs.Select(job => job.Queue)]; }
+        foreach (MeetingTranscriptionQueue queue in queues) { queue.Resume(); }
+        PublishTranscriptionSummary();
+    }
+
+    /// <summary>
+    /// Bring the transcript properties in line with the jobs: computed and written in one step,
+    /// so two threads can never leave an older answer behind.
+    /// </summary>
+    private void PublishTranscriptionSummary()
+    {
+        lock (meetingGate)
+        {
+            Guid? oldest = transcriptionJobs.Count > 0 ? transcriptionJobs[0].Id : null;
+            double backlog = transcriptionJobs.Sum(job => job.BacklogSeconds);
+            bool paused = transcriptionJobs.Any(job => job.Queue.IsPaused);
+            lock (gate)
+            {
+                transcribingRecordingId = oldest;
+                transcriptBacklogSeconds = backlog;
+                isTranscriptionPaused = paused;
+            }
+        }
+
+        Raise(nameof(TranscribingRecordingId));
+        Raise(nameof(TranscriptBacklogSeconds));
+        Raise(nameof(IsTranscriptionPaused));
+    }
+
+    private void ReleaseRecordingEngineHold()
+    {
+        Interlocked.Decrement(ref recordingEngineHolds);
+        RescheduleIdleUnload();
     }
 
     private void BeginTranscription(Guid id, string directory)
@@ -617,122 +689,136 @@ public sealed partial class AppState
         // in a meeting it is something a person said about their own words.
         ITextProcessing pipeline = MakeRecordingPipeline();
         DictationPriority? priority = dictationPriority;
-        var queue = new MeetingTranscriptionQueue(
+        var job = new TranscriptionJob(id);
+        CancellationToken cancelled = job.Cancellation.Token;
+        job.Queue = new MeetingTranscriptionQueue(
             read: segment =>
             {
                 // The file moves out of .incomplete/ when the recording ends: resolve where it is
-                // now, every time, and not while it is moving.
+                // now, every time, and not while it is moving. A trashed one is not read: the
+                // segment fails, and its outcome lands nowhere.
                 lock (meetingGate)
                 {
+                    cancelled.ThrowIfCancellationRequested();
                     return new MeetingPcmWindowReader(store.RawAudioPath(id) ?? incompleteAudio).Read(segment);
                 }
             },
             decode: async (samples, token) =>
                 pipeline.Run(await recognizer.Transcribe(samples, token).ConfigureAwait(false)).Output.Text,
             // Dictation always wins the engine; a decode also waits for a model to decode with.
-            awaitTurn: async token =>
+            awaitTurn: async _ =>
             {
-                if (priority is not null) { await priority.WaitForTurn(token).ConfigureAwait(false); }
-                while (!(IsEngineReady && ModelStateValue.IsReady))
+                try
                 {
-                    await Task.Delay(250, token).ConfigureAwait(false);
+                    if (priority is not null) { await priority.WaitForTurn(cancelled).ConfigureAwait(false); }
+                    while (!(IsEngineReady && ModelStateValue.IsReady))
+                    {
+                        await Task.Delay(250, cancelled).ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException) when (cancelled.IsCancellationRequested)
+                {
+                    // Trashed: on to the read, which refuses.
                 }
             },
             emit: (segment, outcome) =>
             {
-                SegmentDecoded(id, segment, outcome);
+                SegmentDecoded(job, segment, outcome);
                 return Task.CompletedTask;
             });
-        lock (meetingGate)
-        {
-            closedUtterances = [];
-            utteranceAssembler = new MeetingUtteranceAssembler();
-            transcriptWriteFailureReported = false;
-            transcriptionQueue = queue;
-        }
-
+        lock (meetingGate) { transcriptionJobs.Add(job); }
         lock (gate) { loadedTranscripts[id] = []; }
-        TranscriptBacklogSeconds = 0;
-        IsTranscriptionPaused = false;
-        TranscribingRecordingId = id;
+        PublishTranscriptionSummary();
         // The engine is wanted now and stays until this is done.
         RewarmEngineIfCold(RewarmTrigger.Import);
     }
 
-    private void AbandonTranscription()
+    /// <summary>The recording never started: its transcript and its hold on the engine go.</summary>
+    private void AbandonTranscription(Guid id)
     {
-        Guid? id;
+        CancelTranscription(id);
+        lock (gate) { loadedTranscripts.Remove(id); }
+        ReleaseRecordingEngineHold();
+    }
+
+    /// <summary>
+    /// The recording is gone: its transcript stops here and is never written again. The engine
+    /// hold is released by whoever owns it - the drain, or the stop that finds no job.
+    /// </summary>
+    private void CancelTranscription(Guid id)
+    {
+        TranscriptionJob? job;
         lock (meetingGate)
         {
-            transcriptionQueue = null;
-            id = transcribingRecordingId;
+            job = JobLocked(id);
+            if (job is null) { return; }
+            transcriptionJobs.Remove(job);
         }
 
-        if (id is { } gone) { lock (gate) { loadedTranscripts.Remove(gone); } }
-        TranscribingRecordingId = null;
-        TranscriptBacklogSeconds = 0;
-        IsTranscriptionPaused = false;
-        recordingHoldsEngine = false;
-        RescheduleIdleUnload();
+        // Outside the lock: cancelling runs the waiting turn's continuation, which takes it.
+        job.Cancellation.Cancel();
+        PublishTranscriptionSummary();
     }
 
-    private void SegmentReady(MeetingSegmentRef segment)
+    private void SegmentReady(Guid id, MeetingSegmentRef segment)
     {
-        MeetingTranscriptionQueue? queue;
-        lock (meetingGate) { queue = transcriptionQueue; }
-        if (queue is null) { return; }
-        lock (gate) { transcriptBacklogSeconds += (double)segment.FrameCount / MeetingWriter.SampleRate; }
-        Raise(nameof(TranscriptBacklogSeconds));
-        queue.Submit(segment);
+        TranscriptionJob? job;
+        lock (meetingGate)
+        {
+            job = JobLocked(id);
+            if (job is null) { return; }
+            job.BacklogSeconds += (double)segment.FrameCount / MeetingWriter.SampleRate;
+        }
+
+        PublishTranscriptionSummary();
+        job.Queue.Submit(segment);
     }
 
-    private void SegmentDecoded(Guid id, MeetingSegmentRef segment, MeetingTranscriptionQueue.Outcome outcome)
+    private void SegmentDecoded(TranscriptionJob job, MeetingSegmentRef segment, MeetingTranscriptionQueue.Outcome outcome)
     {
         double rate = MeetingWriter.SampleRate;
-        lock (gate)
-        {
-            transcriptBacklogSeconds = Math.Max(0, transcriptBacklogSeconds - segment.FrameCount / rate);
-        }
-
-        Raise(nameof(TranscriptBacklogSeconds));
         var start = TimeSpan.FromSeconds(segment.StartFrame / rate);
         var end = TimeSpan.FromSeconds(segment.EndFrame / rate);
         MeetingUtteranceAssembler.Segment piece = outcome is MeetingTranscriptionQueue.Outcome.Decoded decoded
             ? new(segment.Channel, start, end, decoded.Text)
             : new(segment.Channel, start, end, string.Empty, IsFailed: true);
-        bool paused;
+        bool current;
         lock (meetingGate)
         {
-            if (transcriptionQueue is not { } queue || transcribingRecordingId != id) { return; }
-            closedUtterances.AddRange(utteranceAssembler.Append(piece));
-            PublishLiveTranscriptLocked(id, queue);
-            paused = queue.IsPaused;
+            job.BacklogSeconds = Math.Max(0, job.BacklogSeconds - segment.FrameCount / rate);
+            current = transcriptionJobs.Contains(job);
+            if (current)
+            {
+                job.Closed.AddRange(job.Assembler.Append(piece));
+                PublishLiveTranscriptLocked(job);
+            }
         }
 
-        TranscriptChanged?.Invoke(id);
-        IsTranscriptionPaused = paused;
+        PublishTranscriptionSummary();
+        if (current) { TranscriptChanged?.Invoke(job.Id); }
     }
 
     /// <summary>Caller holds <see cref="meetingGate"/>.</summary>
-    private void PublishLiveTranscriptLocked(Guid id, MeetingTranscriptionQueue queue)
+    private void PublishLiveTranscriptLocked(TranscriptionJob job)
     {
-        List<MeetingUtterance> live = [.. closedUtterances];
-        if (utteranceAssembler.Pending is { } pending) { live.Add(pending); }
-        lock (gate) { loadedTranscripts[id] = live; }
+        List<MeetingUtterance> live = [.. job.Closed];
+        if (job.Assembler.Pending is { } pending) { live.Add(pending); }
+        lock (gate) { loadedTranscripts[job.Id] = live; }
         if (meetingStore is not { } store) { return; }
         try
         {
+            // Filed means written as filed: the store refuses a recording it has since removed.
             store.Write(
-                new MeetingTranscript(live, new Dictionary<MeetingChannel, int>(queue.DecodedFrames)),
-                id,
-                incomplete: !store.IsPublished(id));
+                new MeetingTranscript(live, new Dictionary<MeetingChannel, int>(job.Queue.DecodedFrames)),
+                job.Id,
+                incomplete: !job.IsPublished);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
             // Text that cannot be written is text that would be lost at quit. Said once; the audio
             // is still being recorded regardless.
-            if (transcriptWriteFailureReported) { return; }
-            transcriptWriteFailureReported = true;
+            if (job.WriteFailureReported) { return; }
+            job.WriteFailureReported = true;
             _ = Task.Run(() => Notify(new DictationNotice(
                 DictationNoticeKind.Warning,
                 "The transcript can't be saved. The recording continues.")));
@@ -741,56 +827,58 @@ public sealed partial class AppState
 
     /// <summary>
     /// After the recording is filed: let the backlog drain, close the last paragraph, say on disk
-    /// how it went, and compact the WAV once the transcript is whole.
+    /// how it went, and compact the WAV once the transcript is whole. Releases the recording's
+    /// hold on the engine, whatever happens.
     /// </summary>
     private void FinishTranscription(Guid id)
     {
-        MeetingTranscriptionQueue? queue;
-        lock (meetingGate) { queue = transcribingRecordingId == id ? transcriptionQueue : null; }
-        if (queue is null || meetingStore is not { } store)
+        TranscriptionJob? job;
+        lock (meetingGate) { job = JobLocked(id); }
+        if (job is null || meetingStore is not { } store)
         {
-            recordingHoldsEngine = false;
-            RescheduleIdleUnload();
+            ReleaseRecordingEngineHold();
             return;
         }
 
         _ = Task.Run(async () =>
         {
-            await queue.Drain().ConfigureAwait(false);
-            bool paused = queue.IsPaused;
-            lock (meetingGate)
-            {
-                if (transcribingRecordingId != id) { return; }
-                closedUtterances.AddRange(utteranceAssembler.Flush());
-                PublishLiveTranscriptLocked(id, queue);
-                transcriptionQueue = null;
-            }
-
-            TranscriptChanged?.Invoke(id);
             try
             {
-                store.Update(id, metadata => metadata.TranscriptionState = paused
-                    ? MeetingTranscriptionState.Partial
-                    : MeetingTranscriptionState.Complete);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-            }
+                await job.Queue.Drain().ConfigureAwait(false);
+                bool paused = job.Queue.IsPaused;
+                lock (meetingGate)
+                {
+                    // Trashed meanwhile: nothing more to say about it.
+                    if (!transcriptionJobs.Remove(job)) { return; }
+                    job.Closed.AddRange(job.Assembler.Flush());
+                    PublishLiveTranscriptLocked(job);
+                }
 
-            TranscribingRecordingId = null;
-            IsTranscriptionPaused = false;
-            TranscriptBacklogSeconds = 0;
-            ReloadRecordings();
-            if (!paused && importer is { } compactor)
-            {
-                // The importer's compaction: the same archive, verified the same way.
-                await compactor.Compact(id).ConfigureAwait(false);
-                ReloadRecordings();
                 TranscriptChanged?.Invoke(id);
-            }
+                try
+                {
+                    store.Update(id, metadata => metadata.TranscriptionState = paused
+                        ? MeetingTranscriptionState.Partial
+                        : MeetingTranscriptionState.Complete);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                }
 
-            recordingHoldsEngine = false;
-            RescheduleIdleUnload();
+                PublishTranscriptionSummary();
+                ReloadRecordings();
+                if (!paused && importer is { } compactor)
+                {
+                    // The importer's compaction: the same archive, verified the same way.
+                    await compactor.Compact(id).ConfigureAwait(false);
+                    ReloadRecordings();
+                    TranscriptChanged?.Invoke(id);
+                }
+            }
+            finally
+            {
+                ReleaseRecordingEngineHold();
+            }
         });
     }
 }

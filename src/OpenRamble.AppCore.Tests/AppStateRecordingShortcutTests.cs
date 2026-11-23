@@ -103,6 +103,55 @@ public sealed class AppStateRecordingShortcutTests : IDisposable
         await TestWait.For("filed", () => state.RecordingState == MeetingRecordingState.Idle && state.Recordings.Count == 1);
     }
 
+    /// <summary>The second press of a quick double press is a stop, not a second start.</summary>
+    [Fact]
+    public async Task TwoQuickPressesStartThenStop()
+    {
+        AppState state = harness.MakeState();
+
+        harness.RecordMonitor.Press();
+        harness.RecordMonitor.Press();
+
+        await TestWait.For("filed", () => state.RecordingState == MeetingRecordingState.Idle && state.Recordings.Count == 1);
+        Assert.Equal(1, harness.MeetingCapture.StartCount);
+        Assert.Equal(1, harness.MeetingCapture.StopCount);
+    }
+
+    /// <summary>A press while the recorder is still starting stops it as soon as it has started.</summary>
+    [Fact]
+    public async Task APressWhileStartingStopsOnceStarted()
+    {
+        AppState state = harness.MakeState();
+        harness.MeetingCapture.StartGate.Reset();
+
+        harness.RecordMonitor.Press();
+        await TestWait.For("starting", () => state.RecordingState == MeetingRecordingState.Starting);
+        harness.RecordMonitor.Press();
+        harness.MeetingCapture.StartGate.Set();
+
+        await TestWait.For("filed", () => state.RecordingState == MeetingRecordingState.Idle && state.Recordings.Count == 1);
+        Assert.Equal(1, harness.MeetingCapture.StopCount);
+    }
+
+    /// <summary>
+    /// A press while a stop is under way is dropped: it would start a recording nobody can see
+    /// coming.
+    /// </summary>
+    [Fact]
+    public async Task APressWhileAStopIsUnderWayIsDropped()
+    {
+        AppState state = harness.MakeState();
+
+        harness.RecordMonitor.Press();
+        harness.RecordMonitor.Press();
+        harness.RecordMonitor.Press();
+
+        await TestWait.For("filed", () => state.RecordingState == MeetingRecordingState.Idle && state.Recordings.Count == 1);
+        await Task.Delay(200);
+        Assert.Equal(MeetingRecordingState.Idle, state.RecordingState);
+        Assert.Equal(1, harness.MeetingCapture.StartCount);
+    }
+
     [Fact]
     public void TheWatcherSurvivesSleep()
     {

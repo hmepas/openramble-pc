@@ -356,6 +356,7 @@ public sealed partial class AppState
                 remove(id);
                 // Only once it is gone: a recording the Trash refused keeps its transcript coming.
                 importer?.Cancel(id);
+                CancelTranscription(id);
                 lock (gate) { loadedTranscripts.Remove(id); }
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)

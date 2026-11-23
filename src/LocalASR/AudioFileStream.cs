@@ -92,7 +92,11 @@ internal abstract class AudioFileStream : IDisposable
 
         public Ffmpeg(string path)
         {
-            var start = new ProcessStartInfo("ffmpeg")
+            // Resolved here rather than by Process.Start, which would try the working directory
+            // first - and a file is often transcribed from the folder someone else filled.
+            string ffmpeg = DictationCore.ExecutablePath.Find("ffmpeg")
+                ?? throw new AudioFileReader.Failure.Unreadable(Missing);
+            var start = new ProcessStartInfo(ffmpeg)
             {
                 UseShellExecute = false,
                 RedirectStandardInput = true,

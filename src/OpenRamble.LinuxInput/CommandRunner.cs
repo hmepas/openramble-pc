@@ -90,7 +90,15 @@ internal sealed class SubprocessCommandRunner : ICommandRunner
     public CommandResult Run(CommandRequest request)
     {
         TimeSpan budget = request.Budget > TimeSpan.Zero ? request.Budget : DefaultBudget;
-        var start = new ProcessStartInfo(request.Executable)
+        // Resolved against our own PATH, never the working directory - Process.Start would try that
+        // first. A request's Environment may change the tool's PATH, not which tool runs.
+        string? executable = DictationCore.ExecutablePath.Find(request.Executable);
+        if (executable is null)
+        {
+            return CommandResult.Missing($"{request.Executable} was not found on PATH");
+        }
+
+        var start = new ProcessStartInfo(executable)
         {
             RedirectStandardInput = request.Input is not null,
             RedirectStandardOutput = true,

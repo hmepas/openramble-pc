@@ -47,6 +47,29 @@ public sealed class SubprocessCommandRunnerTests
     }
 
     [LinuxFact]
+    public void AToolInTheWorkingDirectoryIsNeverRun()
+    {
+        // Process.Start alone would look in the working directory before PATH.
+        if (!OperatingSystem.IsLinux()) { return; }
+        string name = $"openramble-planted-{Guid.NewGuid():N}";
+        string planted = Path.Combine(Environment.CurrentDirectory, name);
+        File.WriteAllText(planted, "#!/bin/sh\nexit 0\n");
+        File.SetUnixFileMode(planted, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        try
+        {
+            CommandResult result = new SubprocessCommandRunner().Run(
+                new CommandRequest(name, [], Budget: TimeSpan.FromSeconds(5)));
+
+            Assert.False(result.Started);
+            Assert.Contains("not found", result.Failure, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(planted);
+        }
+    }
+
+    [LinuxFact]
     public void AToolThatRefusesSaysWhyInItsOwnWords()
     {
         var runner = new SubprocessCommandRunner();

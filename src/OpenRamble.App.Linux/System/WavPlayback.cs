@@ -95,7 +95,15 @@ public sealed class WavPlayback : IDisposable
             return false;
         }
 
-        var start = new ProcessStartInfo(player)
+        // The absolute path, so the working directory is never searched for a player.
+        string? executable = DictationCore.ExecutablePath.Find(player);
+        if (executable is null)
+        {
+            DiagnosticLog.Emit("history.play", ("ok", false), ("player", player), ("error", "not-found"));
+            return false;
+        }
+
+        var start = new ProcessStartInfo(executable)
         {
             UseShellExecute = false,
             CreateNoWindow = true,

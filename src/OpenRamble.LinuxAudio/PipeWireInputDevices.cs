@@ -120,7 +120,14 @@ public sealed class PipeWireInputDevices : IAudioInputDeviceSource
     /// <summary>Run the dumper and hand back its output, or <c>null</c> when there is none.</summary>
     private static string? RunDump()
     {
-        var start = new ProcessStartInfo(Executable)
+        string? executable = DictationCore.ExecutablePath.Find(Executable);
+        if (executable is null)
+        {
+            DiagnosticLog.Emit("audio.devices", ("ok", false), ("error", "not-found"));
+            return null;
+        }
+
+        var start = new ProcessStartInfo(executable)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,

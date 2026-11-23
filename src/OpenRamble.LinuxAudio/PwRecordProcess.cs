@@ -73,6 +73,11 @@ internal sealed class PwRecordProcess : IRecorderProcess
     /// <summary>The recorder, resolved through <c>PATH</c> the way a person would type it.</summary>
     public const string Executable = "pw-record";
 
+    /// <summary>Where the recorder comes from, for the message that says it is missing.</summary>
+    private const string Package =
+        "It comes with PipeWire's command-line tools - the `pipewire` package on Arch, "
+        + "`pipewire-bin` on Debian and Ubuntu.";
+
     /// <summary>
     /// How much of stderr is kept for the failure message.
     /// </summary>
@@ -182,7 +187,10 @@ internal sealed class PwRecordProcess : IRecorderProcess
     /// </exception>
     public static IRecorderProcess Launch(AudioStreamFormat format, string? target = null)
     {
-        var start = new ProcessStartInfo(Executable)
+        string executable = DictationCore.ExecutablePath.Find(Executable)
+            ?? throw new AudioCaptureError.EngineUnavailable(
+                $"{Executable} was not found on PATH. " + Package);
+        var start = new ProcessStartInfo(executable)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -206,9 +214,7 @@ internal sealed class PwRecordProcess : IRecorderProcess
             or PlatformNotSupportedException or ObjectDisposedException)
         {
             throw new AudioCaptureError.EngineUnavailable(
-                $"{Executable} could not be started ({error.Message}). "
-                + "It comes with PipeWire's command-line tools - the `pipewire` package on Arch, "
-                + "`pipewire-bin` on Debian and Ubuntu.");
+                $"{Executable} could not be started ({error.Message}). " + Package);
         }
 
         if (process is null)

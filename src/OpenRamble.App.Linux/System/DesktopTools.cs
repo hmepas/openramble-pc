@@ -27,7 +27,15 @@ internal static class DesktopTools
     /// <summary>Run a tool without waiting for it. <c>false</c> - it is not on this machine.</summary>
     internal static bool Start(string executable, params string[] arguments)
     {
-        var start = new ProcessStartInfo(executable) { UseShellExecute = false };
+        // The absolute path, so the working directory is never searched for the tool.
+        string? resolved = DictationCore.ExecutablePath.Find(executable);
+        if (resolved is null)
+        {
+            DiagnosticLog.Emit("tool.missing", ("tool", executable), ("error", "not found on PATH"));
+            return false;
+        }
+
+        var start = new ProcessStartInfo(resolved) { UseShellExecute = false };
         foreach (string argument in arguments) { start.ArgumentList.Add(argument); }
 
         try
@@ -51,25 +59,6 @@ internal static class DesktopTools
     /// which is exactly what a person who is not dictating must never have happen. See
     /// <see cref="LinuxMicrophoneAccess"/>.
     /// </remarks>
-    internal static bool IsInstalled(string executable)
-    {
-        string? path = Environment.GetEnvironmentVariable("PATH");
-        if (path is null) { return false; }
-
-        foreach (string directory in path.Split(Path.PathSeparator))
-        {
-            if (directory.Length == 0) { continue; }
-
-            try
-            {
-                if (File.Exists(Path.Combine(directory, executable))) { return true; }
-            }
-            catch (ArgumentException)
-            {
-                // An unusable entry in PATH - the shell ignores those too.
-            }
-        }
-
-        return false;
-    }
+    internal static bool IsInstalled(string executable) =>
+        DictationCore.ExecutablePath.Find(executable) is not null;
 }

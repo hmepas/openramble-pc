@@ -55,14 +55,12 @@ internal sealed class PasteReadReceipts
     /// <c>$XDG_RUNTIME_DIR/openramble/paste</c>: per user, on tmpfs, and gone at logout - which is
     /// where a file that says "something was pasted just now" belongs.
     /// </summary>
-    public static string DefaultDirectory()
-    {
-        string? runtime = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
-        string root = string.IsNullOrEmpty(runtime)
-            ? Path.Combine(Path.GetTempPath(), $"openramble-{Environment.UserName}")
-            : Path.Combine(runtime, "openramble");
-        return Path.Combine(root, "paste");
-    }
+    /// <remarks>
+    /// The control socket's directory decides the root, so a relative or unset
+    /// <c>XDG_RUNTIME_DIR</c> falls back the same way: to a uid-named folder, never to one resolved
+    /// against the working directory - the shim's folder goes first on <c>wl-copy</c>'s PATH.
+    /// </remarks>
+    public static string DefaultDirectory() => Path.Combine(ControlSocket.DefaultDirectory, "paste");
 
     /// <summary>
     /// A receipt for one offer, or <c>null</c> when none can be kept here - no <c>cat</c> to hand
@@ -110,12 +108,20 @@ internal sealed class PasteReadReceipts
             if (shimTried) { return shimDirectory; }
             shimTried = true;
 
+            // First on wl-copy's PATH, so it must be absolute and nobody else's to write into.
+            if (!Path.IsPathRooted(directory)) { return null; }
+
             string? cat = RealCat();
             if (cat is null) { return null; }
 
             try
             {
-                Directory.CreateDirectory(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                const UnixFileMode privateDirectory =
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+                Directory.CreateDirectory(directory, privateDirectory);
+                // Again, explicitly: CreateDirectory applies the mode only to a directory it
+                // creates, and a folder someone else owns refuses the change - so no shim there.
+                File.SetUnixFileMode(directory, privateDirectory);
                 string path = Path.Combine(directory, ShimName);
                 File.WriteAllText(path, Script(cat));
                 File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -142,15 +148,11 @@ internal sealed class PasteReadReceipts
 
     private string? RealCat()
     {
-        foreach (string folder in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(':'))
-        {
-            if (folder.Length == 0 || folder == directory || folder.Contains('\'')) { continue; }
-
-            string candidate = Path.Combine(folder, ShimName);
-            if (File.Exists(candidate)) { return candidate; }
-        }
-
-        return null;
+        // Never the shim's own folder, and never one the script could not quote.
+        IEnumerable<string> folders = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(':')
+            .Where(folder => folder != directory && !folder.Contains('\''));
+        return DictationCore.ExecutablePath.Find(ShimName, string.Join(':', folders));
     }
 }
 

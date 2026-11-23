@@ -287,6 +287,23 @@ public sealed partial class AppState
         _ = Task.Run(() => RetryWaitingPaste(waiting));
     }
 
+    /// <summary>
+    /// Copy the waiting words whatever their action - for a panel button that takes the keyboard
+    /// when clicked (click-to-focus window managers on Linux), where a retried paste would land in
+    /// the panel itself. The dictation key stays the way to paste.
+    /// </summary>
+    public void CopyWaitingWords()
+    {
+        WaitingWords waiting;
+        lock (gate)
+        {
+            if (wait is not Wait.Words words || words.Value.IsCopied) { return; }
+            waiting = words.Value;
+        }
+
+        CopyWaitingWords(waiting);
+    }
+
     private void CopyWaitingWords(WaitingWords waiting)
     {
         try

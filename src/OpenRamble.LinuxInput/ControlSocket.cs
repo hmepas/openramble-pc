@@ -102,10 +102,10 @@ public static class ControlSocket
             : Path.Combine(Path.GetTempPath(), $"{DirectoryName}-{userId}");
 
     /// <summary>
-    /// The real user id, for the fallback path only.
+    /// The effective user id, for the fallback path and for checking who owns a private folder.
     /// </summary>
     /// <remarks>
-    /// The one call into libc in this assembly. <c>Environment.UserName</c> would do the same job
+    /// One of the two calls into libc in this assembly (<c>PasteReadReceipts</c> has the other). <c>Environment.UserName</c> would do the same job
     /// with characters in it that a path should not have to survive, and there is no managed way to
     /// ask this question.
     /// </remarks>
@@ -116,5 +116,5 @@ public static class ControlSocket
     /// returning an integer, which has nothing to marshal in the first place.
     /// </remarks>
     [DllImport("libc", EntryPoint = "geteuid")]
-    private static extern uint EffectiveUserId();
+    internal static extern uint EffectiveUserId();
 }

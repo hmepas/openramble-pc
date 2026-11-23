@@ -216,6 +216,25 @@ public sealed class AppStateWaitingWordsTests : IDisposable
         Assert.Null(panel.Waitings[^1]);
     }
 
+    /// <summary>
+    /// The copy hook for a panel whose button takes the keyboard: words that would paste are
+    /// copied instead, and nothing is pasted.
+    /// </summary>
+    [Fact]
+    public async Task CopyingWaitingWordsPutsThemOnTheClipboardWithoutPasting()
+    {
+        AppState state = await StateWithWaitingWords(new TextInsertionError.PasteNotRead());
+        Assert.Equal(WaitingAction.Paste, state.WaitingWordsValue!.Action);
+        int insertedBefore = harness.Inserter.InsertedTexts.Count;
+
+        state.CopyWaitingWords();
+
+        Assert.True(state.WaitingWordsValue!.IsCopied);
+        Assert.True(panel.Waitings[^1]!.IsCopied);
+        Assert.Equal(["Ping test"], harness.Clipboard.Copied);
+        Assert.Equal(insertedBefore, harness.Inserter.InsertedTexts.Count);
+    }
+
     /// <summary>While typing is protected a tap copies them, and then the key dictates again.</summary>
     [Fact]
     public async Task WhileTypingIsProtectedATapCopiesAndThenTheKeyDictates()

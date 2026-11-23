@@ -71,7 +71,9 @@ public sealed partial class OverlayWindow : Window,
         model = new OverlayModel(this);
         model.OnVisibilityChange = visible => Dispatcher.UIThread.Post(() => SetVisible(visible));
 
-        ActionButton.Click += (_, _) => OnWaitingAction?.Invoke();
+        // A click copies rather than pastes: on a click-to-focus window manager the click gives
+        // this panel the keyboard, and a retried Ctrl+V would land here. The key still pastes.
+        ActionButton.Click += (_, _) => OnWaitingCopy?.Invoke();
         LaterButton.Click += (_, _) => OnWaitingLater?.Invoke();
         // Escape reaches the panel only when the window manager gave it the keyboard - after a
         // click on it, say. The global Escape is the cancel shortcut's, not this.
@@ -170,6 +172,9 @@ public sealed partial class OverlayWindow : Window,
     public Action? OnWaitingAction { get; set; }
 
     public Action? OnWaitingLater { get; set; }
+
+    /// <summary>The action button's click: copy the waiting words. Wired by the app.</summary>
+    public Action? OnWaitingCopy { get; set; }
 
     public void SetWaiting(WaitingWords? waiting, DictationHotkey key) =>
         Dispatcher.UIThread.Post(() =>
@@ -301,7 +306,7 @@ public sealed partial class OverlayWindow : Window,
         KeyCapText.Text = key;
         KeyCap.Background = model.IsKeyDown ? KeyCapDown : KeyCapUp;
         ActionVerbText.Text = waiting.ActionVerb;
-        AutomationProperties.SetName(ActionButton, waiting.Action == WaitingAction.Copy ? "Copy" : "Paste");
+        AutomationProperties.SetName(ActionButton, "Copy");
     }
 
     private void RenderWaveform()

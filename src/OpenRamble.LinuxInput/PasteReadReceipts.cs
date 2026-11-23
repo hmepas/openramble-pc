@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace OpenRamble.LinuxInput;
 
 /// <summary>
@@ -35,7 +37,10 @@ internal sealed class PasteReadReceipts
 
     private const string ShimName = "cat";
 
-    private readonly string directory;
+    private const UnixFileMode PrivateDirectoryMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+    private readonly string runtimeDirectory;
     private readonly Lock gate = new();
 
     /// <summary>The shim's directory once it is in place; <c>null</c> before, or when it cannot be.</summary>
@@ -43,24 +48,38 @@ internal sealed class PasteReadReceipts
 
     private bool shimTried;
 
-    /// <param name="directory">
-    /// Private to this user: the shim and the receipts live here. See <see cref="DefaultDirectory"/>.
+    /// <param name="runtimeDirectory">
+    /// The session's private runtime directory - <c>$XDG_RUNTIME_DIR</c>, see
+    /// <see cref="ForThisSession"/>. It must be ours and 0700 already; the shim and the receipts
+    /// live in <see cref="Directory"/> under it.
     /// </param>
-    public PasteReadReceipts(string directory)
+    public PasteReadReceipts(string runtimeDirectory)
     {
-        this.directory = directory;
+        this.runtimeDirectory = runtimeDirectory;
+        Directory = System.IO.Path.Combine(runtimeDirectory, "openramble", "paste");
     }
 
+    /// <summary><c>&lt;runtime directory&gt;/openramble/paste</c>: where the shim and the receipts live.</summary>
+    internal string Directory { get; }
+
     /// <summary>
-    /// <c>$XDG_RUNTIME_DIR/openramble/paste</c>: per user, on tmpfs, and gone at logout - which is
-    /// where a file that says "something was pasted just now" belongs.
+    /// Receipts under <c>$XDG_RUNTIME_DIR</c>: per user, on tmpfs, and gone at logout - which is
+    /// where a file that says "something was pasted just now" belongs. <c>null</c> without one.
     /// </summary>
     /// <remarks>
-    /// The control socket's directory decides the root, so a relative or unset
-    /// <c>XDG_RUNTIME_DIR</c> falls back the same way: to a uid-named folder, never to one resolved
-    /// against the working directory - the shim's folder goes first on <c>wl-copy</c>'s PATH.
+    /// Deliberately no fallback under <c>/tmp</c>, unlike the control socket: the shim's folder goes
+    /// first on <c>wl-copy</c>'s PATH, and a <c>cat</c> planted in a shared folder would run as this
+    /// user with the dictated words on its standard input. Without a private runtime directory
+    /// reads are not seen, and the inserter keeps the fixed-delay restore and claims nothing.
     /// </remarks>
-    public static string DefaultDirectory() => Path.Combine(ControlSocket.DefaultDirectory, "paste");
+    public static PasteReadReceipts? ForThisSession() =>
+        RuntimeDirectoryFrom(Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR")) is { } root
+            ? new PasteReadReceipts(root)
+            : null;
+
+    /// <summary>The runtime directory, if <paramref name="value"/> names one at all: set and absolute.</summary>
+    internal static string? RuntimeDirectoryFrom(string? value) =>
+        value is { Length: > 0 } && System.IO.Path.IsPathRooted(value) ? value : null;
 
     /// <summary>
     /// A receipt for one offer, or <c>null</c> when none can be kept here - no <c>cat</c> to hand
@@ -75,7 +94,7 @@ internal sealed class PasteReadReceipts
         string? shim = Shim();
         if (shim is null) { return null; }
 
-        string path = Path.Combine(directory, $"receipt-{Guid.NewGuid():N}");
+        string path = System.IO.Path.Combine(shim, $"receipt-{Guid.NewGuid():N}");
         try
         {
             using (File.Create(path)) { }
@@ -108,24 +127,26 @@ internal sealed class PasteReadReceipts
             if (shimTried) { return shimDirectory; }
             shimTried = true;
 
-            // First on wl-copy's PATH, so it must be absolute and nobody else's to write into.
-            if (!Path.IsPathRooted(directory)) { return null; }
+            // First on wl-copy's PATH, so every folder from the runtime directory down must be
+            // ours alone: owned by us, 0700, and a real folder rather than a link to one.
+            if (!System.IO.Path.IsPathRooted(runtimeDirectory) || !IsPrivateDirectory(runtimeDirectory)) { return null; }
 
             string? cat = RealCat();
             if (cat is null) { return null; }
 
             try
             {
-                const UnixFileMode privateDirectory =
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
-                Directory.CreateDirectory(directory, privateDirectory);
-                // Again, explicitly: CreateDirectory applies the mode only to a directory it
-                // creates, and a folder someone else owns refuses the change - so no shim there.
-                File.SetUnixFileMode(directory, privateDirectory);
-                string path = Path.Combine(directory, ShimName);
-                File.WriteAllText(path, Script(cat));
-                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-                shimDirectory = directory;
+                string folder = runtimeDirectory;
+                foreach (string part in new[] { "openramble", "paste" })
+                {
+                    folder = System.IO.Path.Combine(folder, part);
+                    // Only created when nothing at all is there; whatever is there is then checked.
+                    if (StatusOf(folder) is null) { System.IO.Directory.CreateDirectory(folder, PrivateDirectoryMode); }
+                    if (!IsPrivateDirectory(folder)) { return null; }
+                }
+
+                WriteShim(Script(cat));
+                shimDirectory = Directory;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
@@ -135,6 +156,69 @@ internal sealed class PasteReadReceipts
             return shimDirectory;
         }
     }
+
+    /// <summary>
+    /// The shim goes in under a fresh name and is renamed over <c>cat</c>: the new name cannot
+    /// already exist (<c>O_EXCL</c>, which never follows a link), and the rename replaces whatever
+    /// <c>cat</c> was - a link included - rather than writing through it.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    private void WriteShim(string script)
+    {
+        string temporary = System.IO.Path.Combine(Directory, $".{ShimName}-{Guid.NewGuid():N}");
+        try
+        {
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                UnixCreateMode = PrivateDirectoryMode,
+            };
+            using (var writer = new StreamWriter(new FileStream(temporary, options)))
+            {
+                writer.Write(script);
+            }
+
+            File.Move(temporary, System.IO.Path.Combine(Directory, ShimName), overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) { File.Delete(temporary); }
+        }
+    }
+
+    /// <summary>A folder itself, not one a link points at, owned by this user and 0700.</summary>
+    internal static bool IsPrivateDirectory(string path) =>
+        StatusOf(path) is { IsDirectory: true } status
+        && status.Owner == ControlSocket.EffectiveUserId()
+        && status.Permissions == PrivateDirectoryMode;
+
+    /// <summary>What <c>lstat</c> says of a path, or <c>null</c> when it cannot be asked.</summary>
+    /// <remarks>
+    /// <c>statx</c> rather than <c>lstat</c>: its record has one layout on every architecture, so it
+    /// is read here by offset without an <c>unsafe</c> struct. .NET has no managed way to ask who
+    /// owns a file.
+    /// </remarks>
+    private static PathStatus? StatusOf(string path)
+    {
+        const int CurrentDirectory = -100; // AT_FDCWD
+        const int NoFollow = 0x100; // AT_SYMLINK_NOFOLLOW
+        const uint BasicStats = 0x7ff; // STATX_BASIC_STATS
+        var record = new byte[256];
+        if (Statx(CurrentDirectory, path, NoFollow, BasicStats, record) != 0) { return null; }
+
+        uint owner = BitConverter.ToUInt32(record, 20); // stx_uid
+        int mode = BitConverter.ToUInt16(record, 28); // stx_mode
+        const int TypeMask = 0xF000;
+        const int DirectoryType = 0x4000;
+        const int PermissionMask = 0x1FF;
+        return new PathStatus(owner, (mode & TypeMask) == DirectoryType, (UnixFileMode)(mode & PermissionMask));
+    }
+
+    private readonly record struct PathStatus(uint Owner, bool IsDirectory, UnixFileMode Permissions);
+
+    [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
+    private static extern int Statx(int directory, string path, int flags, uint mask, [Out] byte[] record);
 
     /// <summary>
     /// The shim itself. A receipt that no longer exists is not recreated: a late read of an offer
@@ -151,7 +235,7 @@ internal sealed class PasteReadReceipts
         // Never the shim's own folder, and never one the script could not quote.
         IEnumerable<string> folders = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
             .Split(':')
-            .Where(folder => folder != directory && !folder.Contains('\''));
+            .Where(folder => folder != Directory && !folder.Contains('\''));
         return DictationCore.ExecutablePath.Find(ShimName, string.Join(':', folders));
     }
 }

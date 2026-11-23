@@ -99,6 +99,12 @@ public sealed class AppPaths
     public string AudioRecovery() => Ensure(Path.Combine(Support(), "RecoveredAudio"));
 
     /// <summary>
+    /// Recordings the person made or imported on purpose, kept until they delete them - a
+    /// document, unlike the transient voice in <see cref="Takes"/>.
+    /// </summary>
+    public string Recordings() => Ensure(Path.Combine(Support(), "Recordings"));
+
+    /// <summary>
     /// The lock held while someone dictates. Under the standard root it is the file the
     /// command-line tool probes to step aside; under a test root it is the test's own, never the
     /// installed app's.

@@ -182,3 +182,34 @@ public sealed class FileTranscriberTests : IDisposable
         }
     }
 }
+
+/// <summary>Ctrl-C reaches ffmpeg as well, and its exit may be seen before the token is cancelled.</summary>
+public sealed class FileInterruptionTests
+{
+    private static AudioFileReader.Failure.Unreadable Decoder(bool bySignal) =>
+        new("ffmpeg found no audio it could decode in the file") { EndedBySignal = bySignal };
+
+    [Fact]
+    public void ADecoderKilledJustBeforeTheCancellationIsAnInterruption()
+    {
+        using var source = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        Assert.True(FileTranscriber.Interrupted(Decoder(bySignal: true), source.Token));
+    }
+
+    [Fact]
+    public void ADecoderKilledWithNoCancellationIsAFailedFile()
+    {
+        using var source = new CancellationTokenSource();
+        Assert.False(FileTranscriber.Interrupted(Decoder(bySignal: true), source.Token));
+    }
+
+    [Fact]
+    public void AnUndecodableFileFailsAtOnceAndAnyFailureAfterCancellationIsAnInterruption()
+    {
+        using var source = new CancellationTokenSource();
+        Assert.False(FileTranscriber.Interrupted(Decoder(bySignal: false), source.Token));
+
+        source.Cancel();
+        Assert.True(FileTranscriber.Interrupted(new IOException("broken pipe"), source.Token));
+    }
+}

@@ -43,6 +43,12 @@ public sealed class AudioFileReader
             }
 
             public string Reason { get; }
+
+            /// <summary>
+            /// The decoder died of a signal rather than of the file - most often the Ctrl-C that
+            /// is also on its way to this process. See <see cref="FileTranscriber"/>.
+            /// </summary>
+            internal bool EndedBySignal { get; init; }
         }
 
         public sealed class EmptyFile : Failure

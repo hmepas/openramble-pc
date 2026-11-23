@@ -154,7 +154,10 @@ internal abstract class AudioFileStream : IDisposable
                 process.WaitForExit();
                 if (process.ExitCode != 0)
                 {
-                    throw new AudioFileReader.Failure.Unreadable("ffmpeg found no audio it could decode in the file");
+                    throw new AudioFileReader.Failure.Unreadable("ffmpeg found no audio it could decode in the file")
+                    {
+                        EndedBySignal = BySignal(process.ExitCode),
+                    };
                 }
 
                 if (total == 0)
@@ -165,6 +168,12 @@ internal abstract class AudioFileStream : IDisposable
 
             return samples;
         }
+
+        /// <summary>
+        /// 255 is ffmpeg's own exit after it caught SIGINT or SIGTERM; 128 + n is .NET's status
+        /// for a process the signal killed outright (SIGINT, SIGKILL, SIGTERM).
+        /// </summary>
+        private static bool BySignal(int exitCode) => exitCode is 255 or 130 or 137 or 143;
 
         public override void Dispose()
         {

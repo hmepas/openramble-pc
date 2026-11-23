@@ -98,6 +98,10 @@ public sealed class FileTranscriber
             {
                 throw;
             }
+            catch (Exception error) when (Interrupted(error, cancellationToken))
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
             catch (Exception error)
             {
                 outcome = new FileOutcome.Failed(error);
@@ -107,6 +111,19 @@ public sealed class FileTranscriber
             await completed(index, outcome).ConfigureAwait(false);
         }
     }
+
+    /// <summary>How long a decoder killed by a signal waits for the cancellation it may precede.</summary>
+    internal static readonly TimeSpan SignalGrace = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Whether a failed file is really the job being stopped. Ctrl-C reaches ffmpeg too, and its
+    /// exit can be read before this process has cancelled the token - so a decoder that died of a
+    /// signal is given a moment for that cancellation to arrive instead of failing the file.
+    /// </summary>
+    internal static bool Interrupted(Exception error, CancellationToken cancellationToken) =>
+        cancellationToken.IsCancellationRequested
+        || (error is AudioFileReader.Failure.Unreadable { EndedBySignal: true }
+            && cancellationToken.WaitHandle.WaitOne(SignalGrace));
 
     /// <summary>One file: read in pieces, recognized one piece at a time, joined by appending.</summary>
     public Task<FileTranscript> Transcribe(

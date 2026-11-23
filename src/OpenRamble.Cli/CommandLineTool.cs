@@ -39,6 +39,7 @@ public static class CommandLineTool
           --model-dir DIRECTORY  use a prepared folder containing the GGUF model
           --check-model          check model availability without loading it
           --                     treat remaining arguments as file paths
+                                 (`openramble -- ctl` for a file named ctl on Linux)
           -h, --help             show this help
 
         Environment:

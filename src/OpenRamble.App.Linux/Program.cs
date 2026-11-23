@@ -25,7 +25,9 @@ namespace OpenRamble.App.Linux;
 /// way <c>--diag</c> is: it is answered before Avalonia is asked for anything, because it is not
 /// this application running - it is a two-line client that talks to the copy that already is. See
 /// <see cref="ControlSocketClient"/>. It lives on this binary rather than beside it so that a
-/// compositor keybind can name the one path a person already has.
+/// compositor keybind can name the one path a person already has. The verb stays reserved even
+/// when a file named <c>ctl</c> sits in the working directory; <c>openramble -- ctl</c> (or
+/// <c>./ctl</c>) transcribes that file, as the tool's help says.
 /// </para>
 /// <para>
 /// The command-line tool is the other exception, for the same reason: <c>openramble file.m4a</c>

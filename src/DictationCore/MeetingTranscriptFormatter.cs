@@ -37,6 +37,6 @@ public static class MeetingTranscriptFormatter
             $"{total / 3_600:00}:{total % 3_600 / 60:00}:{total % 60:00}");
     }
 
-    private static string Name(MeetingChannel channel) =>
+    public static string Name(MeetingChannel channel) =>
         channel == MeetingChannel.System ? "Others" : "You";
 }

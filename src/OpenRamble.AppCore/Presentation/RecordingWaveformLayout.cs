@@ -31,4 +31,31 @@ public static class RecordingWaveformLayout
 
         return 0.35 + (0.65 * (index + 1) / count);
     }
+
+    /// <summary>
+    /// A whole recording's peaks (one array per channel, one value per bucket) squeezed into
+    /// <paramref name="count"/> columns: each the loudest bucket of any channel in its stretch.
+    /// Fewer buckets than columns leaves the columns at one bucket each.
+    /// </summary>
+    public static float[] Columns(IReadOnlyList<float[]> channels, int count)
+    {
+        int buckets = channels.Count == 0 ? 0 : channels.Min(channel => channel.Length);
+        if (buckets == 0 || count <= 0) { return []; }
+        int columns = Math.Min(count, buckets);
+        var result = new float[columns];
+        for (int column = 0; column < columns; column++)
+        {
+            int from = (int)((long)column * buckets / columns);
+            int to = Math.Max(from + 1, (int)((long)(column + 1) * buckets / columns));
+            float loudest = 0;
+            foreach (float[] channel in channels)
+            {
+                for (int bucket = from; bucket < to; bucket++) { loudest = Math.Max(loudest, channel[bucket]); }
+            }
+
+            result[column] = loudest;
+        }
+
+        return result;
+    }
 }

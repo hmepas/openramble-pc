@@ -41,13 +41,65 @@ public sealed class ChannelClockTests
     }
 
     [Fact]
-    public void DriftPastTheThresholdResynchronizesAndReportsTheSkew()
+    public void ALoneJumpPastTheThresholdIsNotDrift()
     {
         var clock = new ChannelClock(resyncThresholdFrames: 800);
         _ = clock.Place(0, 1024);
-        Assert.Equal(new Resynchronized(2000, 976), clock.Place(2000, 1024));
-        // And the run continues from the new anchor.
-        Assert.Equal(new Contiguous(3024), clock.Place(3024, 1024));
+        // One late read is a stall, not a clock that wandered: the count wins.
+        Assert.Equal(new Contiguous(1024), clock.Place(2000, 1024));
+        Assert.Equal(new Contiguous(2048), clock.Place(2048, 1024));
+    }
+
+    [Fact]
+    public void SkewSustainedForASecondResynchronizesByTheSmallestSkewSeen()
+    {
+        var clock = new ChannelClock(resyncThresholdFrames: 800);
+        _ = clock.Place(0, 1_600);
+        long expected = 1_600;
+        // The device lost 1 000 frames: from here on the host clock is consistently ahead.
+        long host = 1_600 + 1_000;
+        ChannelClock.Placement placement;
+        do
+        {
+            placement = clock.Place(host, 1_600);
+            if (placement is Contiguous) { Assert.Equal(expected, placement.StartFrame); }
+            expected = placement.StartFrame + 1_600;
+            host += 1_600;
+        }
+        while (placement is Contiguous && host < 40_000);
+        Assert.Equal(new Resynchronized(host - 1_600, 1_000), placement);
+        Assert.True(host - 1_600 - 2_600 >= 16_000, "not before a second of evidence");
+    }
+
+    /// <summary>
+    /// A reader that stalls for 300 ms and then catches up: the late reads are stamped late, the
+    /// back-to-back ones after them barely advance the clock. Every sample still lands exactly
+    /// after the one before it - nothing overwritten, no silence inserted.
+    /// </summary>
+    [Fact]
+    public void AStallFollowedByABurstLosesNothingAndInsertsNoGap()
+    {
+        var clock = new ChannelClock(resyncThresholdFrames: 800);
+        const int chunk = 1_600;
+        long read = 0;       // frames the reader has taken; the device has made `now`
+        long now = 0;
+        long expected = 0;
+        void Read(long at)
+        {
+            now = Math.Max(now, at);
+            int count = (int)Math.Min(chunk, now - read);
+            if (count <= 0) { return; }
+            ChannelClock.Placement placement = clock.Place(now - count, count);
+            Assert.Equal(new Contiguous(expected), placement);
+            expected += count;
+            read += count;
+        }
+        for (int i = 1; i <= 20; i++) { Read(i * 320); }
+        // 300 ms without a read, then as fast as the pipe will go.
+        Read(now + 4_800 + 320);
+        while (read < now) { Read(now + 2); }
+        for (int i = 0; i < 40; i++) { Read(now + 320); }
+        Assert.Equal(now, read);
     }
 
     [Fact]
@@ -75,6 +127,7 @@ public sealed class ChannelClockTests
     [Theory]
     [InlineData(100.0, 30)]
     [InlineData(1_000.0, 200)]
+    [InlineData(-1_000.0, 200)]
     public void RealisticDriftOverAWholeMeetingStaysBoundedWithFewSeams(double ppm, int maximumSeams)
     {
         var clock = new ChannelClock(resyncThresholdFrames: 800);
@@ -85,7 +138,8 @@ public sealed class ChannelClockTests
         for (int i = 0; i < blocks; i++)
         {
             // The device delivers `block` samples per block but the host
-            // clock advances slightly less: the device is fast.
+            // clock advances slightly less (positive ppm: the device is fast)
+            // or more (negative: slow).
             long host = (long)Math.Round((double)(i * block) * (1 - ppm / 1_000_000), MidpointRounding.AwayFromZero);
             ChannelClock.Placement placement = clock.Place(host, block);
             if (placement is Resynchronized)

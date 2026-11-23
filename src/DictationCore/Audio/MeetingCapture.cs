@@ -125,6 +125,28 @@ public sealed class MeetingCapture : IMeetingCapturing
     private MeetingEndReason? endReason;
     private bool microphoneRecoveryAttempted;
 
+    /// <summary>Restarts after a configuration change, per channel, within <see cref="RestartWindow"/>.</summary>
+    private readonly Dictionary<MeetingChannel, Queue<long>> restarts = [];
+
+    /// <summary>
+    /// Bumped by every start of a channel, so a backed-off restart that a pause, a resume or a
+    /// recovery overtook does nothing when its wait ends.
+    /// </summary>
+    private readonly Dictionary<MeetingChannel, int> startGeneration = [];
+
+    /// <summary>
+    /// A recorder that ends on its own reads as a moved device, so a server that is down would
+    /// otherwise be respawned as fast as it can fail. Waits double from half a second; past this
+    /// many restarts within <see cref="RestartWindow"/> the side is reported down instead.
+    /// </summary>
+    internal const int MaximumRestarts = 5;
+
+    internal static readonly TimeSpan RestartWindow = TimeSpan.FromSeconds(30);
+
+    private static readonly TimeSpan FirstRestartDelay = TimeSpan.FromMilliseconds(500);
+
+    private static readonly TimeSpan LongestRestartDelay = TimeSpan.FromSeconds(8);
+
     /// <summary>
     /// Failures noticed under <see cref="gate"/>, raised after it is released (like the pipeline's
     /// segment and level events) so a handler may call <see cref="Stop"/> synchronously.
@@ -203,6 +225,9 @@ public sealed class MeetingCapture : IMeetingCapturing
     public ChannelHealth Health(MeetingChannel channel) => pipeline.Health(channel);
 
     public string AudioPath => pipeline.AudioPath;
+
+    /// <summary>The wait before a backed-off restart; tests replace it.</summary>
+    internal Func<TimeSpan, Task> RestartDelay { get; init; } = Task.Delay;
 
     // MARK: - Lifecycle
 
@@ -285,11 +310,13 @@ public sealed class MeetingCapture : IMeetingCapturing
         lock (gate)
         {
             if (state != CaptureState.Paused) { throw new MeetingCaptureException(new Failure.NotRecording()); }
-            ClosePause();
             // The timeline is recording time, not wall time: re-anchor so the next block lands
             // right after the last one written.
             pipeline.Anchor();
             StartSources();
+            // Only once the sources run: a resume that throws leaves the pause open, and the
+            // capture still paused.
+            ClosePause();
             state = CaptureState.Recording;
         }
         DeliverFailures();
@@ -393,10 +420,13 @@ public sealed class MeetingCapture : IMeetingCapturing
         }
     }
 
-    private void StartSource(IMeetingAudioSource source, MeetingChannel channel) =>
+    private void StartSource(IMeetingAudioSource source, MeetingChannel channel)
+    {
+        startGeneration[channel] = startGeneration.GetValueOrDefault(channel) + 1;
         source.Start(
             block => pipeline.Ingest(channel, block),
             failure => Task.Run(() => SourceFailed(channel, failure)));
+    }
 
     /// <summary>Restart after a recovery or a device change; a failure is reported, not thrown.</summary>
     private void RestartSource(IMeetingAudioSource source, MeetingChannel channel)
@@ -480,12 +510,43 @@ public sealed class MeetingCapture : IMeetingCapturing
                 return;
             }
             // The device moved - unplugged, or the default changed. Start again on whatever is
-            // default now. The aligner fills the seconds in between with silence and the gap is
-            // recorded, so the recording continues rather than ending.
+            // default now, after a wait that grows while it keeps happening. The aligner fills the
+            // seconds in between with silence and the gap is recorded, so the recording continues
+            // rather than ending.
             if (source is null) { return; }
             source.Stop();
+            long now = Stopwatch.GetTimestamp();
+            Queue<long> recent = restarts.TryGetValue(channel, out Queue<long>? queued) ? queued : restarts[channel] = new();
+            while (recent.Count > 0 && Stopwatch.GetElapsedTime(recent.Peek(), now) > RestartWindow) { _ = recent.Dequeue(); }
+            if (recent.Count >= MaximumRestarts)
+            {
+                // It keeps going away: treat the side as down, as a source that failed outright.
+                pendingFailures.Add(channel == MeetingChannel.Microphone
+                    ? new Failure.Microphone(failure)
+                    : new Failure.SystemAudio(failure));
+                return;
+            }
+            TimeSpan delay = FirstRestartDelay * Math.Pow(2, recent.Count);
+            if (delay > LongestRestartDelay) { delay = LongestRestartDelay; }
+            recent.Enqueue(now);
+            int generation = startGeneration.GetValueOrDefault(channel);
+            _ = Task.Run(async () =>
+            {
+                await RestartDelay(delay).ConfigureAwait(false);
+                RestartAfterBackoff(source, channel, generation);
+            });
+        }
+    }
+
+    private void RestartAfterBackoff(IMeetingAudioSource source, MeetingChannel channel, int generation)
+    {
+        lock (gate)
+        {
+            // Paused, stopped, or started again by someone else while this waited.
+            if (state != CaptureState.Recording || startGeneration.GetValueOrDefault(channel) != generation) { return; }
             RestartSource(source, channel);
         }
+        DeliverFailures();
     }
 
     private void PipelineFailed(MeetingPipeline.Failure failure)

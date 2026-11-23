@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using DictationCore;
 using DictationCore.Audio;
 using OpenRamble.AppCore;
@@ -19,7 +20,13 @@ namespace OpenRamble.LinuxAudio;
 /// <para>
 /// <b>Timestamps.</b> <see cref="MeetingAudioBlock.HostNanosecondsNow"/> when a read returns,
 /// minus the block's own duration, so they mark the first frame on the clock the capture anchors
-/// on. The pipe adds a few milliseconds of jitter; <see cref="ChannelClock"/> absorbs it.
+/// on. The pipe adds a few milliseconds of jitter; <see cref="ChannelClock"/> absorbs it, and a
+/// stall stamps late only for the burst that catches up, which it also absorbs.
+/// </para>
+/// <para>
+/// <b>Threads.</b> The reader only reads and stamps; blocks and the failure go to a second
+/// thread, in order, which runs the callbacks. A slow consumer - a disk write, a segment handed to
+/// a busy queue - then delays delivery, never the read, so the stamps stay honest.
 /// </para>
 /// </remarks>
 public sealed class PipeWireMeetingSource : IMeetingAudioSource
@@ -146,6 +153,12 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
         var run = new Run(recorder);
         lock (gate) { current = run; }
 
+        run.Delivery = new Thread(() => Deliver(run))
+        {
+            IsBackground = true,
+            Name = $"OpenRamble meeting {Kind} delivery",
+        };
+        run.Delivery.Start();
         run.Reader = new Thread(() => Read(run, onBlock, onFailure))
         {
             IsBackground = true,
@@ -212,7 +225,8 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
                         }
                     }
 
-                    onBlock(new MeetingAudioBlock(stamp, samples));
+                    var block = new MeetingAudioBlock(stamp, samples);
+                    run.Post(() => onBlock(block));
                 });
 
             if (run.Stopping) { return; }
@@ -241,7 +255,13 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
 
         if (!run.MarkFailed()) { return; }
 
-        onFailure(failure);
+        run.Post(() => onFailure(failure));
+    }
+
+    /// <summary>Run the callbacks the reader queued, in order, until the run is released.</summary>
+    private static void Deliver(Run run)
+    {
+        foreach (Action next in run.Outbox.GetConsumingEnumerable()) { next(); }
     }
 
     /// <summary>Signal, then force; never waits longer than the budget. Safe twice.</summary>
@@ -269,6 +289,14 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
         {
             reader.Join(StopBudget);
         }
+
+        // What was read before the stop is still delivered before it returns: the last word.
+        run.Outbox.CompleteAdding();
+        Thread? delivery = run.Delivery;
+        if (delivery is not null && delivery != Thread.CurrentThread)
+        {
+            delivery.Join(StopBudget);
+        }
     }
 
     private void Emit(string name, params (string Key, object? Value)[] fields) =>
@@ -282,6 +310,22 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
         public IRecorderProcess Recorder { get; } = recorder;
 
         public Thread? Reader { get; set; }
+
+        public Thread? Delivery { get; set; }
+
+        public BlockingCollection<Action> Outbox { get; } = new();
+
+        /// <summary>Queue a callback; one posted after the run was released is dropped.</summary>
+        public void Post(Action callback)
+        {
+            try
+            {
+                Outbox.Add(callback);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
 
         public bool Stopping
         {

@@ -37,6 +37,12 @@ downloading the model and nothing else. See
 [docs/differences-from-macos.md](docs/differences-from-macos.md) for what this
 port does and does not carry over from the macOS app.
 
+This port is not a full copy of upstream. `openramble serve`, the
+speech-to-text server for your own Linux machine (an ElevenLabs-Scribe-compatible
+HTTP API), is not ported on purpose: upstream's server is a standalone Rust
+program in [`apps/cli`](https://github.com/mikwiseman/openramble/tree/main/apps/cli)
+that already runs on Linux. Use it from upstream (see its `docs/server.md`).
+
 ## Usage
 
 - Hold the dictation key, speak, release it: the text lands at the cursor.

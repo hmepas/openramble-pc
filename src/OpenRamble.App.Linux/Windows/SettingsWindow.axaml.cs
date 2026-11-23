@@ -226,9 +226,67 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         Changed(RevertSilence, state.StopsOnSilence != SettingsDefaults.StopsOnSilence);
 
         RenderDevices();
+        RenderCommandLineTool();
 
         PlacementPicker.SelectedIndex = DictationOverlayPlacements.AllCases.ToList().IndexOf(state.OverlayPlacement);
         Changed(RevertPlacement, state.OverlayPlacement != SettingsDefaults.OverlayPlacement);
+    }
+
+    /// <summary>
+    /// Upstream's <c>CommandLineToolSettings</c>: install, reinstall or remove the
+    /// <c>~/.local/bin/openramble</c> link. The status is read from disk on every render, and a
+    /// failure from the last button press stays until the next one.
+    /// </summary>
+    private void RenderCommandLineTool()
+    {
+        string? link = CommandLineToolInstaller.InstalledLink();
+        CliInstallButton.Content = link is null ? "Install command-line tool" : "Reinstall command-line tool";
+        CliUninstallButton.IsVisible = link is not null;
+        CliUsage.IsVisible = link is not null;
+        CliPathHint.IsVisible = link is not null && !CommandLineToolInstaller.LinkFolderOnPath();
+        if (commandLineToolFailure is not null)
+        {
+            CliStatus.Text = commandLineToolFailure;
+            CliStatus.Foreground = StatusBrushes.Attention;
+            CliStatus.IsVisible = true;
+        }
+        else
+        {
+            CliStatus.Text = link is null ? string.Empty : $"Installed at {link}";
+            CliStatus.ClearValue(TextBlock.ForegroundProperty);
+            CliStatus.IsVisible = link is not null;
+        }
+    }
+
+    private string? commandLineToolFailure;
+
+    private void OnInstallCommandLineTool(object? sender, RoutedEventArgs args) =>
+        ChangeCommandLineTool(() => CommandLineToolInstaller.Install());
+
+    private void OnUninstallCommandLineTool(object? sender, RoutedEventArgs args) =>
+        ChangeCommandLineTool(() => CommandLineToolInstaller.Uninstall());
+
+    private void ChangeCommandLineTool(Action change)
+    {
+        try
+        {
+            change();
+            commandLineToolFailure = null;
+        }
+        catch (Exception error) when (error is CommandLineToolInstaller.Failure or IOException or UnauthorizedAccessException)
+        {
+            commandLineToolFailure = error.Message;
+        }
+
+        updating = true;
+        try
+        {
+            RenderCommandLineTool();
+        }
+        finally
+        {
+            updating = false;
+        }
     }
 
     /// <summary>

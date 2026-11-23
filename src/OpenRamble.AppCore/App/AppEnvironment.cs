@@ -127,6 +127,23 @@ public sealed class AppEnvironment
     public IFolderOpening? Folders { get; init; }
 
     /// <summary>
+    /// The engine imported files are read with - the dictation engine itself
+    /// (<see cref="SharedTranscriberRecognizer"/>), never a second one. <c>null</c> - no importing:
+    /// the Library lists and plays, and bringing a file in does nothing.
+    /// </summary>
+    public IImportRecognizer? ImportRecognizer { get; init; }
+
+    /// <summary>
+    /// Where a recording goes when the person deletes it. <c>null</c> - <see cref="GioTrasher"/>,
+    /// which says it is unavailable where there is no <c>gio</c>; the Library then asks before
+    /// deleting for good.
+    /// </summary>
+    public IRecordingTrasher? RecordingTrasher { get; init; }
+
+    /// <summary>Compacts a finished import's WAV; <c>null</c> keeps the WAV.</summary>
+    public IRecordingAudioCompressor? RecordingCompressor { get; init; }
+
+    /// <summary>
     /// Whether the active keyboard layout composes with Right Alt - one of the facts
     /// <see cref="HotkeyAdvice"/> cannot work out on its own.
     /// </summary>

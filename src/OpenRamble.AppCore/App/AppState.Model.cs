@@ -563,6 +563,9 @@ public sealed partial class AppState
     {
         KeyDown,
         AppActivation,
+
+        /// <summary>A file was brought into the Library; its transcript needs the engine.</summary>
+        Import,
     }
 
     /// <summary>
@@ -1082,7 +1085,10 @@ public sealed partial class AppState
                 // dictation is instant. Nothing depends on this any more - the setup screen no
                 // longer waits for a loaded engine, and a resting one is woken by the same key
                 // press as everywhere else - so it is a courtesy, not a guard.
-                || !OnboardingCompleted)
+                || !OnboardingCompleted
+                // An import reads its pieces with this engine: unloading under it would only
+                // send the file back to wait for the model. The countdown starts when it is done.
+                || !importActivity.IsIdle)
             {
                 return;
             }
@@ -1131,7 +1137,8 @@ public sealed partial class AppState
                 || insertionOwner != InsertionOwner.None
                 || isRecyclingEngine
                 || isPreparingEngine
-                || !isEngineReady)
+                || !isEngineReady
+                || !importActivity.IsIdle)
             {
                 return;
             }

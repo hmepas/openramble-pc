@@ -92,7 +92,10 @@ public sealed partial class AppState
     public ModelState ModelStateValue
     {
         get { lock (gate) { return modelState; } }
-        private set => Set(ref modelState, value);
+        private set
+        {
+            if (Set(ref modelState, value)) { ImportReadinessChanged(); }
+        }
     }
 
     /// <summary>
@@ -156,6 +159,7 @@ public sealed partial class AppState
             if (!Set(ref isEngineReady, value)) { return; }
             journal.Record(value ? DiagnosticEvent.EngineReady : DiagnosticEvent.EngineUnavailable);
             if (value) { HasEngineBeenReady = true; }
+            ImportReadinessChanged();
         }
     }
 

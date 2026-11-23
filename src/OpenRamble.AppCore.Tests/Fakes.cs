@@ -463,6 +463,14 @@ public sealed class FakeClipboard : IHostOnlyClipboard
     }
 }
 
+/// <summary>A Trash that deletes, so a test never fills the developer's; or none at all.</summary>
+public sealed class FakeRecordingTrasher : IRecordingTrasher
+{
+    public bool IsAvailable { get; set; } = true;
+
+    public void Trash(string path) => Directory.Delete(path, recursive: true);
+}
+
 public sealed class FakeFolders : IFolderOpening
 {
     private readonly List<string> opened = [];
@@ -884,6 +892,13 @@ public sealed class AppHarness : IDisposable
 
     public FakeTranscription Transcription { get; } = new();
 
+    /// <summary>The dictation engine as imports see it: "Piece N." for the Nth decode.</summary>
+    internal ScriptedImportRecognizer ImportEngine { get; } = new();
+
+    public FakeRecordingTrasher RecordingTrasher { get; } = new();
+
+    internal FakeCompressor RecordingCompressor { get; } = new(succeeds: true);
+
     /// <summary>
     /// The engine used for warm-up. Routine checks do not need it: without it the warm-up counts
     /// as passed. It is set where the warm-up itself is under test.
@@ -983,6 +998,9 @@ public sealed class AppHarness : IDisposable
             LaunchAtLogin = LaunchAtLogin,
             Clipboard = Clipboard,
             Folders = Folders,
+            ImportRecognizer = ImportEngine,
+            RecordingTrasher = RecordingTrasher,
+            RecordingCompressor = RecordingCompressor,
             LayoutHasAltGraph = () => LayoutHasAltGraph,
             HotkeySourceSwallowsKey = _ => HotkeySourceSwallowsKey,
             KeydFoldsRightModifiers = () => KeydFoldsRightModifiers,

@@ -183,6 +183,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
     private void SetUp(AppEnvironment environment)
     {
+        // Before anything writes a recording: what a crash left is repaired and listed first.
+        SetUpLibrary(environment);
+
         try
         {
             IAudioCapturing capture = environment.MakeCapture(
@@ -1225,6 +1228,9 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
     public void Dispose()
     {
+        // First: nothing more of an import is written, so it stays marked unfinished and is
+        // taken up at the next launch.
+        importer?.Stop();
         lock (gate)
         {
             if (disposed) { return; }

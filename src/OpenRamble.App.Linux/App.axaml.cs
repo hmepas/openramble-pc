@@ -198,6 +198,10 @@ public sealed partial class App : Application
             LaunchAtLogin = new LaunchAtLogin(),
             Clipboard = new HostOnlyClipboard(inserter),
             Folders = new FolderOpening(),
+            // Imported files share the dictation engine; the store lives at AppPaths.Recordings().
+            ImportRecognizer = new SharedTranscriberRecognizer(transcriber),
+            RecordingTrasher = new GioTrasher(),
+            RecordingCompressor = new FfmpegAudioCompressor(),
             LayoutHasAltGraph = KeyboardLayoutFacts.HasAltGraph,
             HotkeySettingsHint = HotkeyAdvice.LinuxSettingsHint,
             // evdev reads alongside and never grabs, so the key still reaches everything else. With

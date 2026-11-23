@@ -13,7 +13,6 @@
         Topmost="True"
         SizeToContent="WidthAndHeight"
         Focusable="False"
-        Cursor="Hand"
         automation:AutomationProperties.Name="OpenRamble recording indicator">
   <!-- One glass capsule, a block unit tall. The margin is transparent room for its shadow. -->
   <Border x:Name="Pill"

@@ -27,8 +27,13 @@ namespace LocalASR;
 /// its own disk queue.
 /// </para>
 /// </remarks>
-internal abstract class AudioFileStream : IDisposable
+public abstract class AudioFileStream : IDisposable
 {
+    /// <summary>Only the two readers below; public so the app's file import can read with it.</summary>
+    private protected AudioFileStream()
+    {
+    }
+
     /// <summary>Open <paramref name="path"/>; a missing or unreadable file fails here.</summary>
     public static AudioFileStream Open(string path)
     {

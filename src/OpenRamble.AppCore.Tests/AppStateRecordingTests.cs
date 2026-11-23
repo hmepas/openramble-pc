@@ -164,7 +164,8 @@ public sealed class AppStateRecordingTests : IDisposable
         await WaitFor("the live text", () => state.Transcript(id).Count == 1);
         Assert.Equal("Piece 1.", state.Transcript(id)[0].Text);
         Assert.Equal(16_000, Assert.Single(harness.ImportEngine.DecodedSamples));
-        lock (changed) { Assert.Contains(id, changed); }
+        // The text is published under the lock and the event raised just after it: wait for both.
+        await WaitFor("the change event", () => { lock (changed) { return changed.Contains(id); } });
 
         await state.StopRecording();
         await WaitFor(

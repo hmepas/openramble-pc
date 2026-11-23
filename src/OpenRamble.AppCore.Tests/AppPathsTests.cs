@@ -73,6 +73,7 @@ public sealed class AppPathsTests : IDisposable
         Assert.Equal(Path.Combine(support, "Models"), paths.Models());
         Assert.Equal(Path.Combine(support, "Takes"), paths.Takes());
         Assert.Equal(Path.Combine(support, "RecoveredAudio"), paths.AudioRecovery());
+        Assert.Equal(Path.Combine(support, "Recordings"), paths.Recordings());
     }
 
     /// <summary>

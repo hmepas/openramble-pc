@@ -290,6 +290,101 @@ public sealed class MeetingCaptureTests : IDisposable
         Assert.Empty(summary.Gaps);
     }
 
+    /// <summary>
+    /// A reader stamps each block when its read returns. After a 300 ms stall the catch-up reads
+    /// are stamped late and arrive back to back; the file must still hold every sample once, in
+    /// order, with no silence between them.
+    /// </summary>
+    [Fact]
+    public void TestAReaderStallFollowedByABurstLosesNoAudioAndInsertsNoGap()
+    {
+        var microphone = new ScriptedAudioSource();
+        var capture = new MeetingCapture(directory, microphone, systemAudio: null);
+        capture.Start();
+        ulong anchor = MeetingAudioBlock.HostNanosecondsNow();
+        const int chunk = 1_600;
+        long now = 0;
+        long read = 0;
+        void Read(long at)
+        {
+            now = Math.Max(now, at);
+            int count = (int)Math.Min(chunk, now - read);
+            if (count <= 0) { return; }
+            microphone.Deliver(Constant(0.5f, count), anchor + (ulong)((now - count) * 62_500));
+            read += count;
+        }
+        for (int i = 1; i <= 20; i++) { Read(i * 320); }
+        Read(now + 4_800 + 320);
+        while (read < now) { Read(now + 2); }
+        for (int i = 0; i < 40; i++) { Read(now + 320); }
+        MeetingCapture.Summary summary = capture.Stop();
+
+        var audio = ReadChannels(capture.AudioPath);
+        int first = Array.FindIndex(audio.Left, sample => Math.Abs(sample) > 0.1);
+        Assert.InRange(first, 0, 320);
+        Assert.Equal(read, summary.FrameCount - first);
+        Assert.All(audio.Left[first..], sample => Assert.Equal(0.5, sample, 0.001));
+        Assert.Empty(summary.Gaps);
+    }
+
+    [Fact]
+    public void TestAResumeWhoseSourceFailsKeepsThePauseOpen()
+    {
+        var microphone = new ScriptedAudioSource();
+        var capture = new MeetingCapture(directory, microphone, systemAudio: null);
+        capture.Start();
+        microphone.Deliver(Constant(0.5f, 1_600));
+        capture.Pause();
+        microphone.StartError = new MeetingSourceFailure.StartFailed("gone");
+        Assert.IsType<MeetingCapture.Failure.Microphone>(FailureOf(capture.Resume));
+        Assert.Equal(MeetingCapture.CaptureState.Paused, capture.State);
+        Thread.Sleep(100);
+        MeetingCapture.Summary summary = capture.Stop();
+        MeetingInterval pause = Assert.Single(summary.Pauses);
+        Assert.True(pause.End - pause.Start >= 0.09, "the pause lasts until the stop, not the failed resume");
+    }
+
+    /// <summary>
+    /// A recorder that keeps dying (the server is down) is restarted with growing waits, and after
+    /// five tries in the window the side is reported down instead of respawned forever.
+    /// </summary>
+    [Fact]
+    public async Task TestARestartStormBacksOffAndThenGivesUp()
+    {
+        var microphone = new ScriptedAudioSource();
+        var system = new ScriptedAudioSource();
+        var delays = new List<TimeSpan>();
+        var failures = new List<MeetingCapture.Failure>();
+        var capture = new MeetingCapture(
+            directory,
+            microphone,
+            system,
+            onFailure: failure => { lock (failures) { failures.Add(failure); } })
+        {
+            RestartDelay = delay =>
+            {
+                lock (delays) { delays.Add(delay); }
+                return Task.CompletedTask;
+            },
+        };
+        capture.Start();
+        for (int restart = 1; restart <= 5; restart++)
+        {
+            system.Fail(new MeetingSourceFailure.ConfigurationChanged());
+            await WaitUntil(() => system.StartCount == 1 + restart);
+        }
+        system.Fail(new MeetingSourceFailure.ConfigurationChanged());
+        await WaitUntil(() => { lock (failures) { return failures.Count > 0; } });
+        await Task.Delay(100);
+        Assert.Equal(6, system.StartCount);
+        Assert.Equal(
+            [0.5, 1, 2, 4, 8],
+            delays.Select(delay => delay.TotalSeconds));
+        Assert.IsType<MeetingCapture.Failure.SystemAudio>(Assert.Single(failures));
+        MeetingCapture.Summary summary = capture.Stop();
+        Assert.Contains(summary.Gaps, gap => gap.Channel == MeetingChannel.System);
+    }
+
     [Fact]
     public void TestPauseStopsTheSourcesAndResumeStartsThemAgain()
     {

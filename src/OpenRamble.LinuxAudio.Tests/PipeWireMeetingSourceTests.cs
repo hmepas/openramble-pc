@@ -67,6 +67,45 @@ public sealed class PipeWireMeetingSourceTests
         Assert.Equal(320, block.Samples.Length);
     }
 
+    /// <summary>
+    /// A consumer that takes its time must not hold up the read: the blocks behind it are still
+    /// read, and stamped, when they arrive - then handed over in order once it returns.
+    /// </summary>
+    [Fact]
+    public void ASlowConsumerDoesNotStallTheReader()
+    {
+        var recorder = new FakeRecorderProcess();
+        var blocks = new BlockingCollection<MeetingAudioBlock>();
+        using var release = new ManualResetEventSlim();
+        int stamped = 0;
+        var source = Source(recorder, clock: () => (ulong)Interlocked.Increment(ref stamped) * 1_000_000_000UL);
+
+        source.Start(
+            block =>
+            {
+                release.Wait(Wait);
+                blocks.Add(block);
+            },
+            _ => { });
+        recorder.Feed(new float[320]);
+        SpinWait.SpinUntil(() => Volatile.Read(ref stamped) == 1, Wait);
+        recorder.Feed(new float[320]);
+        recorder.Feed(new float[320]);
+
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref stamped) == 3, Wait), "the reader kept reading");
+        Assert.Empty(blocks);
+        release.Set();
+        var stamps = new List<ulong>();
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.True(blocks.TryTake(out MeetingAudioBlock? block, Wait));
+            stamps.Add(block!.HostNanoseconds!.Value);
+        }
+        source.Stop();
+
+        Assert.Equal([980_000_000UL, 1_980_000_000UL, 2_980_000_000UL], stamps);
+    }
+
     [Fact]
     public void ARecorderThatExitsOnItsOwnIsAChangedDevice()
     {

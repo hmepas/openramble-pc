@@ -50,6 +50,8 @@ public static class Program
             return CommandLineTool.Run(arguments);
         }
 
+        // Before Avalonia opens its X11 connection: libXcursor reads these once, at the first cursor.
+        CursorEnvironment.Apply();
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(arguments);
         return 0;
     }

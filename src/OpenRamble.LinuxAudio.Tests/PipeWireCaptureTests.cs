@@ -249,8 +249,11 @@ public sealed class PipeWireCaptureTests : IDisposable
             ExitReport = "pw-record exited with status 1: error: pw_context_connect() failed: Host is down",
         };
         using var capture = new PipeWireCapture(takes, _ => recorder);
-        AudioCaptureError? reported = null;
-        capture.Failed = (_, error) => reported = error;
+        // The first frame is answered before Failed is raised, on another thread: the alarm is
+        // awaited, not read the moment the wait returns.
+        var reported = new TaskCompletionSource<AudioCaptureError>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        capture.Failed = (_, error) => reported.TrySetResult(error);
 
         await capture.StartRecording();
         recorder.Die();
@@ -258,8 +261,9 @@ public sealed class PipeWireCaptureTests : IDisposable
         // False, not an exception and not a wait that never ends: whoever was about to be told
         // "speak" is told there is no recording instead.
         Assert.False(await capture.WaitForFirstFrame().WaitAsync(Patience));
-        Assert.IsType<AudioCaptureError.EngineUnavailable>(reported);
-        Assert.Contains("Host is down", reported!.Message, StringComparison.Ordinal);
+        AudioCaptureError error = await reported.Task.WaitAsync(Patience);
+        Assert.IsType<AudioCaptureError.EngineUnavailable>(error);
+        Assert.Contains("Host is down", error.Message, StringComparison.Ordinal);
         Assert.Equal("EngineUnavailable", diagnostics.Field("capture.failed", "kind"));
 
         await capture.StopRecording();
@@ -271,17 +275,23 @@ public sealed class PipeWireCaptureTests : IDisposable
         var recorder = new FakeRecorderProcess();
         using var capture = new PipeWireCapture(takes, _ => recorder);
         int alarms = 0;
-        capture.Failed = (_, _) => alarms += 1;
+        var alarmed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        capture.Failed = (_, _) =>
+        {
+            Interlocked.Increment(ref alarms);
+            alarmed.TrySetResult();
+        };
 
         await capture.StartRecording();
         recorder.Die();
         Assert.False(await capture.WaitForFirstFrame().WaitAsync(Patience));
+        await alarmed.Task.WaitAsync(Patience);
 
         // The stop that follows finds a recorder that is already gone, which is not a second
         // failure - it is the same one, and the person must not be told twice.
         await capture.StopRecording();
 
-        Assert.Equal(1, alarms);
+        Assert.Equal(1, Volatile.Read(ref alarms));
     }
 
     [Fact]

@@ -25,6 +25,18 @@ public enum MenuRow
     /// the click; a tray menu here is drawn by the panel and never sees a modifier.
     /// </summary>
     CopyTakes,
+
+    /// <summary>A readout: "Recording — 12:34", or what the recorder is busy doing.</summary>
+    RecordingLine,
+
+    /// <summary>Record both sides: the microphone and what the computer plays, where it can.</summary>
+    StartRecording,
+
+    /// <summary>Record the microphone only. Offered only where "Record" also takes system audio.</summary>
+    StartVoiceNote,
+    PauseRecording,
+    ResumeRecording,
+    StopRecording,
     Settings,
     Quit,
 }
@@ -47,6 +59,10 @@ public enum MenuRow
 /// <item><description>The newest takes lead the idle menu, the last one first, because the
 /// menu is the backstop for words that could not land. Three at most: a menu is not a
 /// history.</description></item>
+/// <item><description>A recording is orthogonal to a dictation - both can be true - so its
+/// section comes first and stays whatever the dictation does; the tray is the one place that is
+/// always reachable to stop it. A running recording's line replaces the idle status line.
+/// </description></item>
 /// </list>
 /// </summary>
 public static class MenuSections
@@ -58,9 +74,34 @@ public static class MenuSections
         DictationState state,
         bool isDictationReady,
         bool hasRecoveredText,
-        bool hasTakes)
+        bool hasTakes,
+        MeetingRecordingState recordingState = MeetingRecordingState.Idle,
+        bool canRecord = false,
+        bool supportsSystemAudio = false)
     {
-        var sections = new List<IReadOnlyList<MenuRow>> { new[] { MenuRow.StatusLine } };
+        var sections = new List<IReadOnlyList<MenuRow>>();
+        if (state != DictationState.Idle || recordingState == MeetingRecordingState.Idle || hasRecoveredText)
+        {
+            sections.Add([MenuRow.StatusLine]);
+        }
+
+        switch (recordingState)
+        {
+            case MeetingRecordingState.Idle:
+                break;
+            case MeetingRecordingState.Starting:
+            case MeetingRecordingState.Stopping:
+                sections.Add([MenuRow.RecordingLine]);
+                break;
+            case MeetingRecordingState.Recording:
+                sections.Add([MenuRow.RecordingLine, MenuRow.PauseRecording, MenuRow.StopRecording]);
+                break;
+            case MeetingRecordingState.Paused:
+                sections.Add([MenuRow.RecordingLine, MenuRow.ResumeRecording, MenuRow.StopRecording]);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(recordingState));
+        }
 
         switch (state)
         {
@@ -89,6 +130,13 @@ public static class MenuSections
                     sections.Add([MenuRow.Takes, MenuRow.CopyTakes]);
                 }
 
+                if (recordingState == MeetingRecordingState.Idle && canRecord)
+                {
+                    sections.Add(supportsSystemAudio
+                        ? [MenuRow.StartRecording, MenuRow.StartVoiceNote]
+                        : [MenuRow.StartRecording]);
+                }
+
                 break;
 
             default:
@@ -98,4 +146,46 @@ public static class MenuSections
         sections.Add([MenuRow.Settings, MenuRow.Quit]);
         return sections;
     }
+
+    /// <summary>
+    /// The words on a recording row. The start and stop rows carry the shortcut that does the
+    /// same - written into the title, as no tray menu here can show a global chord.
+    /// </summary>
+    /// <param name="isDegraded">The other side is not arriving (<see cref="CaptureHealth"/>).</param>
+    /// <param name="microphoneMissing">The microphone is not arriving.</param>
+    public static string RecordingTitle(
+        MenuRow row,
+        MeetingRecordingState recordingState,
+        TimeSpan duration,
+        string? shortcut = null,
+        bool isDegraded = false,
+        bool microphoneMissing = false) => row switch
+    {
+        MenuRow.RecordingLine => recordingState switch
+        {
+            MeetingRecordingState.Starting => "Starting recording…",
+            MeetingRecordingState.Stopping => "Saving recording…",
+            _ => RecordingLine(recordingState == MeetingRecordingState.Paused, duration, isDegraded, microphoneMissing),
+        },
+        MenuRow.StartRecording => WithShortcut("Record", shortcut),
+        MenuRow.StartVoiceNote => "Record Voice Note",
+        MenuRow.PauseRecording => "Pause Recording",
+        MenuRow.ResumeRecording => "Resume Recording",
+        MenuRow.StopRecording => WithShortcut("Stop Recording", shortcut),
+        _ => throw new ArgumentOutOfRangeException(nameof(row)),
+    };
+
+    /// <summary>Upstream <c>MenuBarStatus.recordingLine</c>.</summary>
+    private static string RecordingLine(bool isPaused, TimeSpan duration, bool isDegraded, bool microphoneMissing)
+    {
+        string line = $"{(isPaused ? "Paused" : "Recording")} — {RecordingTime.Clock(duration)}";
+        if (isPaused) { return line; }
+        if (microphoneMissing && isDegraded) { return line + " — nothing arriving"; }
+        if (microphoneMissing) { return line + " — not your microphone"; }
+        if (isDegraded) { return line + " — only your microphone"; }
+        return line;
+    }
+
+    private static string WithShortcut(string title, string? shortcut) =>
+        shortcut is null ? title : $"{title}   {shortcut}";
 }

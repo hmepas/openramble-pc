@@ -99,6 +99,7 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         ThemePicker.ItemsSource = AppAppearances.AllCases.Select(appearance => appearance.Title).ToArray();
         HistoryLimitPicker.ItemsSource = HistoryLimits.Select(count => $"Last {count}").ToArray();
         LastTakeShortcutRecorder.Keymap = LinuxShortcutKeymap.Instance;
+        RecordingShortcutRecorder.Keymap = LinuxShortcutKeymap.Instance;
         VersionText.Text = Version();
 
         HotkeyPicker.SelectionChanged += (_, _) => Pick(HotkeyPicker, DictationHotkeyInfo.AllCases, hotkey => state.Hotkey = hotkey);
@@ -109,6 +110,8 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
         LastTakeShortcutRecorder.ShortcutChanged += shortcut => state.LastTakeShortcut = shortcut;
         LastTakeShortcutRecorder.ProblemChanged += _ => RenderLastTakeProblem();
+        RecordingShortcutRecorder.ShortcutChanged += shortcut => state.RecordingShortcut = shortcut;
+        RecordingShortcutRecorder.ProblemChanged += _ => RenderRecordingProblem();
 
         Toggle(LaunchToggle, on => state.LaunchAtLogin = on);
         Toggle(TrailingSpaceToggle, on => state.AppendsTrailingSpace = on);
@@ -194,6 +197,14 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         LastTakeShortcutProblem.IsVisible = problem is not null;
     }
 
+    private void RenderRecordingProblem()
+    {
+        string? problem = RecordingShortcutRecorder.Problem ?? state.RecordingShortcutWarning;
+        RecordingShortcutProblem.Text = problem ?? string.Empty;
+        RecordingShortcutProblem.Foreground = StatusBrushes.Attention;
+        RecordingShortcutProblem.IsVisible = problem is not null;
+    }
+
     private void RenderGeneral()
     {
         HotkeyPicker.SelectedIndex = DictationHotkeyInfo.AllCases.ToList().IndexOf(state.Hotkey);
@@ -205,6 +216,10 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         LastTakeShortcutRecorder.Shortcut = state.LastTakeShortcut;
         Changed(RevertLastTakeShortcut, state.LastTakeShortcut != state.DefaultLastTakeShortcut);
         RenderLastTakeProblem();
+
+        RecordingShortcutRecorder.Shortcut = state.RecordingShortcut;
+        Changed(RevertRecordingShortcut, state.RecordingShortcut != state.DefaultRecordingShortcut);
+        RenderRecordingProblem();
 
         LaunchToggle.IsChecked = state.LaunchAtLogin;
         Changed(RevertLaunch, state.LaunchAtLogin != SettingsDefaults.LaunchAtLogin);
@@ -351,6 +366,8 @@ public sealed partial class SettingsWindow : Window, IDictationSink
     private void OnRevertHotkey(object? sender, RoutedEventArgs args) => state.Hotkey = SettingsDefaults.Hotkey;
 
     private void OnRevertLastTakeShortcut(object? sender, RoutedEventArgs args) => state.LastTakeShortcut = state.DefaultLastTakeShortcut;
+
+    private void OnRevertRecordingShortcut(object? sender, RoutedEventArgs args) => state.RecordingShortcut = state.DefaultRecordingShortcut;
 
     private void OnRevertLaunch(object? sender, RoutedEventArgs args) => state.LaunchAtLogin = SettingsDefaults.LaunchAtLogin;
 

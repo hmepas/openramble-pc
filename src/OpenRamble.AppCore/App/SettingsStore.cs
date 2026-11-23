@@ -29,6 +29,12 @@ public sealed record AppSettings
     /// </remarks>
     public string? CopyShortcut { get; init; }
 
+    /// <summary>
+    /// The chord that starts and stops a recording, stored as <see cref="KeyCombination.RawValue"/>;
+    /// <c>null</c> - never chosen, so the platform's default; empty or unparsable - cleared.
+    /// </summary>
+    public string? RecordingShortcut { get; init; }
+
     /// <summary>End every dictation with a space. For dictating in runs.</summary>
     public bool AppendsTrailingSpace { get; init; }
 

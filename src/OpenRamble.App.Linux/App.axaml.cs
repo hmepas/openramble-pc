@@ -44,6 +44,7 @@ public sealed partial class App : Application
     private LinuxSystemEventSource? systemEvents;
     private EvdevKeyboardMonitor? hotkeys;
     private EvdevShortcutMonitor? copyShortcut;
+    private EvdevShortcutMonitor? recordingShortcut;
     private ControlSocketServer? control;
     private OverlayWindow? overlay;
     private PipeWireCapture? capture;
@@ -98,10 +99,13 @@ public sealed partial class App : Application
         // worth of comparison. A compositor keybind driving the control socket cannot press it -
         // see IRawKeySource.
         var chord = new EvdevShortcutMonitor(monitor);
+        // A second subscriber on the same keyboard reader, not a second reader.
+        var recordChord = new EvdevShortcutMonitor(monitor);
         var panel = new OverlayWindow();
         systemEvents = events;
         hotkeys = monitor;
         copyShortcut = chord;
+        recordingShortcut = recordChord;
         overlay = panel;
 
         AppPaths paths = AppPaths.Standard();
@@ -129,6 +133,9 @@ public sealed partial class App : Application
             // Ctrl+Alt+V rather than upstream's Control-Command-V: Super+letter is where keyd
             // setups put copy/paste remaps, and a remapped chord never arrives. 47 is KEY_V.
             DefaultLastTakeShortcut = new KeyCombination(47, HotkeyModifiers.Control | HotkeyModifiers.Alt),
+            RecordingShortcutMonitor = recordChord,
+            // Ctrl+Alt+R for upstream's Control-Command-R, for the same reason. 19 is KEY_R.
+            DefaultRecordingShortcut = new KeyCombination(19, HotkeyModifiers.Control | HotkeyModifiers.Alt),
             ShortcutKeymap = LinuxShortcutKeymap.Instance,
             InputDevices = new PipeWireInputDevices(),
             // Our own windows are XWayland, where wtype's keymap does not apply; they take the
@@ -243,7 +250,9 @@ public sealed partial class App : Application
         };
         built.PropertyChanged += (_, args) =>
         {
-            Dispatcher.UIThread.Post(RefreshTray);
+            // The meters tick ten times a second and the menu shows none of them; rebuilding the
+            // exported menu that often is a bus storm for nothing.
+            if (args.PropertyName != nameof(AppState.LiveLevels)) { Dispatcher.UIThread.Post(RefreshTray); }
             // The panel is the only thing on screen while a dictation finishes, and a reload that
             // rides under the person's voice is the one thing that can keep it there for a minute.
             // Push it in as it ticks: nothing else redraws the panel between the key release and
@@ -297,6 +306,8 @@ public sealed partial class App : Application
         control = null;
         copyShortcut?.Dispose();
         copyShortcut = null;
+        recordingShortcut?.Dispose();
+        recordingShortcut = null;
         hotkeys?.Dispose();
         capture?.Dispose();
         if (tray is not null)
@@ -429,9 +440,15 @@ public sealed partial class App : Application
     {
         if (state is null || lifetime is null) { return; }
 
-        TrayActivity activity = TrayStatus.Activity(state.DictationStateValue);
+        TrayActivity activity = TrayStatus.Activity(
+            state.DictationStateValue,
+            state.RecordingState == MeetingRecordingState.Recording);
         bool needsAttention = TrayStatus.SetupNeedsUserAction(state.MicrophoneState, state.ModelStateValue);
-        TrayBadge badge = TrayStatus.Badge(activity, needsAttention);
+        TrayBadge badge = TrayStatus.Badge(
+            activity,
+            needsAttention,
+            state.RecordingState == MeetingRecordingState.Recording
+                && (state.LiveCaptureHealth.MarksRecordingDegraded || state.LiveMicrophoneHealth.MarksRecordingDegraded));
 
         if (tray is null)
         {
@@ -508,7 +525,10 @@ public sealed partial class App : Application
             state.DictationStateValue,
             state.IsDictationReady,
             state.RecoveredText is not null,
-            state.MenuTakes.Count > 0);
+            state.MenuTakes.Count > 0,
+            state.RecordingState,
+            state.CanRecord,
+            state.SupportsSystemAudio);
 
         foreach (IReadOnlyList<MenuRow> section in sections)
         {
@@ -561,10 +581,28 @@ public sealed partial class App : Application
                 "Copy",
                 current.MenuTakes.Select(take =>
                     Item(current.TakeMenuTitle(take, isLastTake: false), () => current.CopyRecentDictation(take)))),
+            MenuRow.RecordingLine => Item(RecordingTitle(row), null),
+            MenuRow.StartRecording => Item(RecordingTitle(row), () => _ = current.StartRecording(includeSystemAudio: true)),
+            MenuRow.StartVoiceNote => Item(RecordingTitle(row), () => _ = current.StartRecording(includeSystemAudio: false)),
+            MenuRow.PauseRecording => Item(RecordingTitle(row), () => _ = current.PauseRecording()),
+            MenuRow.ResumeRecording => Item(RecordingTitle(row), () => _ = current.ResumeRecording()),
+            MenuRow.StopRecording => Item(RecordingTitle(row), () => _ = current.StopRecording()),
             MenuRow.Settings => Item("Settings…", ShowSettings),
             MenuRow.Quit => Item("Quit OpenRamble", () => lifetime?.Shutdown()),
             _ => Item(string.Empty, null),
         };
+    }
+
+    private string RecordingTitle(MenuRow row)
+    {
+        AppState current = state!;
+        return MenuSections.RecordingTitle(
+            row,
+            current.RecordingState,
+            current.LiveDuration,
+            current.RecordingShortcutDisplay,
+            current.LiveCaptureHealth.MarksRecordingDegraded,
+            current.LiveMicrophoneHealth.MarksRecordingDegraded);
     }
 
     /// <summary>

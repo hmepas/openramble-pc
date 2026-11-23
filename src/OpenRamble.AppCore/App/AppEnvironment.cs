@@ -36,6 +36,22 @@ public sealed class AppEnvironment
     public KeyCombination? DefaultLastTakeShortcut { get; init; }
 
     /// <summary>
+    /// Watches for the chord that starts and stops a recording. A second subscriber on the same
+    /// key source as <see cref="LastTakeShortcutMonitor"/>, not a second keyboard reader.
+    /// Optional: a platform without one has no recording shortcut.
+    /// </summary>
+    public IShortcutMonitoring? RecordingShortcutMonitor { get; init; }
+
+    /// <summary>
+    /// The start/stop-recording chord a person gets before choosing one, in this platform's key
+    /// codes; <c>null</c> - none until chosen. Upstream's is Control-Command-R.
+    /// </summary>
+    public KeyCombination? DefaultRecordingShortcut { get; init; }
+
+    /// <summary>Encodes a recording's audio for export; <c>null</c> - <c>ffmpeg</c> on <c>PATH</c>.</summary>
+    public MeetingAudioExporter? AudioExporter { get; init; }
+
+    /// <summary>
     /// How long the dictation key is held over waiting words before it means "dictate again"
     /// rather than "do what the panel says". Test-only override; <c>null</c> - 600 ms, as upstream.
     /// </summary>
@@ -191,7 +207,8 @@ public sealed class AppEnvironment
     public Func<bool>? KeydFoldsRightModifiers { get; init; }
 
     /// <summary>
-    /// Why a paste-last-take chord would never arrive because a key remapper rewrites it, or
+    /// Why a global chord (paste last take, start/stop recording) would never arrive because a key
+    /// remapper rewrites it, or
     /// <c>null</c> when nothing does. <c>null</c> itself answers nothing: only Linux has keyd.
     /// </summary>
     public Func<KeyCombination, string?>? LastTakeShortcutRewrite { get; init; }

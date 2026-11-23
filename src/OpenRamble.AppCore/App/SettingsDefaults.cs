@@ -10,13 +10,13 @@ namespace OpenRamble.AppCore;
 /// never chose.
 /// </summary>
 /// <remarks>
-/// The macOS list also carries <c>presence</c> (menu bar, Dock, or both) and a default
-/// recording shortcut. Neither exists here: a PC tray application has no Dock to move to, and
-/// the recorder is not part of this port.
+/// The macOS list also carries <c>presence</c> (menu bar, Dock, or both), which does not exist
+/// here: a PC tray application has no Dock to move to.
 ///
-/// The paste-last-take chord is not here either: a key code is a platform's number, so its default
-/// comes from the composition root (<see cref="AppEnvironment.DefaultLastTakeShortcut"/>) and the
-/// revert arrow reads it back from <see cref="AppState.DefaultLastTakeShortcut"/>.
+/// The paste-last-take and recording chords are not here either: a key code is a platform's
+/// number, so their defaults come from the composition root
+/// (<see cref="AppEnvironment.DefaultLastTakeShortcut"/>, <see cref="AppEnvironment.DefaultRecordingShortcut"/>)
+/// and the revert arrows read them back from <see cref="AppState"/>.
 /// </remarks>
 public static class SettingsDefaults
 {

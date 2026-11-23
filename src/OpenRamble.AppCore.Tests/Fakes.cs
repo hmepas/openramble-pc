@@ -855,6 +855,15 @@ public sealed class AppHarness : IDisposable
 
     public FakeShortcutMonitor CopyMonitor { get; } = new();
 
+    /// <summary>The recording chord's watcher.</summary>
+    public FakeShortcutMonitor RecordMonitor { get; } = new();
+
+    /// <summary>The platform's recording chord; none unless a test gives one.</summary>
+    public KeyCombination? DefaultRecordingShortcut { get; set; }
+
+    /// <summary>The audio export; <c>null</c> - the real one on <c>PATH</c>.</summary>
+    public MeetingAudioExporter? AudioExporter { get; set; }
+
     public FakeInputDevices InputDevices { get; } = new();
 
     /// <summary>
@@ -977,6 +986,9 @@ public sealed class AppHarness : IDisposable
             Permissions = Permissions,
             HotkeyMonitor = Monitor,
             LastTakeShortcutMonitor = CopyMonitor,
+            RecordingShortcutMonitor = RecordMonitor,
+            DefaultRecordingShortcut = DefaultRecordingShortcut,
+            AudioExporter = AudioExporter,
             InputDevices = InputDevices,
             MonotonicNow = () => MonotonicNow,
             Inserter = Inserter,

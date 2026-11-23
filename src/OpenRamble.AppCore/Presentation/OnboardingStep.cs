@@ -55,6 +55,19 @@ public static class OnboardingStepInfo
         /// <summary>Caption of the forward button.</summary>
         public string NextButtonTitle => step.IsLast ? "Done" : "Continue";
 
+        /// <summary>
+        /// Leaving the welcome step starts the one download (upstream 0.33): it runs while the
+        /// person grants the rest, instead of waiting for a second press on the setup list.
+        /// </summary>
+        public bool DownloadsOnContinue(ModelState modelState) =>
+            step == OnboardingStep.Welcome && modelState is ModelState.NotInstalled;
+
+        /// <summary>The forward button says what it costs before it is pressed.</summary>
+        public string ContinueTitle(ModelState modelState, int downloadMegabytes) =>
+            step.DownloadsOnContinue(modelState)
+                ? $"Continue and download {downloadMegabytes} MB"
+                : step.NextButtonTitle;
+
         public string ProgressText => $"{(int)step + 1} of {AllCases.Count}";
 
         /// <summary>

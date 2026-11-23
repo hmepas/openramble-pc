@@ -8,6 +8,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using OpenRamble.App.Linux.Controls;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using DictationCore;
@@ -34,7 +35,8 @@ namespace OpenRamble.App.Linux;
 /// </remarks>
 public sealed partial class LibraryWindow : Window, IDictationSink
 {
-    private const string SerifFamily = "Georgia, Noto Serif, DejaVu Serif, Liberation Serif, serif";
+    /// <summary>How many recent peaks a record-bar meter draws.</summary>
+    private const int MeterBars = 24;
 
     /// <summary>What the file picker offers (upstream: any audio or movie type).</summary>
     private static readonly string[] ImportPatterns =
@@ -61,6 +63,9 @@ public sealed partial class LibraryWindow : Window, IDictationSink
 
     /// <summary>The pinned live row's state and time, rewritten in place once a second.</summary>
     private (ListBoxItem Row, Ellipse Dot, TextBlock State, TextBlock Time)? liveRow;
+
+    /// <summary>Each side's recent peaks, oldest first, for the record bar's meters.</summary>
+    private readonly Queue<float> youLevels = new(), othersLevels = new();
 
     /// <summary>The ids selected, kept across rebuilds of the list.</summary>
     private HashSet<Guid> selection = [];
@@ -175,31 +180,37 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         return listed.Count == 0 ? RecordingsPlaceholder.NothingFound : RecordingsPlaceholder.NothingSelected;
     }
 
-    private static Control PlaceholderView(RecordingsPlaceholder placeholder) => new StackPanel
+    private static Control PlaceholderView(RecordingsPlaceholder placeholder)
     {
-        HorizontalAlignment = HorizontalAlignment.Center,
-        VerticalAlignment = VerticalAlignment.Center,
-        MaxWidth = 360,
-        Spacing = 6,
-        Children =
+        LucideIcon inbox = LibraryLook.Icon("IconInbox", 28);
+        inbox.HorizontalAlignment = HorizontalAlignment.Center;
+        ThemeTokens.Bind(inbox, LucideIcon.ForegroundProperty, ThemeTokens.Label3);
+        return new StackPanel
         {
-            new TextBlock
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            MaxWidth = 380,
+            Spacing = 10,
+            Children =
             {
-                Text = placeholder.Title,
-                FontSize = 17,
-                FontWeight = FontWeight.SemiBold,
-                Foreground = Brushes.Gray,
-                HorizontalAlignment = HorizontalAlignment.Center,
+                inbox,
+                new TextBlock
+                {
+                    Classes = { "display26" },
+                    Text = placeholder.Title,
+                    TextAlignment = TextAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                },
+                new TextBlock
+                {
+                    Classes = { "body" },
+                    Text = placeholder.Detail,
+                    TextWrapping = TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Center,
+                },
             },
-            new TextBlock
-            {
-                Text = placeholder.Detail,
-                Foreground = Brushes.Gray,
-                TextWrapping = TextWrapping.Wrap,
-                TextAlignment = TextAlignment.Center,
-            },
-        },
-    };
+        };
+    }
 
     // MARK: - Live updates
 
@@ -220,6 +231,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
                     break;
                 case nameof(AppState.LiveLevels):
                     // Ten times a second: the meters and nothing else.
+                    PushLevels();
                     RenderMeters();
                     return;
                 case nameof(AppState.LiveDuration):
@@ -338,55 +350,58 @@ public sealed partial class LibraryWindow : Window, IDictationSink
 
     private static ListBoxItem DayRow(string title) => new()
     {
-        Classes = { "day" },
+        Classes = { "dayHeader" },
         IsEnabled = false,
         Focusable = false,
-        Content = new TextBlock { Text = title, FontWeight = FontWeight.SemiBold, FontSize = 12, Foreground = Brushes.Gray },
+        Content = new TextBlock { Classes = { "small" }, Text = title, FontWeight = FontWeight.Medium },
     };
+
+    /// <summary>A row: the disc saying what it is, then its lines.</summary>
+    private static Grid RowLayout(string iconKey, Control lines)
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("30,*") };
+        grid.Children.Add(LibraryLook.RowDisc(iconKey));
+        lines.Margin = new Thickness(10, 0, 0, 0);
+        Grid.SetColumn(lines, 1);
+        grid.Children.Add(lines);
+        return grid;
+    }
+
+    /// <summary>The time, and a small star when kept: the second line of a row.</summary>
+    private static StackPanel TimeLine(TextBlock time, bool kept)
+    {
+        var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, Children = { time } };
+        if (kept)
+        {
+            LucideIcon star = LibraryLook.Icon("IconStar", 9);
+            star.Foreground = StatusBrushes.Attention;
+            ToolTip.SetTip(star, "Kept");
+            line.Children.Add(star);
+        }
+
+        return line;
+    }
 
     private ListBoxItem DictationRow(LibraryItem.Dictation item)
     {
         HistoryEntry entry = item.Entry;
         bool hasWords = entry.Text.Length > 0;
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto") };
         var words = new TextBlock
         {
+            Classes = { "words14" },
             Text = hasWords ? FirstWords(entry.Text) : "Nothing recognized",
-            FontFamily = new FontFamily(SerifFamily),
-            FontSize = 14,
             FontStyle = hasWords ? FontStyle.Normal : FontStyle.Italic,
+            MaxLines = 2,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            VerticalAlignment = VerticalAlignment.Center,
         };
-        // Only the wordless row is grey. Assigning null instead would not mean "inherit": it would
-        // set no brush at all, and the words would be drawn invisible.
-        if (!hasWords)
-        {
-            words.Foreground = Brushes.Gray;
-        }
-        grid.Children.Add(words);
+        // Only the wordless row is grey.
+        if (!hasWords) { ThemeTokens.Bind(words, TextBlock.ForegroundProperty, ThemeTokens.Label2); }
         var time = new TextBlock
         {
-            Classes = { "secondary" },
+            Classes = { "small", "tnum" },
             Text = entry.Date.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture),
-            Margin = new Thickness(8, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center,
         };
-        Grid.SetColumn(time, 1);
-        grid.Children.Add(time);
-        if (entry.IsKept)
-        {
-            var star = new TextBlock
-            {
-                Text = "★",
-                Foreground = StatusBrushes.Attention,
-                Margin = new Thickness(6, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            ToolTip.SetTip(star, "Kept");
-            Grid.SetColumn(star, 2);
-            grid.Children.Add(star);
-        }
+        Grid grid = RowLayout("IconQuote", new StackPanel { Spacing = 2, Children = { words, TimeLine(time, entry.IsKept) } });
 
         var copy = new MenuItem { Header = "Copy", IsEnabled = hasWords };
         copy.Click += (_, _) => state.CopyHistoryEntry(entry);
@@ -397,6 +412,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
 
         var row = new ListBoxItem
         {
+            Classes = { "libraryRow" },
             Content = grid,
             Tag = item,
             ContextMenu = new ContextMenu { ItemsSource = new Control[] { copy, keep, new Separator(), delete } },
@@ -412,32 +428,38 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         top.Children.Add(new TextBlock
         {
+            Classes = { "words14" },
             Text = recording.Title ?? kind,
-            FontFamily = new FontFamily(SerifFamily),
-            FontSize = 14,
+            TextWrapping = TextWrapping.NoWrap,
             TextTrimming = TextTrimming.CharacterEllipsis,
         });
-        var duration = new TextBlock { Classes = { "secondary" }, Text = Clock(recording.Duration), Margin = new Thickness(8, 0, 0, 0) };
+        var duration = new TextBlock { Classes = { "detail", "tnum" }, Text = Clock(recording.Duration), Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(duration, 1);
         top.Children.Add(duration);
 
         string start = TimeZoneInfo.ConvertTime(recording.StartedAt, TimeZoneInfo.Local)
             .ToString(showsSeconds ? "HH:mm:ss" : "HH:mm", CultureInfo.InvariantCulture);
-        var status = new TextBlock { Classes = { "secondary" }, Text = start, Tag = start, TextTrimming = TextTrimming.CharacterEllipsis };
+        var status = new TextBlock { Classes = { "small", "tnum" }, Text = start, Tag = start, TextTrimming = TextTrimming.CharacterEllipsis };
         statusLines[recording.Id] = status;
 
         var stack = new StackPanel { Spacing = 2, Children = { top, status } };
         if (recording is LibraryRecording { Metadata: { } metadata }
             && (RecordingsPlaceholder.EndNote(metadata.EndReason) ?? RecordingsPlaceholder.DegradedNote(metadata)) is { } warning)
         {
-            stack.Children.Add(new TextBlock
+            LucideIcon alert = LibraryLook.Icon("IconTriangleAlert", 11);
+            alert.Foreground = StatusBrushes.Attention;
+            alert.VerticalAlignment = VerticalAlignment.Top;
+            alert.Margin = new Thickness(0, 1, 5, 0);
+            var text = new TextBlock
             {
-                Text = "⚠ " + warning,
+                Text = warning,
                 FontSize = 11,
                 Foreground = StatusBrushes.Attention,
                 TextWrapping = TextWrapping.Wrap,
                 MaxLines = 2,
-            });
+            };
+            DockPanel.SetDock(alert, Dock.Left);
+            stack.Children.Add(new DockPanel { Children = { alert, text } });
         }
 
         var rename = new MenuItem { Header = "Rename…" };
@@ -456,9 +478,11 @@ public sealed partial class LibraryWindow : Window, IDictationSink
 
         menu.AddRange([new Separator(), trash]);
 
+        string icon = recording.Kind is RecordingKind.ScreenRecording ? "IconMonitor" : "IconMic";
         var row = new ListBoxItem
         {
-            Content = stack,
+            Classes = { "libraryRow" },
+            Content = RowLayout(icon, stack),
             Tag = item,
             ContextMenu = new ContextMenu { ItemsSource = menu },
         };
@@ -472,8 +496,8 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     private ListBoxItem LiveRow(LibraryItem item)
     {
         var dot = new Ellipse { Width = 8, Height = 8, VerticalAlignment = VerticalAlignment.Center };
-        var label = new TextBlock { FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center };
-        var time = new TextBlock { Classes = { "secondary" }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+        var label = new TextBlock { FontSize = 14, FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center };
+        var time = new TextBlock { Classes = { "clock" }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
         label.Margin = new Thickness(8, 0, 0, 0);
         grid.Children.Add(dot);
@@ -481,7 +505,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         grid.Children.Add(label);
         Grid.SetColumn(time, 2);
         grid.Children.Add(time);
-        var row = new ListBoxItem { Content = grid, Tag = item, Padding = new Thickness(10, 10) };
+        var row = new ListBoxItem { Classes = { "libraryRow" }, Content = grid, Tag = item, Padding = new Thickness(10, 10) };
         liveRow = (row, dot, label, time);
         RenderLiveRow();
         return row;
@@ -491,7 +515,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     {
         if (liveRow is not { } live) { return; }
         bool paused = state.RecordingState == MeetingRecordingState.Paused;
-        live.Dot.Fill = paused ? Brushes.Gray : StatusBrushes.Recording;
+        live.Dot.Fill = paused ? ThemeTokens.BrushOf(this, ThemeTokens.Label3) : StatusBrushes.Recording;
         live.State.Text = paused ? "Paused" : "Recording";
         live.Time.Text = RecordingTime.Clock(state.LiveDuration);
         AutomationProperties.SetName(live.Row, paused ? "Recording, paused" : "Recording");
@@ -592,21 +616,29 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         string clock = RecordingTime.Clock(state.LiveDuration);
 
         LiveStatusPanel.IsVisible = recording != MeetingRecordingState.Idle;
-        LiveDot.IsVisible = live;
-        LiveDot.Fill = paused ? Brushes.Gray : StatusBrushes.Recording;
+        // The red disc only while the microphone is live; a ring when paused, starting or saving.
+        LiveDot.Kind = recording == MeetingRecordingState.Recording ? StateGlyphKind.Listening : StateGlyphKind.Silent;
         LiveStatus.Text = recording switch
         {
             MeetingRecordingState.Starting => "Starting…",
-            MeetingRecordingState.Recording => "Recording — " + clock,
-            MeetingRecordingState.Paused => "Paused — " + clock,
+            MeetingRecordingState.Recording => "Recording",
+            MeetingRecordingState.Paused => "Paused",
             MeetingRecordingState.Stopping => "Saving…",
             _ => string.Empty,
         };
+        LiveClock.Text = clock;
+        LiveClock.IsVisible = live;
+        if (!live)
+        {
+            youLevels.Clear();
+            othersLevels.Clear();
+        }
+
         LiveMeters.IsVisible = live;
         OthersMeterPanel.IsVisible = state.LiveRecording?.IsMeeting == true;
 
         PauseButton.IsVisible = live;
-        PauseButton.Content = paused ? "Resume" : "Pause";
+        PauseIcon.Data = LibraryLook.Geometry(paused ? "IconPlay" : "IconPause");
         string pauseTip = paused ? "Resume recording" : "Pause recording";
         ToolTip.SetTip(PauseButton, pauseTip);
         AutomationProperties.SetName(PauseButton, pauseTip);
@@ -614,6 +646,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         // Record, then Stop in the same place; nothing to press while it starts or saves.
         RecordButton.IsVisible = recording is MeetingRecordingState.Idle || live;
         RecordDot.IsVisible = !live;
+        StopIcon.IsVisible = live;
         RecordDot.Fill = StatusBrushes.Recording;
         RecordLabel.Text = live ? "Stop" : "Record";
         bool microphoneOnly = !state.SupportsSystemAudio || MicOnlyToggle.IsChecked == true;
@@ -627,24 +660,37 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         RenderMeters();
     }
 
-    /// <summary>One meter per side; a side that is not arriving is drawn in the warning colour.</summary>
-    private void RenderMeters()
+    /// <summary>Ten times a second: each side's newest peak joins its meter, the oldest leaves.</summary>
+    private void PushLevels()
     {
         MeetingCapture.Levels levels = state.LiveLevels;
-        YouMeter.Value = Meter(levels.Microphone);
-        OthersMeter.Value = Meter(levels.System);
-        Degraded(YouMeter, state.LiveMicrophoneHealth.MarksRecordingDegraded);
-        Degraded(OthersMeter, state.LiveCaptureHealth.MarksRecordingDegraded);
+        Push(youLevels, levels.Microphone);
+        Push(othersLevels, levels.System);
     }
 
-    /// <summary>Peaks are linear; the square root lets ordinary speech reach the middle of the bar.</summary>
-    private static double Meter(float peak) => Math.Sqrt(Math.Clamp(peak, 0f, 1f));
-
-    private static void Degraded(ProgressBar meter, bool degraded)
+    private static void Push(Queue<float> levels, float peak)
     {
-        if (degraded) { meter.Foreground = StatusBrushes.Attention; }
-        else { meter.ClearValue(ForegroundProperty); }
+        levels.Enqueue(Math.Clamp(peak, 0f, 1f));
+        while (levels.Count > MeterBars) { levels.Dequeue(); }
     }
+
+    /// <summary>
+    /// One meter per side: accent while it arrives, the warning colour when it is not arriving,
+    /// grey while paused.
+    /// </summary>
+    private void RenderMeters()
+    {
+        bool paused = state.RecordingState == MeetingRecordingState.Paused;
+        YouMeter.Samples = [.. youLevels];
+        OthersMeter.Samples = [.. othersLevels];
+        Colour(YouMeter, state.LiveMicrophoneHealth.MarksRecordingDegraded, paused);
+        Colour(OthersMeter, state.LiveCaptureHealth.MarksRecordingDegraded, paused);
+    }
+
+    private void Colour(LevelWaveform meter, bool degraded, bool paused) =>
+        meter.Foreground = degraded ? StatusBrushes.Attention
+            : paused ? null
+            : ThemeTokens.BrushOf(this, ThemeTokens.Accent);
 
     private void OnRecord(object? sender, RoutedEventArgs args)
     {

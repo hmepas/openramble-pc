@@ -1,12 +1,15 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+        xmlns:c="clr-namespace:OpenRamble.App.Linux"
+        xmlns:ic="clr-namespace:OpenRamble.App.Linux.Controls"
         x:Class="OpenRamble.App.Linux.LibraryWindow"
         Title="Library"
         Width="1000"
         Height="680"
         MinWidth="860"
         MinHeight="560"
+        Background="{DynamicResource WindowBackground}"
         WindowStartupLocation="CenterScreen"
         DragDrop.AllowDrop="True">
 
@@ -15,66 +18,75 @@
     the right. The whole window takes a dropped file - nobody aims a drag at a button.
   -->
   <Window.Styles>
-    <Style Selector="TextBlock.secondary">
-      <Setter Property="Foreground" Value="Gray" />
-      <Setter Property="FontSize" Value="12" />
+    <!-- The quiet look for toggles too (Keep in the dictation pane). -->
+    <Style Selector="ToggleButton.quiet">
+      <Setter Property="Theme" Value="{StaticResource QuietButtonTheme}" />
     </Style>
-    <Style Selector="Button.tool">
-      <Setter Property="Padding" Value="10,4" />
-      <Setter Property="Margin" Value="6,0,0,0" />
-      <Setter Property="MinHeight" Value="30" />
-    </Style>
-    <Style Selector="ListBoxItem.day">
-      <Setter Property="Padding" Value="10,12,10,2" />
+    <Style Selector="Button.icon.round40">
+      <Setter Property="Width" Value="40" />
+      <Setter Property="Height" Value="40" />
     </Style>
   </Window.Styles>
 
   <Panel>
     <DockPanel>
       <!-- The toolbar: the record bar; Import, Open folder, Copy, Trash. -->
-      <Border DockPanel.Dock="Top" BorderBrush="#33808080" BorderThickness="0,0,0,1" Padding="10,8">
+      <Border DockPanel.Dock="Top" BorderBrush="{DynamicResource Hairline}" BorderThickness="0,0,0,1" Padding="16,10">
         <DockPanel>
-        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
-          <Button Classes="tool" x:Name="ImportButton" Click="OnImport"
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="2" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <Button Classes="icon" x:Name="ImportButton" Click="OnImport"
                   ToolTip.Tip="Import audio or video to transcribe"
                   automation:AutomationProperties.Name="Import Audio or Video…">
             <Panel>
-              <TextBlock x:Name="ImportLabel" Text="Import…" VerticalAlignment="Center" />
-              <ProgressBar x:Name="ImportSpinner" IsIndeterminate="True" IsVisible="False"
-                           MinWidth="48" Width="48" VerticalAlignment="Center" />
+              <ic:LucideIcon x:Name="ImportLabel" Data="{StaticResource IconDownload}" />
+              <ProgressBar x:Name="ImportSpinner" Classes="thin" IsIndeterminate="True" IsVisible="False"
+                           MinWidth="20" Width="20" VerticalAlignment="Center" />
             </Panel>
           </Button>
-          <Button Classes="tool" x:Name="RevealButton" Content="Open folder" Click="OnReveal"
-                  automation:AutomationProperties.Name="Open folder" />
-          <Button Classes="tool" x:Name="CopyButton" Content="Copy" Click="OnCopy" />
-          <Button Classes="tool" x:Name="TrashButton" Content="Trash" Click="OnTrash" />
+          <Button Classes="icon" x:Name="RevealButton" Click="OnReveal"
+                  automation:AutomationProperties.Name="Open folder">
+            <ic:LucideIcon Data="{StaticResource IconFolder}" />
+          </Button>
+          <Button Classes="icon" x:Name="CopyButton" Click="OnCopy">
+            <ic:LucideIcon Data="{StaticResource IconCopy}" />
+          </Button>
+          <Button Classes="icon" x:Name="TrashButton" Click="OnTrash">
+            <ic:LucideIcon Data="{StaticResource IconTrash2}" />
+          </Button>
         </StackPanel>
 
         <!--
           Upstream RecordBar.swift: Record (you and the other side, or only you), and while it runs
           the red dot, the time, a meter per side, Pause/Resume and Stop.
         -->
-        <StackPanel x:Name="RecordBar" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-          <StackPanel x:Name="LiveStatusPanel" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-            <Ellipse x:Name="LiveDot" Width="9" Height="9" VerticalAlignment="Center" />
-            <TextBlock x:Name="LiveStatus" VerticalAlignment="Center" />
-          </StackPanel>
-          <StackPanel x:Name="LiveMeters" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-              <TextBlock Classes="secondary" Text="You" VerticalAlignment="Center" />
-              <ProgressBar x:Name="YouMeter" Minimum="0" Maximum="1" Width="48" MinWidth="48" Height="6" MinHeight="6"
-                           VerticalAlignment="Center" automation:AutomationProperties.Name="Your level" />
-            </StackPanel>
-            <StackPanel x:Name="OthersMeterPanel" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-              <TextBlock Classes="secondary" Text="Others" VerticalAlignment="Center" />
-              <ProgressBar x:Name="OthersMeter" Minimum="0" Maximum="1" Width="48" MinWidth="48" Height="6" MinHeight="6"
-                           VerticalAlignment="Center" automation:AutomationProperties.Name="Other side's level" />
+        <StackPanel x:Name="RecordBar" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+          <StackPanel x:Name="LiveStatusPanel" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+            <c:StateGlyph x:Name="LiveDot" GlyphSize="24" VerticalAlignment="Center" />
+            <StackPanel VerticalAlignment="Center">
+              <TextBlock x:Name="LiveStatus" Classes="small" />
+              <TextBlock x:Name="LiveClock" Classes="tnum" FontSize="19" FontWeight="SemiBold" />
             </StackPanel>
           </StackPanel>
-          <Button x:Name="PauseButton" Content="Pause" Click="OnPauseResume" MinHeight="30" Padding="10,4" />
-          <Button x:Name="RecordButton" Click="OnRecord" MinHeight="30" Padding="10,4">
-            <StackPanel Orientation="Horizontal" Spacing="6">
+          <StackPanel x:Name="LiveMeters" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+              <TextBlock Classes="small" FontWeight="Medium" Text="You" VerticalAlignment="Center" />
+              <c:LevelWaveform x:Name="YouMeter" Width="76" Height="22" VerticalAlignment="Center"
+                               automation:AutomationProperties.Name="Your level" />
+            </StackPanel>
+            <StackPanel x:Name="OthersMeterPanel" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+              <TextBlock Classes="small" FontWeight="Medium" Text="Others" VerticalAlignment="Center" />
+              <c:LevelWaveform x:Name="OthersMeter" Width="76" Height="22" VerticalAlignment="Center"
+                               automation:AutomationProperties.Name="Other side's level" />
+            </StackPanel>
+          </StackPanel>
+          <Button x:Name="PauseButton" Classes="icon round40" Click="OnPauseResume" Background="{DynamicResource Fill}">
+            <ic:LucideIcon x:Name="PauseIcon" Data="{StaticResource IconPause}" />
+          </Button>
+          <Button x:Name="RecordButton" Classes="ink" Click="OnRecord">
+            <StackPanel Orientation="Horizontal" Spacing="8">
               <Ellipse x:Name="RecordDot" Width="9" Height="9" VerticalAlignment="Center" />
+              <ic:LucideIcon x:Name="StopIcon" Data="{StaticResource IconSquare}" Width="12" Height="12"
+                            VerticalAlignment="Center" />
               <TextBlock x:Name="RecordLabel" Text="Record" VerticalAlignment="Center" />
             </StackPanel>
           </Button>
@@ -86,17 +98,22 @@
 
       <Grid ColumnDefinitions="300,Auto,*">
         <DockPanel Grid.Column="0" MinWidth="240">
-          <StackPanel DockPanel.Dock="Top" Margin="10,10,10,6" Spacing="8">
+          <StackPanel DockPanel.Dock="Top" Margin="12,12,12,4" Spacing="8">
+            <TextBox x:Name="SearchBox" Classes="search" Watermark="Search what you said"
+                     automation:AutomationProperties.Name="Search what you said">
+              <TextBox.InnerLeftContent>
+                <ic:LucideIcon Data="{StaticResource IconSearch}" Width="14" Height="14"
+                              Foreground="{DynamicResource Label2}" Margin="10,0,0,0" />
+              </TextBox.InnerLeftContent>
+            </TextBox>
             <ComboBox x:Name="ScopePicker" HorizontalAlignment="Stretch"
                       automation:AutomationProperties.Name="Show" />
-            <TextBox x:Name="SearchBox" Watermark="Search what you said"
-                     automation:AutomationProperties.Name="Search what you said" />
           </StackPanel>
-          <ListBox x:Name="ItemList" SelectionMode="Multiple" Background="Transparent"
+          <ListBox x:Name="ItemList" SelectionMode="Multiple" Background="Transparent" Padding="6,0"
                    automation:AutomationProperties.Name="Library" />
         </DockPanel>
 
-        <GridSplitter Grid.Column="1" Width="1" Background="#33808080" ResizeDirection="Columns" />
+        <GridSplitter Grid.Column="1" Width="1" Background="{DynamicResource Hairline}" ResizeDirection="Columns" />
 
         <!-- The seam for the detail panes: the code sets Detail.Content from the selection. -->
         <ContentControl Grid.Column="2" x:Name="Detail" MinWidth="440"
@@ -105,14 +122,12 @@
     </DockPanel>
 
     <!-- Shown while a file is dragged over the window (upstream ImportDropOverlay). -->
-    <Border x:Name="DropOverlay" IsVisible="False" IsHitTestVisible="False"
-            Background="#CC202020" Margin="8" CornerRadius="10"
-            BorderBrush="#AAFFFFFF" BorderThickness="2">
-      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6">
-        <TextBlock Text="Drop to transcribe" FontSize="20" FontWeight="SemiBold" Foreground="White"
-                   HorizontalAlignment="Center" />
-        <TextBlock Text="Audio or video files are added to the Library." Foreground="#DDFFFFFF"
-                   HorizontalAlignment="Center" />
+    <Border x:Name="DropOverlay" IsVisible="False" IsHitTestVisible="False" Background="{DynamicResource WindowBackground}"
+            CornerRadius="{StaticResource RadiusSurface}" Margin="8" BorderBrush="{DynamicResource Accent}" BorderThickness="2">
+      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+        <ic:LucideIcon Data="{StaticResource IconDownload}" Width="28" Height="28" Foreground="{DynamicResource Label2}" />
+        <TextBlock Classes="display26" Text="Drop to transcribe" HorizontalAlignment="Center" />
+        <TextBlock Classes="body" Text="Audio or video files are added to the Library." HorizontalAlignment="Center" />
       </StackPanel>
     </Border>
   </Panel>

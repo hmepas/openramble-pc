@@ -13,6 +13,7 @@ namespace OpenRamble.LinuxInput.Tests;
 /// AppKit's provider, the main-thread turn and the layout's paste key have no counterpart here.
 /// </remarks>
 [Collection(LinuxInputCollection.Name)]
+[System.Runtime.Versioning.SupportedOSPlatform("linux")]
 public sealed class PasteReadReceiptTests : IDisposable
 {
     /// <summary>Past <c>InsertionPathPolicy.SynthesizedKeystrokeLimit</c>: the clipboard path.</summary>
@@ -20,11 +21,23 @@ public sealed class PasteReadReceiptTests : IDisposable
 
     private static readonly TimeSpan Floor = TimeSpan.FromMilliseconds(60);
 
-    private readonly string directory = Path.Combine(Path.GetTempPath(), $"openramble-receipts-{Guid.NewGuid():N}");
+    private const UnixFileMode Private = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+    /// <summary>Stands in for <c>$XDG_RUNTIME_DIR</c>: ours, and 0700.</summary>
+    private readonly string runtime = Path.Combine(Path.GetTempPath(), $"openramble-receipts-{Guid.NewGuid():N}");
+
+    /// <summary>Where the shim and the receipts go under it.</summary>
+    private readonly string directory;
+
+    public PasteReadReceiptTests()
+    {
+        Directory.CreateDirectory(runtime, Private);
+        directory = new PasteReadReceipts(runtime).Directory;
+    }
 
     public void Dispose()
     {
-        if (Directory.Exists(directory)) { Directory.Delete(directory, recursive: true); }
+        if (Directory.Exists(runtime)) { Directory.Delete(runtime, recursive: true); }
     }
 
     private LinuxTextInserter Inserter(
@@ -35,7 +48,7 @@ public sealed class PasteReadReceiptTests : IDisposable
             desktop,
             restoreDelay: TimeSpan.FromMilliseconds(60),
             reportRestoreFailure: reportRestoreFailure,
-            readReceipts: new PasteReadReceipts(directory),
+            readReceipts: new PasteReadReceipts(runtime),
             readFloor: Floor,
             readLimit: readLimit ?? TimeSpan.FromSeconds(3));
 
@@ -188,7 +201,7 @@ public sealed class PasteReadReceiptTests : IDisposable
     [Fact]
     public void TheShimNotesTheReadAndServesTheText()
     {
-        var receipts = new PasteReadReceipts(directory);
+        var receipts = new PasteReadReceipts(runtime);
         using Receipt receipt = receipts.Open()!;
         string text = Path.Combine(directory, "offer");
         File.WriteAllText(text, "served whole");
@@ -205,7 +218,7 @@ public sealed class PasteReadReceiptTests : IDisposable
     [Fact]
     public void TheShimDoesNotBringBackAReceiptThatIsGone()
     {
-        var receipts = new PasteReadReceipts(directory);
+        var receipts = new PasteReadReceipts(runtime);
         Receipt receipt = receipts.Open()!;
         string text = Path.Combine(directory, "offer");
         File.WriteAllText(text, "late");
@@ -213,6 +226,118 @@ public sealed class PasteReadReceiptTests : IDisposable
 
         Assert.Equal("late", RunCat(receipt.Environment, text));
         Assert.False(File.Exists(receipt.Path));
+    }
+
+    /// <summary>
+    /// Reads stop being seen after they were found to work - wl-clipboard upgraded, the shim gone.
+    /// A paste the target did read must not then be called unread: our own read finds no mark
+    /// either, so nothing is claimed, and later pastes take the fixed-delay restore.
+    /// </summary>
+    [Fact]
+    public async Task ReadsThatStopBeingSeenAreNotCalledUnread()
+    {
+        using var diagnostics = new DiagnosticRecorder();
+        var desktop = new FakeWaylandDesktop();
+        LinuxTextInserter inserter = Inserter(desktop, readLimit: TimeSpan.FromMilliseconds(300));
+        TargetApplication? target = inserter.FrontmostApplication();
+        Assert.NotNull((await inserter.InsertReportingMarks(Long, target)).FirstReadAt);
+
+        desktop.ServesThroughCat = false;
+        desktop.SomebodyCopies("theirs");
+        InsertionMarks marks = await inserter.InsertReportingMarks(Long, target);
+
+        Assert.Null(marks.FirstReadAt);
+        Assert.Equal("theirs", desktop.ClipboardText);
+        Assert.Contains(diagnostics.Lines, line => line.Contains("insert.read-receipts") && line.Contains("lost=true"));
+
+        // The fixed-delay restore from now on: no receipt goes to wl-copy.
+        await inserter.Insert(Long, target);
+        Assert.Null(desktop.Runs.Last(run => run.Executable == WaylandClipboard.Copy && run.Input == Long)
+            .Environment?.GetValueOrDefault(PasteReadReceipts.ReceiptVariable));
+    }
+
+    /// <summary>
+    /// A second insertion while the first still waits for its read does not start: the clipboard
+    /// and the read wait are the first one's until it is over.
+    /// </summary>
+    [Fact]
+    public async Task InsertionsDoNotOverlap()
+    {
+        var desktop = new FakeWaylandDesktop { TargetReadsPaste = false };
+        LinuxTextInserter inserter = Inserter(desktop, readLimit: TimeSpan.FromSeconds(30));
+        TargetApplication? target = inserter.FrontmostApplication();
+
+        Task first = inserter.Insert(Long, target);
+        Assert.True(Until.True(() => desktop.Pastes == 1));
+        Task second = inserter.Insert(Long, target);
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        Assert.Equal(1, desktop.Pastes);
+
+        // The press ends the first paste's wait, not the second's.
+        inserter.EndTheReadWait();
+        await Assert.ThrowsAsync<TextInsertionError.PasteNotRead>(() => first);
+        Assert.True(Until.True(() => desktop.Pastes == 2));
+        inserter.EndTheReadWait();
+        await Assert.ThrowsAsync<TextInsertionError.PasteNotRead>(() => second);
+    }
+
+    /// <summary>No runtime directory, or a relative one: no receipts at all, never a shared folder.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("run/user/1000")]
+    public void WithoutAPrivateRuntimeDirectoryThereAreNoReceipts(string? value) =>
+        Assert.Null(PasteReadReceipts.RuntimeDirectoryFrom(value));
+
+    /// <summary>A runtime directory others can enter is no place for a <c>cat</c> on our PATH.</summary>
+    [Fact]
+    public void ARuntimeDirectoryOthersCanEnterGetsNoShim()
+    {
+        File.SetUnixFileMode(runtime, Private | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+        Assert.Null(new PasteReadReceipts(runtime).Open());
+        Assert.False(Directory.Exists(directory));
+    }
+
+    /// <summary>An existing folder that is open to others, or a link to elsewhere, is not used.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AShimFolderThatIsNotOursAloneIsNotUsed(bool link)
+    {
+        Directory.CreateDirectory(Path.Combine(runtime, "openramble"), Private);
+        if (link)
+        {
+            string elsewhere = Path.Combine(runtime, "elsewhere");
+            Directory.CreateDirectory(elsewhere, Private);
+            File.CreateSymbolicLink(directory, elsewhere);
+        }
+        else
+        {
+            Directory.CreateDirectory(directory, Private | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+            File.SetUnixFileMode(directory, Private | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+        }
+
+        Assert.Null(new PasteReadReceipts(runtime).Open());
+        Assert.False(File.Exists(Path.Combine(link ? Path.Combine(runtime, "elsewhere") : directory, "cat")));
+    }
+
+    /// <summary>A <c>cat</c> that is a link is replaced, never written through.</summary>
+    [Fact]
+    public void AShimLinkIsReplacedNotWrittenThrough()
+    {
+        Directory.CreateDirectory(Path.Combine(runtime, "openramble"), Private);
+        Directory.CreateDirectory(directory, Private);
+        string victim = Path.Combine(runtime, "victim");
+        File.WriteAllText(victim, "untouched");
+        File.CreateSymbolicLink(Path.Combine(directory, "cat"), victim);
+
+        using Receipt? receipt = new PasteReadReceipts(runtime).Open();
+
+        Assert.NotNull(receipt);
+        Assert.Equal("untouched", File.ReadAllText(victim));
+        Assert.Null(new FileInfo(Path.Combine(directory, "cat")).LinkTarget);
+        Assert.Empty(Directory.GetFiles(directory, ".cat-*"));
     }
 
     /// <summary>What wl-copy does to serve a read: run <c>cat</c> from the PATH it was given.</summary>

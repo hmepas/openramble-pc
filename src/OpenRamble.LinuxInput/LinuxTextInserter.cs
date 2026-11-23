@@ -97,11 +97,15 @@ public sealed class LinuxTextInserter : ITextInserting
 
     private static readonly TimeSpan ReadPollInterval = TimeSpan.FromMilliseconds(5);
 
-    /// <summary>How long the offer's reads stay still before Ctrl+V. See <c>OfferSettled</c>.</summary>
-    private static readonly TimeSpan OfferQuiet = TimeSpan.FromMilliseconds(15);
+    /// <summary>
+    /// How long the offer's reads stay still before Ctrl+V. See <c>OfferSettled</c>. A watcher was
+    /// measured reading within 10 ms on an idle machine; 50 ms leaves room for one under load, at
+    /// the price of 50 ms before every clipboard paste.
+    /// </summary>
+    private static readonly TimeSpan OfferQuiet = TimeSpan.FromMilliseconds(50);
 
     /// <summary>The most the paste waits for clipboard watchers before Ctrl+V.</summary>
-    private static readonly TimeSpan OfferSettleLimit = TimeSpan.FromMilliseconds(60);
+    private static readonly TimeSpan OfferSettleLimit = TimeSpan.FromMilliseconds(150);
 
     /// <summary>
     /// The snapshot outlives the read limit: three seconds of waiting for a read, then the restore,
@@ -119,6 +123,13 @@ public sealed class LinuxTextInserter : ITextInserting
     private readonly Func<HotkeyModifiers> heldModifiers;
     private readonly Func<TargetApplication?> focusedWindow;
     private readonly Lock gate = new();
+
+    /// <summary>
+    /// One insertion at a time: a paste borrows the one clipboard and holds the one read wait, and
+    /// a second insertion overlapping it would take both from under it. The application is meant to
+    /// queue its insertions; this holds even where it does not.
+    /// </summary>
+    private readonly SemaphoreSlim insertions = new(1, 1);
 
     /// <summary>Whether a read can be seen on this machine. Asked once, then known.</summary>
     private ReceiptSupport receiptSupport = ReceiptSupport.Untested;
@@ -168,7 +179,7 @@ public sealed class LinuxTextInserter : ITextInserting
             reportRestoreFailure,
             heldModifiers,
             static () => FocusedWindow.Query(new SubprocessCommandRunner()),
-            new PasteReadReceipts(PasteReadReceipts.DefaultDirectory()))
+            PasteReadReceipts.ForThisSession())
     {
     }
 
@@ -211,6 +222,19 @@ public sealed class LinuxTextInserter : ITextInserting
         await InsertReportingMarks(text, target).ConfigureAwait(false);
 
     public async Task<InsertionMarks> InsertReportingMarks(string text, TargetApplication? target)
+    {
+        await insertions.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            return await InsertOne(text, target).ConfigureAwait(false);
+        }
+        finally
+        {
+            insertions.Release();
+        }
+    }
+
+    private async Task<InsertionMarks> InsertOne(string text, TargetApplication? target)
     {
         // Length, never content: the log has to be able to say "the text was there and the
         // insertion still did not happen", and that takes a number, not the words.
@@ -417,7 +441,7 @@ public sealed class LinuxTextInserter : ITextInserting
 
         if (watched)
         {
-            return await RestoreOnceRead(receipt!, readsBeforePaste, dispatched, transaction, wait)
+            return await RestoreOnceRead(receipt!, readsBeforePaste, dispatched, transaction, owned, wait)
                 .ConfigureAwait(false);
         }
 
@@ -452,6 +476,7 @@ public sealed class LinuxTextInserter : ITextInserting
         int readsBeforePaste,
         MonotonicInstant pastedAt,
         Guid transaction,
+        uint owned,
         ReadWait wait)
     {
         MonotonicInstant? firstRead = await WaitForTheRead(receipt, readsBeforePaste, pastedAt, wait)
@@ -460,20 +485,29 @@ public sealed class LinuxTextInserter : ITextInserting
         // see whether it is still ours, and that read of our own would count.
         firstRead ??= receipt.Reads > readsBeforePaste ? MonotonicInstant.Now : null;
 
+        // No read could mean nothing was pasted - or that reads stopped being seen since they were
+        // asked about (a wl-clipboard upgraded under us, the shim gone). Our own read says which.
+        bool unknowable = firstRead is null && !OurReadIsSeen(receipt, owned);
+        if (unknowable)
+        {
+            lock (gate) { receiptSupport = ReceiptSupport.Unavailable; }
+            DiagnosticLog.Emit("insert.read-receipts", ("seen", false), ("lost", true));
+        }
+
         MonotonicInstant? restoredAt = null;
         try
         {
             RestoreClipboard(transaction);
             restoredAt = MonotonicInstant.Now;
         }
-        catch (TextInsertionError) when (firstRead is not null)
+        catch (TextInsertionError) when (firstRead is not null || unknowable)
         {
             // The words landed, so this is no failure of the insertion; what failed is putting the
             // person's own clipboard back, and that is theirs to know.
             reportRestoreFailure?.Invoke(new TextInsertionError.InsertedButClipboardRestoreFailed());
         }
 
-        if (firstRead is null)
+        if (firstRead is null && !unknowable)
         {
             // Ctrl+V went out and nobody read the clipboard. There is no protected typing on this
             // platform to blame, so it is said as it is: nothing was pasted.
@@ -551,6 +585,20 @@ public sealed class LinuxTextInserter : ITextInserting
                 lastChange = MonotonicInstant.Now;
             }
         }
+    }
+
+    /// <summary>
+    /// Whether a read of our own, made now, leaves a mark - the canary for a paste nobody read.
+    /// </summary>
+    /// <remarks>
+    /// When the clipboard is no longer ours the read is of someone else's offer and says nothing;
+    /// reads are then taken to be seen still, and the paste unread, as before.
+    /// </remarks>
+    private bool OurReadIsSeen(Receipt receipt, uint owned)
+    {
+        int before = receipt.Reads;
+        ClipboardContents now = clipboard.Read();
+        return ClipboardFingerprint.Of(now) != owned || receipt.Reads > before;
     }
 
     private ReceiptSupport CurrentReceiptSupport()

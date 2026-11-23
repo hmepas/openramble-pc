@@ -51,6 +51,50 @@ internal static class DesktopTools
     }
 
     /// <summary>
+    /// Run a tool and wait for it. <c>true</c> - it exited with 0 within <paramref name="deadline"/>;
+    /// missing, failed or still running is <c>false</c>, with the tool's complaint in the log.
+    /// </summary>
+    internal static bool Run(string executable, TimeSpan deadline, params string[] arguments)
+    {
+        string? resolved = DictationCore.ExecutablePath.Find(executable);
+        if (resolved is null)
+        {
+            DiagnosticLog.Emit("tool.missing", ("tool", executable), ("error", "not found on PATH"));
+            return false;
+        }
+
+        var start = new ProcessStartInfo(resolved)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (string argument in arguments) { start.ArgumentList.Add(argument); }
+
+        try
+        {
+            using Process? started = Process.Start(start);
+            if (started is null) { return false; }
+            Task<string> complaint = started.StandardError.ReadToEndAsync();
+            _ = started.StandardOutput.ReadToEndAsync();
+            if (!started.WaitForExit(deadline))
+            {
+                DiagnosticLog.Emit("tool.failed", ("tool", executable), ("error", "timed out"));
+                return false;
+            }
+
+            if (started.ExitCode == 0) { return true; }
+            DiagnosticLog.Emit("tool.failed", ("tool", executable), ("exit", started.ExitCode), ("error", complaint.Result.Trim()));
+            return false;
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException)
+        {
+            DiagnosticLog.Emit("tool.missing", ("tool", executable), ("error", error.Message));
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Whether a tool is on <c>PATH</c> at all, without running it.
     /// </summary>
     /// <remarks>

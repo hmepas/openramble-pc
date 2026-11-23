@@ -109,6 +109,9 @@ public sealed class RecordingDetailView : UserControl
     private TranscriptFollowState follow = new();
     private bool following;
     private bool audioMissing;
+
+    /// <summary>Play was pressed while the audio was still opening: it starts once it is open.</summary>
+    private bool playWhenLoaded;
     private string? audioPath;
     private bool renaming;
     private bool attached;
@@ -172,6 +175,12 @@ public sealed class RecordingDetailView : UserControl
         // The transport: play/pause, where, the slider on its waveform, how long.
         playButton.Click += (_, _) =>
         {
+            if (!IsAudioLoaded)
+            {
+                playWhenLoaded = true;
+                return;
+            }
+
             player.Toggle();
             UpdatePlayhead();
         };
@@ -223,6 +232,7 @@ public sealed class RecordingDetailView : UserControl
         {
             player.Pause();
             scrub.Cancel();
+            playWhenLoaded = false;
             renaming = false;
             follow = new TranscriptFollowState();
             renderedTranscript = null;
@@ -330,7 +340,10 @@ public sealed class RecordingDetailView : UserControl
         _ = Task.Run(() => player.Load(id, path)).ContinueWith(
             _ => Dispatcher.UIThread.Post(() =>
             {
-                if (recording?.Id == id) { Render(); }
+                if (recording?.Id != id) { return; }
+                if (playWhenLoaded && IsAudioLoaded) { player.Play(); }
+                playWhenLoaded = false;
+                Render();
             }),
             TaskScheduler.Default);
     }
@@ -627,7 +640,11 @@ public sealed class RecordingDetailView : UserControl
         }
 
         slider.IsEnabled = loaded && duration > 0;
-        playButton.IsEnabled = loaded && duration > 0;
+        // Enabled while the audio is still opening (ffprobe), so the control is there at once;
+        // a press meanwhile plays once it is open.
+        bool failed = !loaded && (audioMissing || player.FailedToLoad);
+        playButton.IsEnabled = loaded ? duration > 0 : !failed;
+        ToolTip.SetTip(playButton, failed ? "Couldn't open this recording's audio" : null);
         playButton.Content = playing ? "❚❚" : "▶";
         AutomationProperties.SetName(playButton, playing ? "Pause" : "Play");
         positionText.Text = RecordingTime.Clock(TimeSpan.FromSeconds(position));

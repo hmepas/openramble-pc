@@ -33,7 +33,9 @@ public sealed partial class RecordingHudWindow : Window
     /// past; zero while the pill is hidden.
     /// </summary>
     public double EdgeReserve =>
-        IsVisible ? Math.Round(Bounds.Height * (Screens.ScreenFromWindow(this)?.Scaling ?? 1)) + PanelGap : 0;
+        IsVisible
+            ? Math.Round(Pill.Bounds.Height * (Screens.ScreenFromWindow(this)?.Scaling ?? 1)) + PanelGap
+            : 0;
 
     /// <summary>The pill appeared, disappeared or changed height: the panel should place again.</summary>
     public event Action? EdgeChanged;
@@ -94,8 +96,7 @@ public sealed partial class RecordingHudWindow : Window
         TitleText.Text = content.Title;
         TimeText.Text = content.Time;
         TimeText.IsVisible = content.Time.Length > 0;
-        Dot.Fill = StatusBrushes.For(StatusColorRole.Recording);
-        Dot.Opacity = content.IsDotLit ? 1 : 0.4;
+        Glyph.Kind = content.IsDotLit ? StateGlyphKind.Listening : StateGlyphKind.Silent;
         AutomationProperties.SetName(Pill, content.AccessibilityLabel);
 
         if (!clock.IsEnabled) { clock.Start(); }
@@ -118,7 +119,7 @@ public sealed partial class RecordingHudWindow : Window
         double scale = screen.Scaling;
         OverlayPoint origin = RecordingHud.Origin(
             state.OverlayPlacement,
-            new OverlayFrame(work.X, work.Y, work.Width, work.Height),
+            OverlayWindow.ShadowFrame(work, Pill.Margin, scale),
             new OverlaySize(Math.Round(Bounds.Width * scale), Math.Round(Bounds.Height * scale)));
         Position = new PixelPoint((int)Math.Round(origin.X), (int)Math.Round(origin.Y));
     }

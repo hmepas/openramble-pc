@@ -1,11 +1,9 @@
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
-using Avalonia.Controls.Shapes;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
-using Avalonia.Media.Immutable;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using DictationCore;
@@ -51,13 +49,25 @@ public sealed partial class OverlayWindow : Window,
     IEngineWaitPresenting,
     IWaitingWordsPresenting
 {
-    private static readonly IBrush KeyCapUp = new ImmutableSolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF));
-    private static readonly IBrush KeyCapDown = new ImmutableSolidColorBrush(Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF));
+    /// <summary>Panel widths per kind (upstream <c>OverlayContent.panelWidth</c>): a take never re-centres.</summary>
+    private const double TakeWidth = 244;
+    private const double SentenceWidth = 320;
+    private const double WaitingWidth = 384;
 
     private readonly OverlayModel model;
     private readonly DispatcherTimer redraw;
     private readonly DispatcherTimer meter;
-    private readonly Rectangle[] bars = new Rectangle[OverlayModel.WaveformSampleCount];
+
+    /// <summary>
+    /// Half a second into a state that may linger (starting the microphone, writing it down):
+    /// nine takes in ten are done by then and never show a title (upstream <c>titleDelay</c>).
+    /// </summary>
+    private readonly DispatcherTimer linger;
+    private DictationState? lingerState;
+    private bool hasLingered;
+
+    /// <summary>The take is hands-free: the red lock stands where the red disc was.</summary>
+    private bool isHandsFree;
 
     /// <summary>The newest microphone peak, written from the audio thread and read by the meter clock.</summary>
     private volatile float latestLevel;
@@ -84,6 +94,7 @@ public sealed partial class OverlayWindow : Window,
         // this panel the keyboard, and a retried Ctrl+V would land here. The key still pastes.
         ActionButton.Click += (_, _) => OnWaitingCopy?.Invoke();
         LaterButton.Click += (_, _) => OnWaitingLater?.Invoke();
+        CopiedLaterButton.Click += (_, _) => OnWaitingLater?.Invoke();
         // Escape reaches the panel only when the window manager gave it the keyboard - after a
         // click on it, say. The global Escape is the cancel shortcut's, not this.
         AddHandler(KeyDownEvent, OnPanelKeyDown, RoutingStrategies.Tunnel);
@@ -95,13 +106,16 @@ public sealed partial class OverlayWindow : Window,
         // A bar that appears, moves or goes away moves the work area under an open panel.
         WorkArea.Changed += () => Dispatcher.UIThread.Post(() => { if (IsVisible) { Place(); } });
 
-        for (int index = 0; index < bars.Length; index++)
-        {
-            var bar = new Rectangle { Width = 3, RadiusX = 1.5, RadiusY = 1.5 };
-            bars[index] = bar;
-            Canvas.SetLeft(bar, index * 4);
-            Waveform.Children.Add(bar);
-        }
+        linger = new DispatcherTimer(
+            TimeSpan.FromMilliseconds(500),
+            DispatcherPriority.Background,
+            (_, _) =>
+            {
+                linger!.Stop();
+                hasLingered = true;
+                Render();
+            });
+        linger.Stop();
 
         // Half a second: the panel shows whole seconds, so anything faster redraws the same
         // number. The timer runs only while a dictation is running.
@@ -208,6 +222,15 @@ public sealed partial class OverlayWindow : Window,
             Render();
         });
 
+    /// <summary>The take went hands-free, or came back from it. Wired by the app from its state.</summary>
+    public void SetHandsFree(bool active) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (isHandsFree == active) { return; }
+            isHandsFree = active;
+            Render();
+        });
+
     private void OnPanelKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key != Key.Escape || model.Waiting is null) { return; }
@@ -276,28 +299,81 @@ public sealed partial class OverlayWindow : Window,
     private void TickMeter()
     {
         model.UpdateInputLevel(latestLevel);
-        if (Waveform.IsVisible) { RenderWaveform(); }
+        if (Waveform.IsVisible) { Waveform.Samples = model.WaveformSamples; }
     }
 
     private void Render()
     {
         OverlayContent content = model.Content;
-        TitleText.Text = content.Title;
-        SubtitleText.Text = content.Subtitle ?? string.Empty;
-        SubtitleText.IsVisible = content.Subtitle is not null;
-        ToneDot.Fill = StatusBrushes.For(content.Tone.ColorRole);
         AutomationProperties.SetName(Panel, content.AccessibilityLabel);
-        RenderWaiting(content);
+        UpdateLinger();
 
-        bool recording = model.State == DictationState.Listening && model.Notice is null;
-        Waveform.IsVisible = recording;
-        if (recording) { RenderWaveform(); }
+        // Waiting words first, as the content decides; then a sentence (a notice, an outcome);
+        // otherwise the take's one shape from key-down to text.
+        bool sentence = content.Waiting is null && (content.Outcome is not null || model.Notice is not null);
+        bool take = content.Waiting is null && !sentence;
+        TakeLine.IsVisible = take;
+        SentenceLine.IsVisible = sentence;
+        Panel.Width = content.Waiting is not null ? WaitingWidth : sentence ? SentenceWidth : TakeWidth;
+
+        if (take) { RenderTake(content); }
+        if (sentence)
+        {
+            SentenceGlyph.Kind = SentenceGlyphKind(content);
+            SentenceText.Text = content.Title;
+        }
+        RenderWaiting(content);
     }
+
+    /// <summary>A state that may linger starts its half-second again whenever the state changes.</summary>
+    private void UpdateLinger()
+    {
+        DictationState state = model.State;
+        if (lingerState == state) { return; }
+        lingerState = state;
+        hasLingered = false;
+        linger.Stop();
+        if (state is DictationState.Preparing or DictationState.Transcribing) { linger.Start(); }
+    }
+
+    /// <summary>
+    /// Glyph, meter, clock (0.41: no "Listening"). Red only while the microphone is live; after the
+    /// release the meter and clock freeze in gray, and a state that outlasts half a second is said
+    /// in quiet gray text in their place, at the same size.
+    /// </summary>
+    private void RenderTake(OverlayContent content)
+    {
+        DictationState state = model.State;
+        bool listening = state == DictationState.Listening;
+        // Waiting on the model is news at once: the subtitle is set only for that wait.
+        bool waitingOnEngine = state == DictationState.Transcribing && content.Subtitle is not null;
+        bool showsTitle = waitingOnEngine || (hasLingered && state is DictationState.Preparing or DictationState.Transcribing);
+
+        TakeGlyph.Kind = listening
+            ? (isHandsFree ? StateGlyphKind.HandsFree : StateGlyphKind.Listening)
+            : showsTitle && state == DictationState.Transcribing ? StateGlyphKind.Working : StateGlyphKind.Silent;
+
+        LingerText.IsVisible = showsTitle;
+        LingerText.Text = showsTitle ? content.Title : string.Empty;
+        Waveform.IsVisible = !showsTitle;
+        ClockText.IsVisible = !showsTitle;
+        if (showsTitle) { return; }
+
+        Waveform.Foreground = listening ? StatusBrushes.Recording : null;
+        Waveform.Samples = model.WaveformSamples;
+        ClockText.Text = RecordingTime.Clock(model.Elapsed);
+    }
+
+    private static StateGlyphKind SentenceGlyphKind(OverlayContent content) => content.Outcome switch
+    {
+        TakeOutcome.Pasted => StateGlyphKind.Pasted,
+        TakeOutcome.Kept => StateGlyphKind.Kept,
+        _ => content.Tone == OverlayTone.Info ? StateGlyphKind.Info : StateGlyphKind.Attention,
+    };
 
     private void RenderWaiting(OverlayContent content)
     {
         WaitingWords? waiting = content.Waiting;
-        LinePanel.IsVisible = waiting is null;
         WaitingPanel.IsVisible = waiting is not null;
         if (waiting is null) { return; }
 
@@ -311,28 +387,14 @@ public sealed partial class OverlayWindow : Window,
         NoteText.Text = waiting.Note ?? string.Empty;
         NoteText.IsVisible = waiting.Note is not null;
         ReasonText.Text = waiting.Reason(key);
-        ReasonDot.Fill = StatusBrushes.For(content.Tone.ColorRole);
-        // Copied words have nothing left to press but the way out.
-        ActionButton.IsVisible = !waiting.IsCopied;
-        KeyCapText.Text = key;
-        KeyCap.Background = model.IsKeyDown ? KeyCapDown : KeyCapUp;
+        ReasonGlyph.Kind = waiting.IsCopied ? StateGlyphKind.Copied : StateGlyphKind.Waiting;
+        // Copied words have nothing left to press but the way out, so it shares the reason's line.
+        ActionRow.IsVisible = !waiting.IsCopied;
+        CopiedLaterButton.IsVisible = waiting.IsCopied;
+        ActionKeyCap.Text = key;
+        ActionKeyCap.IsPressed = model.IsKeyDown;
         ActionVerbText.Text = waiting.ActionVerb;
         AutomationProperties.SetName(ActionButton, "Copy");
-    }
-
-    private void RenderWaveform()
-    {
-        IReadOnlyList<float> samples = model.WaveformSamples;
-        double maximum = Waveform.Height;
-        for (int index = 0; index < bars.Length; index++)
-        {
-            double height = RecordingWaveformLayout.BarHeight(samples[index], maximum);
-            Rectangle bar = bars[index];
-            bar.Height = height;
-            bar.Fill = StatusBrushes.Recording;
-            bar.Opacity = RecordingWaveformLayout.BarOpacity(index, bars.Length);
-            Canvas.SetTop(bar, (maximum - height) / 2);
-        }
     }
 
     /// <summary>
@@ -363,9 +425,20 @@ public sealed partial class OverlayWindow : Window,
 
         OverlayPoint origin = OverlayPlacementPolicy.Origin(
             placement,
-            new OverlayFrame(work.X, work.Y, work.Width, work.Height),
+            ShadowFrame(work, Panel.Margin, scale),
             size,
             EdgeReserve());
         Position = new PixelPoint((int)Math.Round(origin.X), (int)Math.Round(origin.Y));
     }
+
+    /// <summary>
+    /// The work area grown by the window's transparent shadow margin, so that the glass - not the
+    /// window around it - lands where the placement policy puts things.
+    /// </summary>
+    internal static OverlayFrame ShadowFrame(PixelRect work, Thickness margin, double scale) =>
+        new(
+            work.X - (margin.Left * scale),
+            work.Y - (margin.Top * scale),
+            work.Width + ((margin.Left + margin.Right) * scale),
+            work.Height + ((margin.Top + margin.Bottom) * scale));
 }

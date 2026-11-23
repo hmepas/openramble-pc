@@ -450,12 +450,17 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         AutomationProperties.SetName(MicrophoneRow, $"{permission.Title} — {permission.AccessibilityValue}");
         AutomationProperties.SetName(MicrophoneRow.ActionButton, permission.ActionAccessibilityLabel ?? string.Empty);
 
-        // Whether the key reaches OpenRamble at all: the input device, a compositor keybind or
-        // the control socket. A hook that never installed has no symptom of its own.
-        string? failure = state.HotkeyTrackingFailure;
-        KeyTrackingRow.Glyph = failure is null ? StateGlyphKind.Pasted : StateGlyphKind.Attention;
-        KeyTrackingRow.Detail = failure ?? $"OpenRamble notices {state.Hotkey.Title} and types the finished text at your cursor.";
+        // Whether the key reaches OpenRamble at all, and whether the words can land: the same two
+        // rows onboarding checks. Any press since launch proves the key's path.
+        (KeyTrackingRow.Glyph, KeyTrackingRow.Detail) = InputPathRows.Key(
+            state.Hotkey.Title, state.HotkeyTrackingFailure, state.HotkeyWarning, state.HotkeyPressCount > 0);
+        (TypingRow.Glyph, TypingRow.Detail) = InputPathRows.Typing(TypingToolsInstalled);
     }
+
+    private bool? typingToolsInstalled;
+
+    /// <summary>Asked once per window: the tools do not come and go while it is open.</summary>
+    private bool TypingToolsInstalled => typingToolsInstalled ??= DesktopTools.TypingToolsInstalled();
 
     // MARK: - Recognition
 

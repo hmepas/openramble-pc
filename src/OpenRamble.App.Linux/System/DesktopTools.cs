@@ -105,4 +105,8 @@ internal static class DesktopTools
     /// </remarks>
     internal static bool IsInstalled(string executable) =>
         DictationCore.ExecutablePath.Find(executable) is not null;
+
+    /// <summary>What insertion needs on PATH: wl-copy, and wtype or ydotool to press the paste.</summary>
+    internal static bool TypingToolsInstalled() =>
+        IsInstalled("wl-copy") && (IsInstalled("wtype") || IsInstalled("ydotool"));
 }

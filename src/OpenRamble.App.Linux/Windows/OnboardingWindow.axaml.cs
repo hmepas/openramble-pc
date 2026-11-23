@@ -187,29 +187,15 @@ public sealed partial class OnboardingWindow : Window, IDictationSink
         MicrophoneRow.IsPrimaryAction = !ModelRow.IsPrimaryAction;
         AutomationProperties.SetName(MicrophoneRow.ActionButton, permission.ActionAccessibilityLabel);
 
-        // The Linux input path: the key arrives through /dev/input (the input group) or a
-        // compositor keybind feeding the control socket. Only an edge proves either.
-        string key = state.Hotkey.Title;
-        (KeyRow.Glyph, KeyRow.Detail) =
-            state.HotkeyTrackingFailure is string failure ? (StateGlyphKind.Attention, failure)
-            : state.HotkeyWarning is string warning ? (StateGlyphKind.Attention, warning)
-            : state.HotkeyPressCount > pressesAtStart ? (StateGlyphKind.Pasted, $"OpenRamble hears {key}.")
-            : (StateGlyphKind.Silent,
-                $"Press {key} to check that it reaches OpenRamble — through the input group, keyd or a compositor keybind.");
-
-        bool typingReady = TypingToolsInstalled;
-        TypingRow.Glyph = typingReady ? StateGlyphKind.Pasted : StateGlyphKind.Attention;
-        TypingRow.Detail = typingReady
-            ? "wl-copy and a typing tool are installed, so the words land at your cursor."
-            : "Install wl-clipboard and wtype (or ydotool) so the words can land at your cursor.";
+        (KeyRow.Glyph, KeyRow.Detail) = InputPathRows.Key(
+            state.Hotkey.Title, state.HotkeyTrackingFailure, state.HotkeyWarning, state.HotkeyPressCount > pressesAtStart);
+        (TypingRow.Glyph, TypingRow.Detail) = InputPathRows.Typing(TypingToolsInstalled);
     }
 
     private bool? typingToolsInstalled;
 
     /// <summary>Asked once: the tools do not come and go while the window is open.</summary>
-    private bool TypingToolsInstalled => typingToolsInstalled ??=
-        DesktopTools.IsInstalled("wl-copy")
-        && (DesktopTools.IsInstalled("wtype") || DesktopTools.IsInstalled("ydotool"));
+    private bool TypingToolsInstalled => typingToolsInstalled ??= DesktopTools.TypingToolsInstalled();
 
     /// <summary>
     /// What the app has to say about the model, written once for both steps that show it. The

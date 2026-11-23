@@ -294,6 +294,8 @@
               <local:SetupRow x:Name="MicrophoneRow" />
               <Border Classes="hairline" />
               <local:SetupRow x:Name="KeyTrackingRow" Title="Dictation key" />
+              <Border Classes="hairline" />
+              <local:SetupRow x:Name="TypingRow" Title="Typing and clipboard" />
             </local:BlockSection>
           </StackPanel>
         </Border>

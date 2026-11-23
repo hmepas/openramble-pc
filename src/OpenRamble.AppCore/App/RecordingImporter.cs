@@ -305,31 +305,50 @@ public sealed class RecordingImporter
     }
 
     /// <summary>
-    /// Take up the imports an earlier run did not finish: imported recordings still live or
-    /// waiting for the model whose WAV is there, oldest first. Call after
-    /// <see cref="MeetingStore.RecoverIncomplete"/>; half copies are removed here first.
+    /// Take up the transcripts an earlier run did not finish, oldest first, whose WAV is there:
+    /// imported recordings still live or waiting for the model (from the start), and live
+    /// recordings a quit or a crash stopped before their transcript caught up - live, waiting,
+    /// or partial with audio not yet decoded (from where the transcript ends, per channel). Call
+    /// after <see cref="MeetingStore.RecoverIncomplete"/>; half copies are removed here first.
     /// </summary>
     public void Resume(IEnumerable<MeetingRecordingMetadata> recordings)
     {
         RemoveHalfCopies(edges.Store);
         IEnumerable<MeetingRecordingMetadata> unfinished = recordings
-            .Where(recording => recording.IsImported
-                && recording.TranscriptionState is MeetingTranscriptionState.Live or MeetingTranscriptionState.WaitingForModel
-                // The copy the pieces are read from. Without it there is nothing to transcribe.
-                && edges.Store.RawAudioPath(recording.Id) is not null)
+            // The copy the pieces are read from. Without it there is nothing to transcribe.
+            .Where(recording => edges.Store.RawAudioPath(recording.Id) is { } audio
+                && (recording.IsImported
+                    ? recording.TranscriptionState is MeetingTranscriptionState.Live or MeetingTranscriptionState.WaitingForModel
+                    : recording.TranscriptionState is MeetingTranscriptionState.Live or MeetingTranscriptionState.WaitingForModel or MeetingTranscriptionState.Partial
+                        && HasUndecodedAudio(recording, audio)))
             .OrderBy(recording => recording.StartedAt);
         foreach (MeetingRecordingMetadata recording in unfinished) { Enqueue(recording.Id); }
         ResumeCompaction(recordings);
     }
 
+    /// <summary>A channel of a live recording whose transcript stops short of its audio.</summary>
+    private bool HasUndecodedAudio(MeetingRecordingMetadata recording, string audio)
+    {
+        long frames = MeetingWriter.FrameCountAt(audio);
+        Dictionary<MeetingChannel, int> decoded = edges.Store.Transcript(recording.Id)?.DecodedFrames ?? [];
+        return Channels(recording).Any(channel => decoded.GetValueOrDefault(channel) < frames);
+    }
+
+    /// <summary>The channels with something to transcribe: the other side only if it ever sounded.</summary>
+    private static IReadOnlyList<MeetingChannel> Channels(MeetingRecordingMetadata? recording) =>
+        recording is { IsImported: false, SystemAudio.EverDeliveredAudio: true }
+            ? [MeetingChannel.Microphone, MeetingChannel.System]
+            : [MeetingChannel.Microphone];
+
     /// <summary>
-    /// A quit during <see cref="Compact"/> leaves a whole transcript beside its WAV, and maybe a
-    /// half-written archive: drop the half archive and compact again, one after another.
+    /// A quit during <see cref="Compact"/> (an import's or a live recording's) leaves a whole
+    /// transcript beside its WAV, and maybe a half-written archive: drop the half archive and
+    /// compact again, one after another.
     /// </summary>
     private void ResumeCompaction(IEnumerable<MeetingRecordingMetadata> recordings)
     {
         var pending = new List<Guid>();
-        foreach (MeetingRecordingMetadata recording in recordings.Where(recording => recording.IsImported))
+        foreach (MeetingRecordingMetadata recording in recordings)
         {
             try { File.Delete(Path.Combine(edges.Store.Directory(recording.Id), ArchiveStagingName)); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
@@ -495,11 +514,29 @@ public sealed class RecordingImporter
             return;
         }
 
-        IReadOnlyList<PieceRange> pieces;
+        // An import starts over; a live recording goes on from where its transcript stops.
+        MeetingRecordingMetadata? metadata = store.Metadata(id);
+        MeetingTranscript? earlier = metadata is { IsImported: false } ? store.Transcript(id) : null;
+        var decodedFrames = new Dictionary<MeetingChannel, int>(earlier?.DecodedFrames ?? []);
+        IReadOnlyList<MeetingChannel> channels = Channels(metadata);
+        List<(MeetingChannel Channel, PieceRange Range)> pieces;
+        int frames;
         try
         {
-            pieces = await Task.Factory.StartNew(
-                () => Plan(audio, stop), stop, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+            (pieces, frames) = await Task.Factory.StartNew(
+                () =>
+                {
+                    int length = (int)Math.Min(int.MaxValue, MeetingWriter.FrameCountAt(audio));
+                    List<(MeetingChannel, PieceRange)> planned = [.. channels
+                        .SelectMany(channel => Plan(audio, channel, decodedFrames.GetValueOrDefault(channel), stop)
+                            .Select(range => (channel, range)))
+                        // In the order they were spoken, as the live queue would have had them.
+                        .OrderBy(piece => piece.range.Start)];
+                    return (planned, length);
+                },
+                stop,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default)
                 .ConfigureAwait(false);
         }
         catch (Exception error) when (error is not OperationCanceledException)
@@ -511,13 +548,13 @@ public sealed class RecordingImporter
         ITextProcessing pipeline = edges.MakePipeline();
         var reader = new MeetingPcmWindowReader(audio);
         double rate = MeetingWriter.SampleRate;
-        long total = Math.Max(1, pieces.Sum(piece => (long)piece.Length));
+        long total = Math.Max(1, pieces.Sum(piece => (long)piece.Range.Length));
         var assembler = new MeetingUtteranceAssembler();
-        var closed = new List<MeetingUtterance>();
+        var closed = new List<MeetingUtterance>(earlier?.Utterances ?? []);
         long done = 0;
         int failuresInARow = 0;
 
-        foreach (PieceRange piece in pieces)
+        foreach ((MeetingChannel channel, PieceRange piece) in pieces)
         {
             await edges.WaitForTurn(stop).ConfigureAwait(false);
             if (Abandoned(id)) { return; }
@@ -532,9 +569,9 @@ public sealed class RecordingImporter
             MeetingUtteranceAssembler.Segment decoded;
             try
             {
-                float[] samples = reader.Read(new MeetingSegmentRef(MeetingChannel.Microphone, piece.Start, piece.Length));
+                float[] samples = reader.Read(new MeetingSegmentRef(channel, piece.Start, piece.Length));
                 string text = await edges.Recognizer.Transcribe(samples, stop).ConfigureAwait(false);
-                decoded = new(MeetingChannel.Microphone, start, end, pipeline.Run(text).Output.Text);
+                decoded = new(channel, start, end, pipeline.Run(text).Output.Text);
                 failuresInARow = 0;
             }
             catch (Exception) when (!IsStopping)
@@ -546,7 +583,7 @@ public sealed class RecordingImporter
                     return;
                 }
 
-                decoded = new(MeetingChannel.Microphone, start, end, string.Empty, IsFailed: true);
+                decoded = new(channel, start, end, string.Empty, IsFailed: true);
                 failuresInARow++;
             }
 
@@ -556,7 +593,8 @@ public sealed class RecordingImporter
             done += piece.Length;
             List<MeetingUtterance> soFar = [.. closed];
             if (assembler.Pending is { } pending) { soFar.Add(pending); }
-            TryWrite(new MeetingTranscript(soFar, new Dictionary<MeetingChannel, int> { [MeetingChannel.Microphone] = piece.End }), id);
+            decodedFrames[channel] = Math.Max(decodedFrames.GetValueOrDefault(channel), piece.End);
+            TryWrite(new MeetingTranscript(soFar, decodedFrames), id);
             OnTranscript(id, soFar);
             Change(() => fraction = (double)done / total);
             if (failuresInARow >= FailuresBeforeStop)
@@ -568,9 +606,9 @@ public sealed class RecordingImporter
 
         if (Abandoned(id)) { return; }
         closed.AddRange(assembler.Flush());
-        TryWrite(
-            new MeetingTranscript(closed, new Dictionary<MeetingChannel, int> { [MeetingChannel.Microphone] = pieces.Count > 0 ? pieces[^1].End : 0 }),
-            id);
+        // Every channel was read to its end; the silence after the last piece is decoded too.
+        foreach (MeetingChannel channel in channels) { decodedFrames[channel] = frames; }
+        TryWrite(new MeetingTranscript(closed, decodedFrames), id);
         OnTranscript(id, closed);
         await Finish(id, MeetingTranscriptionState.Complete).ConfigureAwait(false);
     }
@@ -768,20 +806,26 @@ public sealed class RecordingImporter
     }
 
     /// <summary>Where the stored audio is cut for the engine: 4 s windows into the planner.</summary>
-    public static IReadOnlyList<PieceRange> Plan(string audio, CancellationToken cancellationToken = default)
+    public static IReadOnlyList<PieceRange> Plan(string audio, CancellationToken cancellationToken = default) =>
+        Plan(audio, MeetingChannel.Microphone, 0, cancellationToken);
+
+    /// <summary>The pieces of one channel from <paramref name="startFrame"/> on, in frames of the file.</summary>
+    public static IReadOnlyList<PieceRange> Plan(
+        string audio, MeetingChannel channel, int startFrame, CancellationToken cancellationToken = default)
     {
         int frames = (int)Math.Min(int.MaxValue, MeetingWriter.FrameCountAt(audio));
         var reader = new MeetingPcmWindowReader(audio);
         var planner = new FilePiecePlanner();
-        int position = 0;
+        int position = Math.Max(0, startFrame);
         while (position < frames)
         {
             cancellationToken.ThrowIfCancellationRequested();
             int count = Math.Min(MeetingWriter.SampleRate * 4, frames - position);
-            planner.Push(reader.Read(MeetingChannel.Microphone, position, count));
+            planner.Push(reader.Read(channel, position, count));
             position += count;
         }
 
-        return planner.Finish();
+        int offset = Math.Max(0, startFrame);
+        return [.. planner.Finish().Select(range => new PieceRange(range.Start + offset, range.End + offset))];
     }
 }

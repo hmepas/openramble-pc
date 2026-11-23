@@ -619,6 +619,129 @@ public sealed class RecordingImporterTests : IDisposable
     }
 
     /// <summary>
+    /// A live recording as a quit or a crash leaves it: both channels in the store, published,
+    /// not an import, with whatever transcript the live queue had written.
+    /// </summary>
+    private MeetingRecordingMetadata StoreMeeting(
+        DateTimeOffset startedAt,
+        Func<int, bool> microphoneSpeaks,
+        Func<int, bool>? systemSpeaks,
+        MeetingTranscriptionState state,
+        MeetingTranscript? transcript = null,
+        int seconds = 70)
+    {
+        var id = Guid.NewGuid();
+        string directory = store.IncompleteDirectory(id);
+        Directory.CreateDirectory(directory);
+        var writer = new MeetingWriter(directory);
+        writer.Open();
+        for (int second = 0; second < seconds; second++)
+        {
+            float[] microphone = new float[16_000];
+            float[] system = new float[16_000];
+            for (int index = 0; index < 16_000; index++)
+            {
+                int at = (second * 16_000) + index;
+                if (microphoneSpeaks(second)) { microphone[index] = SpeechLikeAudio.Sample(at); }
+                if (systemSpeaks?.Invoke(second) == true) { system[index] = SpeechLikeAudio.Sample(at + 7); }
+            }
+
+            writer.Append(microphone, system);
+        }
+
+        writer.Finish();
+        MeetingRecordingMetadata metadata = MeetingRecordingMetadata.Create(
+            startedAt: startedAt,
+            systemAudio: new SystemAudioSummary(wasRequested: true, everDeliveredBuffers: true, everDeliveredAudio: systemSpeaks is not null),
+            id: id,
+            duration: seconds,
+            endReason: MeetingEndReason.StoppedByUser,
+            transcriptionState: state);
+        store.Write(metadata, incomplete: true);
+        if (transcript is not null) { store.Write(transcript, id, incomplete: true); }
+        store.Publish(id);
+        return metadata;
+    }
+
+    /// <summary>
+    /// A meeting a quit stopped before its transcript caught up is finished at the next launch:
+    /// only the audio not yet decoded, on every channel that had sound, after what was written,
+    /// oldest first.
+    /// </summary>
+    [Fact]
+    public async Task AMeetingAQuitLeftUntranscribedIsFinishedAtTheNextLaunch()
+    {
+        DateTimeOffset now = DateTimeOffset.Now;
+        // Decoded up to 20 s on the microphone, nothing yet from the other side.
+        MeetingRecordingMetadata newer = StoreMeeting(
+            now,
+            second => second < 15 || (second >= 50 && second < 65),
+            second => second >= 30 && second < 45,
+            MeetingTranscriptionState.Live,
+            new MeetingTranscript(
+                [new MeetingUtterance(MeetingChannel.Microphone, 0, 15, "Earlier.")],
+                new Dictionary<MeetingChannel, int> { [MeetingChannel.Microphone] = 20 * 16_000 }));
+        // Crash-recovered with no transcript at all, and no sound ever came from the other side.
+        MeetingRecordingMetadata older = StoreMeeting(
+            now.AddHours(-1),
+            second => second < 5,
+            systemSpeaks: null,
+            MeetingTranscriptionState.Partial,
+            seconds: 10);
+
+        importer.Resume(store.List());
+        await Wait("both transcripts", () => Finished.Count == 2);
+
+        Assert.Equal([older.Id, newer.Id], Finished);
+        Assert.Equal(MeetingTranscriptionState.Complete, store.Metadata(older.Id)!.TranscriptionState);
+        Assert.Equal(MeetingTranscriptionState.Complete, store.Metadata(newer.Id)!.TranscriptionState);
+        MeetingUtterance only = Assert.Single(store.Transcript(older.Id)!.Utterances);
+        Assert.Equal(MeetingChannel.Microphone, only.Channel);
+
+        MeetingTranscript resumed = store.Transcript(newer.Id)!;
+        Assert.Equal("Earlier.", resumed.Utterances[0].Text);
+        Assert.Contains(resumed.Utterances, utterance => utterance.Channel == MeetingChannel.System);
+        Assert.All(
+            resumed.Utterances.Skip(1).Where(utterance => utterance.Channel == MeetingChannel.Microphone),
+            utterance => Assert.True(utterance.Start >= 20));
+        Assert.Equal(70 * 16_000, resumed.DecodedFrames[MeetingChannel.Microphone]);
+        Assert.Equal(70 * 16_000, resumed.DecodedFrames[MeetingChannel.System]);
+        // The older recording's one piece, then one per channel of the newer: never the first 20 s again.
+        Assert.Equal(3, engine.Decodes);
+    }
+
+    /// <summary>
+    /// A meeting whose transcript is whole but whose WAV a quit kept is compacted at the next
+    /// launch, like an import; one whose transcript already covers its audio is not decoded again.
+    /// </summary>
+    [Fact]
+    public async Task AWholeMeetingStillHoldingItsWavIsCompactedAtTheNextLaunch()
+    {
+        MeetingRecordingMetadata whole = StoreMeeting(
+            DateTimeOffset.Now, second => second < 5, systemSpeaks: null, MeetingTranscriptionState.Complete, seconds: 10);
+        MeetingRecordingMetadata covered = StoreMeeting(
+            DateTimeOffset.Now,
+            second => second < 5,
+            systemSpeaks: null,
+            MeetingTranscriptionState.Partial,
+            new MeetingTranscript(
+                [new MeetingUtterance(MeetingChannel.Microphone, 0, 5, "Failed.", isFailed: true)],
+                new Dictionary<MeetingChannel, int> { [MeetingChannel.Microphone] = 10 * 16_000 }),
+            seconds: 10);
+
+        importer.Stop();
+        var compressor = new FakeCompressor(succeeds: true);
+        importer = MakeImporter(compressor);
+        importer.Resume(store.List());
+        await Wait("the archive", () => store.CompressedAudioPath(whole.Id) is not null && store.RawAudioPath(whole.Id) is null);
+        await Task.Delay(100);
+
+        Assert.Equal(0, engine.Decodes);
+        Assert.Equal(MeetingTranscriptionState.Partial, store.Metadata(covered.Id)!.TranscriptionState);
+        Assert.NotNull(store.RawAudioPath(covered.Id));
+    }
+
+    /// <summary>
     /// A quit while a file is still being copied in leaves half of its sound. That must not come
     /// back as a recording: the file itself is untouched, and half of it under no name would
     /// only confuse.

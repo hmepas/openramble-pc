@@ -184,6 +184,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     {
         // Before anything writes a recording: what a crash left is repaired and listed first.
         SetUpLibrary(environment);
+        SetUpRecording(environment);
 
         try
         {
@@ -1225,6 +1226,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             idleUnloadTimer = null;
             preparationTimer?.Dispose();
             preparationTimer = null;
+            liveTimer?.Dispose();
+            liveTimer = null;
             engineWarmupTaskRevision += 1;
             RevokeRetryLocked();
         }

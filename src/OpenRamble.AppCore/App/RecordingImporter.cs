@@ -620,7 +620,8 @@ public sealed class RecordingImporter
     /// The transcript is whole, so the PCM source has done its job: an AAC archive replaces it.
     /// The WAV goes only after the archive verified and moved into place; the peaks stay.
     /// </summary>
-    private async Task Compact(Guid id)
+    /// <remarks>Also the archive of a finished live recording, which the app hands here.</remarks>
+    public async Task Compact(Guid id)
     {
         if (edges.Compressor is not { } compressor || edges.Store.RawAudioPath(id) is not { } source) { return; }
 

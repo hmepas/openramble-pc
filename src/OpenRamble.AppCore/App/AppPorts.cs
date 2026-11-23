@@ -288,3 +288,36 @@ public interface IAudioInputDeviceSource
 {
     IReadOnlyList<AudioInputDevice> Available();
 }
+
+/// <summary>
+/// Builds the recorder for one live recording (upstream <c>makeMeetingCapture</c>). The callbacks
+/// arrive on background threads with no capture lock held.
+/// </summary>
+/// <param name="directory">The recording's <c>.incomplete</c> directory.</param>
+/// <param name="preferredDeviceUid">The chosen microphone, or <c>null</c> for the default.</param>
+/// <param name="includeSystemAudio">A meeting (both sides) rather than a voice note.</param>
+public delegate DictationCore.Audio.IMeetingCapturing MeetingCaptureFactory(
+    string directory,
+    string? preferredDeviceUid,
+    bool includeSystemAudio,
+    Action<DictationCore.Audio.MeetingCapture.Levels> onLevels,
+    Action<MeetingSegmentRef> onSegment,
+    Action<DictationCore.Audio.MeetingCapture.Failure> onFailure);
+
+/// <summary>The production <see cref="MeetingCaptureFactory"/>: a real capture over platform sources.</summary>
+public static class MeetingCaptures
+{
+    /// <param name="microphone">The microphone source for a device uid (<c>null</c> - the default).</param>
+    /// <param name="systemAudio">What the computer plays; <c>null</c> where it cannot be recorded.</param>
+    public static MeetingCaptureFactory FromSources(
+        Func<string?, DictationCore.Audio.IMeetingAudioSource?> microphone,
+        Func<DictationCore.Audio.IMeetingAudioSource?> systemAudio) =>
+        (directory, device, includeSystemAudio, onLevels, onSegment, onFailure) =>
+            new DictationCore.Audio.MeetingCapture(
+                directory,
+                microphone(device),
+                includeSystemAudio ? systemAudio() : null,
+                onLevels: onLevels,
+                onSegment: onSegment,
+                onFailure: onFailure);
+}

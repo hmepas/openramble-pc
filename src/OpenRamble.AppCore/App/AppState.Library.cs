@@ -75,11 +75,12 @@ public sealed partial class AppState
 
     private void SetUpLibrary(AppEnvironment environment)
     {
+        IReadOnlyList<MeetingRecordingMetadata> recovered;
         try
         {
             meetingStore = new MeetingStore(paths.Recordings(), environment.RecordingTrasher);
             // Before anything writes: a crash's leftovers are repaired and published.
-            meetingStore.RecoverIncomplete(now());
+            recovered = meetingStore.RecoverIncomplete(now());
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -89,17 +90,23 @@ public sealed partial class AppState
         }
 
         ReloadRecordings();
+        // A recording that reappears without a word would read as one the person never made.
+        if (recovered.Count > 0)
+        {
+            Notify(new DictationNotice(
+                DictationNoticeKind.Info,
+                recovered.Count == 1
+                    ? "A recording was recovered after an interruption."
+                    : $"{recovered.Count} recordings were recovered after an interruption."));
+        }
+
         if (environment.ImportRecognizer is not { } recognizer) { return; }
 
         var made = new RecordingImporter(new RecordingImporter.Edges(
             meetingStore,
             recognizer,
             () => IsEngineReady && ModelStateValue.IsReady,
-            // Fillers go and the dictionary applies, as in a recording; no spoken corrections in
-            // somebody else's speech.
-            () => new TextPipeline(
-                [.. StarterDictionary.Missing(Replacements), .. Replacements],
-                spokenCorrections: false))
+            MakeRecordingPipeline)
         {
             WaitForTurn = dictationPriority is { } priority ? priority.WaitForTurn : static _ => Task.CompletedTask,
             Compressor = environment.RecordingCompressor,
@@ -123,6 +130,13 @@ public sealed partial class AppState
         // Whatever a quit interrupted. It waits here until the model is ready.
         made.Resume(meetingStore.List());
     }
+
+    /// <summary>
+    /// Fillers go and the dictionary applies, as in a dictation; no spoken corrections in somebody
+    /// else's speech. Imports and live recordings alike.
+    /// </summary>
+    private TextPipeline MakeRecordingPipeline() =>
+        new([.. StarterDictionary.Missing(Replacements), .. Replacements], spokenCorrections: false);
 
     /// <summary>
     /// Imports run only on a ready engine and model: either changing is the importer's cue. Off

@@ -3,6 +3,31 @@ using System.Diagnostics;
 namespace DictationCore.Audio;
 
 /// <summary>
+/// What the app drives a long recording through (upstream <c>MeetingCapturing</c>): the real
+/// <see cref="MeetingCapture"/>, or a test's stand-in.
+/// </summary>
+public interface IMeetingCapturing
+{
+    string Directory { get; }
+
+    long FrameCount { get; }
+
+    MeetingCapture.Levels CurrentLevels { get; }
+
+    MeetingCapture.ChannelHealth Health(MeetingChannel channel);
+
+    void Start();
+
+    void Pause();
+
+    void Resume();
+
+    MeetingCapture.Summary Stop();
+
+    void RecoverMicrophone();
+}
+
+/// <summary>
 /// A long recording: two sources in, one stereo file out, for as long as it takes.
 ///
 /// Nothing here holds audio in memory beyond a jitter window. Blocks arrive from the sources'
@@ -19,7 +44,7 @@ namespace DictationCore.Audio;
 /// macOS's inaudible probe tone is not ported: on Linux there is no permission that can leave a
 /// tap silent, so "no buffers within the grace" is the whole evidence.
 /// </summary>
-public sealed class MeetingCapture
+public sealed class MeetingCapture : IMeetingCapturing
 {
     public enum CaptureState
     {

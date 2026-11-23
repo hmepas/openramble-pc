@@ -203,6 +203,14 @@ public sealed partial class App : Application
             ImportRecognizer = new SharedTranscriberRecognizer(transcriber),
             RecordingTrasher = new GioTrasher(),
             RecordingCompressor = new FfmpegAudioCompressor(),
+            // Meetings: the chosen microphone (a PipeWire node name, null - the default) and the
+            // default output's monitor, each its own pw-record.
+            MakeMeetingCapture = MeetingCaptures.FromSources(
+                uid => PipeWireMeetingSource.Microphone(
+                    uid,
+                    uid is null ? null : new PipeWireInputDevices().Available().FirstOrDefault(device => device.Uid == uid)?.Name),
+                PipeWireMeetingSource.SystemAudio),
+            SupportsSystemAudio = true,
             LayoutHasAltGraph = KeyboardLayoutFacts.HasAltGraph,
             HotkeySettingsHint = HotkeyAdvice.LinuxSettingsHint,
             // evdev reads alongside and never grabs, so the key still reaches everything else. With
@@ -279,6 +287,9 @@ public sealed partial class App : Application
     private void ShutDown(int code)
     {
         DiagnosticLog.Emit("app.exit", ("code", code));
+        // A recording in progress is filed as ended by the quit; one that does not stop in time
+        // is left to the next launch's recovery - the audio is on disk either way.
+        if (state is { IsRecording: true } recording) { _ = recording.StopRecordingBeforeQuit().Wait(TimeSpan.FromSeconds(5)); }
         state?.Dispose();
         // Before the monitor it drives, and explicitly rather than at process exit: the socket file
         // outlives an unlinked process, and the next run would have to prove it stale.

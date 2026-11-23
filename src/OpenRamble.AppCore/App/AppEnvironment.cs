@@ -144,6 +144,21 @@ public sealed class AppEnvironment
     public IRecordingAudioCompressor? RecordingCompressor { get; init; }
 
     /// <summary>
+    /// Builds the recorder for a meeting or voice note. <c>null</c> - no recording on this
+    /// platform: <see cref="AppState.CanRecord"/> is false and the record actions do nothing.
+    /// </summary>
+    public MeetingCaptureFactory? MakeMeetingCapture { get; init; }
+
+    /// <summary>
+    /// Whether <see cref="MakeMeetingCapture"/> can record what the computer plays. False - a
+    /// meeting records the microphone only and the health strip says so.
+    /// </summary>
+    public bool SupportsSystemAudio { get; init; }
+
+    /// <summary>Who says the recording's health changes out loud. Optional.</summary>
+    public IAccessibilityAnnouncing? Announcer { get; init; }
+
+    /// <summary>
     /// Whether the active keyboard layout composes with Right Alt - one of the facts
     /// <see cref="HotkeyAdvice"/> cannot work out on its own.
     /// </summary>

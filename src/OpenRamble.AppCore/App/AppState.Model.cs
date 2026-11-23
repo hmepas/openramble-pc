@@ -1088,7 +1088,9 @@ public sealed partial class AppState
                 || !OnboardingCompleted
                 // An import reads its pieces with this engine: unloading under it would only
                 // send the file back to wait for the model. The countdown starts when it is done.
-                || !importActivity.IsIdle)
+                || !importActivity.IsIdle
+                // The same for a recording and its transcript catching up.
+                || recordingHoldsEngine)
             {
                 return;
             }
@@ -1138,7 +1140,8 @@ public sealed partial class AppState
                 || isRecyclingEngine
                 || isPreparingEngine
                 || !isEngineReady
-                || !importActivity.IsIdle)
+                || !importActivity.IsIdle
+                || recordingHoldsEngine)
             {
                 return;
             }

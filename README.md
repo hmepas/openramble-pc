@@ -128,6 +128,18 @@ downloaded, verified and loaded. What the machine has to provide:
   itself). `python3 scripts/keyd-keys.py` shows what actually arrives.
 - **ydotool** where `wtype` cannot work — GNOME and X11 sessions do not offer
   the virtual-keyboard protocol it speaks — with its daemon running.
+- **A recent glibc.** The speech runtime (`libtranscribe.so`, `libggml-*.so`)
+  is built on a rolling distribution and currently needs **glibc 2.43**, so the
+  build here does **not** run on Ubuntu 22.04 (2.35), 24.04 (2.39) or 25.10
+  (2.42), nor on Debian or Fedora releases older than that: the speech engine
+  does not load. To run it there, build it yourself on the oldest distribution it has
+  to run on (for example inside an `ubuntu:22.04` container): the libraries
+  then link against that glibc and run on it and on every newer one. The .NET
+  part is self-contained and is not affected.[^older-distros]
+
+[^older-distros]: A portable build for older distributions (Ubuntu 22.04 and
+    newer) is planned but not made yet. If you want it, open a feature request
+    at <https://github.com/hmepas/openramble-pc/issues> and it will be done.
 - Optional: `libcanberra` for the attention sound, `xdg-utils` for the
   "Show recordings" menu item.
 

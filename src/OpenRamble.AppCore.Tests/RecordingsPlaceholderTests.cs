@@ -90,6 +90,33 @@ public class RecordingsPlaceholderTests
     }
 
     [Fact]
+    public void ASideThatDeliveredOnlySilenceIsToldApartFromOneNeverCaptured()
+    {
+        Assert.Equal(
+            "Only silence was heard from either side.",
+            RecordingsPlaceholder.DegradedNote(false, true, false, microphoneEverDeliveredBuffers: true, systemAudioEverDeliveredBuffers: true));
+        Assert.Equal(
+            "Only silence was heard from your microphone.",
+            RecordingsPlaceholder.DegradedNote(false, false, false, microphoneEverDeliveredBuffers: true));
+        Assert.Equal(
+            "The other side of this call was recorded. Only silence was heard from your microphone.",
+            RecordingsPlaceholder.DegradedNote(false, true, true, microphoneEverDeliveredBuffers: true));
+        Assert.Equal(
+            "Your microphone was recorded. Only silence was heard from the other side of this call.",
+            RecordingsPlaceholder.DegradedNote(true, true, false, systemAudioEverDeliveredBuffers: true));
+        Assert.Equal(
+            "Only silence was heard from your microphone. The other side of this call was not captured.",
+            RecordingsPlaceholder.DegradedNote(false, true, false, microphoneEverDeliveredBuffers: true));
+        // Buffers unknown (older files) or absent: the old wording.
+        Assert.Equal(
+            "Neither your microphone nor the other side of this call was captured.",
+            RecordingsPlaceholder.DegradedNote(false, true, false, microphoneEverDeliveredBuffers: null));
+        Assert.Equal(
+            "Your microphone was not captured.",
+            RecordingsPlaceholder.DegradedNote(false, false, false, microphoneEverDeliveredBuffers: false));
+    }
+
+    [Fact]
     public void AnImportSaysWhereItIsInLine()
     {
         Guid first = Guid.NewGuid(), second = Guid.NewGuid();

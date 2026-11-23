@@ -99,23 +99,48 @@ public sealed record RecordingsPlaceholder(string Symbol, string Title, string D
         DegradedNote(
             recording.MicrophoneEverDeliveredAudio,
             recording.SystemAudio.WasRequested,
-            recording.SystemAudio.EverDeliveredAudio);
+            recording.SystemAudio.EverDeliveredAudio,
+            recording.MicrophoneEverDeliveredBuffers,
+            recording.SystemAudio.EverDeliveredBuffers);
 
     /// <summary>
     /// The line a recording carries forever when a requested side never arrived.
     /// <paramref name="microphoneEverDeliveredAudio"/> is <c>null</c> for files older than the field.
     /// </summary>
-    public static string? DegradedNote(bool? microphoneEverDeliveredAudio, bool systemAudioWasRequested, bool systemAudioEverDeliveredAudio)
+    /// <remarks>
+    /// A side that delivered buffers but never anything audible was there and heard silence - a
+    /// person who stayed quiet, a muted input - and is told apart from one that never arrived:
+    /// "was not captured" for that would send someone looking for a broken device. Unknown buffers
+    /// (older files) keep the old wording.
+    /// </remarks>
+    public static string? DegradedNote(
+        bool? microphoneEverDeliveredAudio,
+        bool systemAudioWasRequested,
+        bool systemAudioEverDeliveredAudio,
+        bool? microphoneEverDeliveredBuffers = null,
+        bool systemAudioEverDeliveredBuffers = false)
     {
         bool microphoneMissing = microphoneEverDeliveredAudio == false;
         bool othersMissing = systemAudioWasRequested && !systemAudioEverDeliveredAudio;
+        bool microphoneSilent = microphoneMissing && microphoneEverDeliveredBuffers == true;
+        bool othersSilent = othersMissing && systemAudioEverDeliveredBuffers;
+        string microphone = microphoneSilent
+            ? "Only silence was heard from your microphone."
+            : "Your microphone was not captured.";
+        string others = othersSilent
+            ? "Only silence was heard from the other side of this call."
+            : "The other side of this call was not captured.";
         return (microphoneMissing, othersMissing) switch
         {
-            (true, true) => "Neither your microphone nor the other side of this call was captured.",
+            (true, true) when microphoneSilent && othersSilent => "Only silence was heard from either side.",
+            (true, true) when !microphoneSilent && !othersSilent => "Neither your microphone nor the other side of this call was captured.",
+            (true, true) => $"{microphone} {others}",
             (true, false) => systemAudioWasRequested
-                ? "The other side of this call was recorded. Your microphone was not captured."
-                : "Your microphone was not captured.",
-            (false, true) => "Only your microphone was recorded. The other side of this call was not captured.",
+                ? $"The other side of this call was recorded. {microphone}"
+                : microphone,
+            (false, true) => othersSilent
+                ? $"Your microphone was recorded. {others}"
+                : $"Only your microphone was recorded. {others}",
             (false, false) => null,
         };
     }

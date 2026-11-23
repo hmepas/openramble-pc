@@ -184,6 +184,13 @@ public sealed record MeetingRecordingMetadata : IJsonOnDeserialized
     /// </summary>
     public bool? MicrophoneEverDeliveredAudio { get; set; }
 
+    /// <summary>
+    /// <c>null</c> on recordings filed before this was stored. With
+    /// <see cref="MicrophoneEverDeliveredAudio"/> <c>false</c>, <c>true</c> here means the
+    /// microphone was there and heard only silence, rather than never delivering anything.
+    /// </summary>
+    public bool? MicrophoneEverDeliveredBuffers { get; set; }
+
     public SystemAudioSummary SystemAudio { get; set; } = new();
 
     public List<MeetingInterval> Pauses { get; set; } = [];
@@ -239,7 +246,8 @@ public sealed record MeetingRecordingMetadata : IJsonOnDeserialized
         string? videoFileName = null,
         ScreenRecordingOptions? screenOptions = null,
         string? displayName = null,
-        RecordingImportLanguage? importLanguage = null) => new()
+        RecordingImportLanguage? importLanguage = null,
+        bool? microphoneEverDeliveredBuffers = null) => new()
     {
         SchemaVersion = CurrentSchemaVersion,
         Id = id ?? Guid.NewGuid(),
@@ -249,6 +257,7 @@ public sealed record MeetingRecordingMetadata : IJsonOnDeserialized
         SampleRate = sampleRate,
         MicrophoneDeviceName = microphoneDeviceName,
         MicrophoneEverDeliveredAudio = microphoneEverDeliveredAudio,
+        MicrophoneEverDeliveredBuffers = microphoneEverDeliveredBuffers,
         SystemAudio = systemAudio,
         Pauses = pauses?.ToList() ?? [],
         Gaps = gaps?.ToList() ?? [],
@@ -272,6 +281,7 @@ public sealed record MeetingRecordingMetadata : IJsonOnDeserialized
         && ChannelLayout.SequenceEqual(other.ChannelLayout)
         && MicrophoneDeviceName == other.MicrophoneDeviceName
         && MicrophoneEverDeliveredAudio == other.MicrophoneEverDeliveredAudio
+        && MicrophoneEverDeliveredBuffers == other.MicrophoneEverDeliveredBuffers
         && Equals(SystemAudio, other.SystemAudio)
         && Pauses.SequenceEqual(other.Pauses)
         && Gaps.SequenceEqual(other.Gaps)

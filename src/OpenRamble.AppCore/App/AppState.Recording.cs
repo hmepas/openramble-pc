@@ -337,6 +337,7 @@ public sealed partial class AppState
                 metadata.Duration = summary.Duration;
                 metadata.MicrophoneDeviceName = summary.MicrophoneDeviceName;
                 metadata.MicrophoneEverDeliveredAudio = summary.MicrophoneEverDeliveredAudio;
+                metadata.MicrophoneEverDeliveredBuffers = summary.MicrophoneEverDeliveredBuffers;
                 metadata.SystemAudio = summary.SystemAudio;
                 metadata.Gaps = [.. summary.Gaps];
                 metadata.Pauses = [.. summary.Pauses];

@@ -31,14 +31,16 @@ public sealed class AppStateMicrophoneHealthTests : IDisposable
         Assert.IsType<MicrophoneHealth.Verifying>(state.LiveMicrophoneHealth);
         await TestWait.For("a degraded microphone", () => state.LiveMicrophoneHealth.MarksRecordingDegraded, 6_000);
         Assert.IsType<MicrophoneHealth.Unheard>(state.LiveMicrophoneHealth);
-        Assert.Contains("Your microphone is not being captured.", harness.Announcer.Messages);
+        // Buffers arrived but nothing audible: said as silence, not as a microphone never captured.
+        Assert.Contains("Only silence from your microphone.", harness.Announcer.Messages);
         Assert.True(harness.MeetingCapture.RecoverCount >= 1);
 
         await state.StopRecording();
         MeetingRecordingMetadata filed = Assert.Single(state.Recordings);
         Assert.False(filed.MicrophoneEverDeliveredAudio);
+        Assert.True(filed.MicrophoneEverDeliveredBuffers);
         Assert.Equal(
-            "The other side of this call was recorded. Your microphone was not captured.",
+            "The other side of this call was recorded. Only silence was heard from your microphone.",
             RecordingsPlaceholder.DegradedNote(filed));
         Assert.IsType<MicrophoneHealth.Idle>(state.LiveMicrophoneHealth);
     }

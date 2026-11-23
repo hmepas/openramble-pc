@@ -32,7 +32,7 @@ public abstract record CaptureHealth
     public sealed record Capturing(double SecondsSinceSound) : CaptureHealth;
 
     /// <summary>Nothing audible arrived since the start.</summary>
-    public sealed record Unheard(double Elapsed) : CaptureHealth;
+    public sealed record Unheard(double Elapsed, bool HeardSilence = false) : CaptureHealth;
 
     /// <summary>Sound arrived, then stopped for longer than a pause.</summary>
     public sealed record WentSilent(double SecondsSinceSound) : CaptureHealth;
@@ -65,7 +65,7 @@ public abstract record CaptureHealth
             return since >= WorrySeconds ? new WentSilent(since) : new Capturing(since);
         }
 
-        return elapsed < ProbeGraceSeconds ? new Verifying() : new Unheard(elapsed);
+        return elapsed < ProbeGraceSeconds ? new Verifying() : new Unheard(elapsed, health.EverDeliveredBuffers);
     }
 
     internal static double Seconds(long from, long to) =>
@@ -86,6 +86,7 @@ public abstract record CaptureHealth
     public string? Title => this switch
     {
         Unsupported => "This computer can't record other apps' audio",
+        Unheard { HeardSilence: true } => "Only silence is arriving from the other side",
         Unheard or Unavailable => "Only your microphone is being recorded",
         WentSilent silent => $"The other side went quiet {RecordingTime.Brief(TimeSpan.FromSeconds(silent.SecondsSinceSound))} ago",
         _ => null,
@@ -94,6 +95,7 @@ public abstract record CaptureHealth
     public string? Detail => this switch
     {
         Unsupported => "Recording what you hear isn't available on this system yet. Everything else works.",
+        Unheard { HeardSilence: true } => "What this computer plays is reaching OpenRamble, but it has been silent so far.",
         Unheard => "Nothing is arriving from what this computer plays. The output may be one PipeWire can't monitor, or nothing has played yet.",
         WentSilent => "Sound was arriving earlier. Your audio output may have changed.",
         Unavailable unavailable => unavailable.Reason,
@@ -103,6 +105,7 @@ public abstract record CaptureHealth
     /// <summary>What a screen reader says when this state is first reached, if anything.</summary>
     public string? Announcement => this switch
     {
+        Unheard { HeardSilence: true } => "Only silence from the other side.",
         Unheard => "The other side is not being captured.",
         WentSilent => "The other side went quiet.",
         Capturing => "The other side is being captured.",
@@ -128,7 +131,7 @@ public abstract record MicrophoneHealth
     public sealed record Capturing(double SecondsSinceSound) : MicrophoneHealth;
 
     /// <summary>Never a sample above the audible floor.</summary>
-    public sealed record Unheard(double Elapsed) : MicrophoneHealth;
+    public sealed record Unheard(double Elapsed, bool HeardSilence = false) : MicrophoneHealth;
 
     public sealed record WentSilent(double SecondsSinceSound) : MicrophoneHealth;
 
@@ -151,13 +154,14 @@ public abstract record MicrophoneHealth
             return since >= WorrySeconds ? new WentSilent(since) : new Capturing(since);
         }
 
-        return elapsed < GraceSeconds ? new Verifying() : new Unheard(elapsed);
+        return elapsed < GraceSeconds ? new Verifying() : new Unheard(elapsed, health.EverDeliveredBuffers);
     }
 
     public bool MarksRecordingDegraded => this is Unheard or Unavailable or WentSilent;
 
     public string? Title => this switch
     {
+        Unheard { HeardSilence: true } => "Only silence is arriving from your microphone",
         Unheard or Unavailable => "Your microphone isn't being captured",
         WentSilent silent => $"Your microphone went quiet {RecordingTime.Brief(TimeSpan.FromSeconds(silent.SecondsSinceSound))} ago",
         _ => null,
@@ -165,6 +169,7 @@ public abstract record MicrophoneHealth
 
     public string? Detail => this switch
     {
+        Unheard { HeardSilence: true } => "Your microphone is connected but has heard only silence so far. Check that the right input is selected and not muted. The other side is still being recorded.",
         Unheard => "Nothing is arriving from your microphone. Another app may have exclusive access, or this input is silent. The other side is still being recorded.",
         WentSilent => "Sound was arriving earlier. The selected input may have changed, or another app may have taken the microphone.",
         Unavailable unavailable => unavailable.Reason,
@@ -177,6 +182,7 @@ public abstract record MicrophoneHealth
     /// </summary>
     public string? Announcement => this switch
     {
+        Unheard { HeardSilence: true } => "Only silence from your microphone.",
         Unheard => "Your microphone is not being captured.",
         WentSilent => "Your microphone went quiet.",
         _ => null,

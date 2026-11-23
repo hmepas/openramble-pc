@@ -45,9 +45,14 @@ public sealed class CaptureHealthTests
     [Fact]
     public void NothingAudibleAfterTheGraceIsUnheardWhateverTheBuffersSay()
     {
-        // Buffers of silence are what an idle monitor delivers; they prove nothing.
-        Assert.Equal(new CaptureHealth.Unheard(3.5), Make(3.5, Health(buffers: true)));
+        // Buffers of silence are what an idle monitor delivers: still unheard, but said as silence
+        // rather than as a side that never arrived.
+        Assert.Equal(new CaptureHealth.Unheard(3.5, HeardSilence: true), Make(3.5, Health(buffers: true)));
         Assert.Equal(new CaptureHealth.Unheard(3.5), Make(3.5, Health(buffers: false)));
+        var silence = new CaptureHealth.Unheard(3.5, HeardSilence: true);
+        Assert.Equal("Only silence is arriving from the other side", silence.Title);
+        Assert.Equal("Only silence from the other side.", silence.Announcement);
+        Assert.True(silence.MarksRecordingDegraded);
         var state = new CaptureHealth.Unheard(3.5);
         Assert.Equal("Only your microphone is being recorded", state.Title);
         Assert.Equal(StatusColorRole.Attention, state.Role);
@@ -112,11 +117,17 @@ public sealed class CaptureHealthTests
         var silent = new MeetingCapture.ChannelHealth(true, false, LastBlockAt: now);
         Assert.IsType<MicrophoneHealth.Verifying>(MicrophoneHealth.Make(null, 1, silent, now));
         MicrophoneHealth unheard = MicrophoneHealth.Make(null, 3.5, silent, now);
-        Assert.Equal(new MicrophoneHealth.Unheard(3.5), unheard);
-        Assert.Equal("Your microphone isn't being captured", unheard.Title);
+        Assert.Equal(new MicrophoneHealth.Unheard(3.5, HeardSilence: true), unheard);
+        Assert.Equal("Only silence is arriving from your microphone", unheard.Title);
         Assert.True(unheard.MarksRecordingDegraded);
-        Assert.Equal("Your microphone is not being captured.", unheard.Announcement);
-        Assert.Contains("exclusive", unheard.Detail);
+        Assert.Equal("Only silence from your microphone.", unheard.Announcement);
+        Assert.Contains("only silence", unheard.Detail);
+
+        MicrophoneHealth nothing = MicrophoneHealth.Make(null, 3.5, MeetingCapture.ChannelHealth.None, now);
+        Assert.Equal(new MicrophoneHealth.Unheard(3.5), nothing);
+        Assert.Equal("Your microphone isn't being captured", nothing.Title);
+        Assert.Equal("Your microphone is not being captured.", nothing.Announcement);
+        Assert.Contains("exclusive", nothing.Detail);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using Avalonia;
@@ -23,10 +24,13 @@ namespace OpenRamble.App.Linux;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Rows are built by hand, as the Settings history rows were: day headers are rows that cannot be
-/// selected, and each row carries its own context menu. The list is rebuilt only when what it is
-/// built from changes - the history, the recordings, the scope or the search; an import's
-/// progress rewrites the one status line it touches.
+/// The list is a collection of row models (<see cref="LibraryRow"/>: day headers that cannot be
+/// selected, dictations, recordings, the live recording) kept in step with what it is built from -
+/// the history, the recordings, the scope or the search - by key: rows are inserted, removed,
+/// moved and updated in place, never replaced, so the list keeps its containers and its place. It
+/// scrolls only when something is selected on purpose; replacing the whole list and scrolling to
+/// the selection made the virtualizing panel place rows by estimate, and the first day header
+/// slid down a little with every change beside it.
 /// </para>
 /// <para>
 /// The detail pane is whatever <see cref="CreateDetail"/> makes for the selection; the window owns
@@ -55,14 +59,11 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     /// <summary>The items the list shows, in its order; headers excluded.</summary>
     private List<LibraryItem> listed = [];
 
-    /// <summary>Each recording row's status line, rewritten in place as an import advances.</summary>
-    private readonly Dictionary<Guid, TextBlock> statusLines = [];
+    /// <summary>The list's rows, kept and updated in place by key: the list never starts over.</summary>
+    private readonly ObservableCollection<LibraryRow> rows = [];
 
     /// <summary>What the list was last built from, so a property change that touched none of it is free.</summary>
     private (IReadOnlyList<HistoryEntry> History, IReadOnlyList<MeetingRecordingMetadata> Recordings, LibraryScope Scope, string Query, Guid? Live)? rendered;
-
-    /// <summary>The pinned live row's state and time, rewritten in place once a second.</summary>
-    private (ListBoxItem Row, Ellipse Dot, TextBlock State, TextBlock Time)? liveRow;
 
     /// <summary>Each side's recent peaks, oldest first, for the record bar's meters.</summary>
     private readonly Queue<float> youLevels = new(), othersLevels = new();
@@ -89,6 +90,12 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         ScopePicker.SelectedIndex = 0;
         ScopePicker.SelectionChanged += (_, _) => RenderList();
         SearchBox.TextChanged += (_, _) => RenderList();
+        ItemList.ItemTemplate = LibraryRowView.Template(BuildRow);
+        ItemList.ItemsSource = rows;
+        ItemList.ContainerPrepared += (_, args) =>
+        {
+            if (args.Container is ListBoxItem container && args.Index < rows.Count) { Decorate(container, rows[args.Index]); }
+        };
         ItemList.SelectionChanged += OnListSelectionChanged;
         ItemList.KeyDown += OnListKeyDown;
         MicOnlyToggle.IsCheckedChanged += (_, _) => RenderRecordBar();
@@ -258,8 +265,8 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     private void OnTranscriptChanged(Guid id) =>
         Dispatcher.UIThread.Post(() =>
         {
-            // Progress must not rebuild (and scroll) the list: only a change in what matches does.
-            if (SearchBox.Text?.Trim().Length > 0) { RenderList(force: true, onlyIfMatchesChanged: true); }
+            // The search reads transcripts: what matches may have changed.
+            if (SearchBox.Text?.Trim().Length > 0) { RenderList(force: true); }
             RenderToolbar();
         });
 
@@ -267,7 +274,12 @@ public sealed partial class LibraryWindow : Window, IDictationSink
 
     private LibraryScope Scope => ScopePicker.SelectedIndex is >= 0 and < 3 ? Scopes[ScopePicker.SelectedIndex] : LibraryScope.All;
 
-    private void RenderList(bool force = false, bool onlyIfMatchesChanged = false)
+    /// <summary>
+    /// Bring the rows in line with what they are built from. Rows are matched by key and updated
+    /// in place, so the list keeps its containers and its place; nothing here scrolls - only an
+    /// explicit <see cref="Select"/> does, and a new search or scope starts from the top.
+    /// </summary>
+    private void RenderList(bool force = false)
     {
         IReadOnlyList<HistoryEntry> history = state.History;
         IReadOnlyList<MeetingRecordingMetadata> recordings = state.Recordings;
@@ -284,58 +296,45 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             return;
         }
 
-        // A new search or scope starts the list from its top; only the rest may keep the selection in view.
         bool refiltered = rendered is { } previous && (previous.Query != query || previous.Scope != inputs.Scope);
         rendered = inputs;
         IReadOnlyList<LibraryDay> days = state.LibraryDays(Scope, query);
+        DateOnly today = DateOnly.FromDateTime(DateTime.Now);
+
+        var fresh = new List<LibraryRow>();
+        listed = [];
         // The recording in progress is pinned above everything, whatever the scope or search
         // (upstream RecordingsList.swift).
-        LibraryItem? pinned = live is null ? null : new LibraryItem.Recording(new LibraryRecording(live));
-        if (onlyIfMatchesChanged
-            && (pinned is null ? [] : new[] { pinned.Id })
-                .Concat(days.SelectMany(day => day.Items).Select(item => item.Id))
-                .SequenceEqual(listed.Select(item => item.Id)))
+        if (live is not null)
         {
-            RenderStatusLines();
-            return;
+            LibraryItem pinned = new LibraryItem.Recording(new LibraryRecording(live));
+            listed.Add(pinned);
+            fresh.Add(new LiveRow(pinned));
         }
 
-        DateOnly today = DateOnly.FromDateTime(DateTime.Now);
+        foreach (LibraryDay day in days)
+        {
+            fresh.Add(new DayHeaderRow(day.Day, day.Title(today)));
+            foreach (LibraryItem item in day.Items)
+            {
+                listed.Add(item);
+                fresh.Add(new ItemRow(item, item is LibraryItem.Recording recording && day.NeedsSeconds(recording.Value)));
+            }
+        }
 
         updating = true;
         try
         {
-            var rows = new List<ListBoxItem>();
-            listed = [];
-            statusLines.Clear();
-            liveRow = null;
-            if (pinned is not null)
+            foreach (LibraryRow changed in LibraryRowsSync.Sync(rows, fresh))
             {
-                listed.Add(pinned);
-                rows.Add(LiveRow(pinned));
+                if (ItemList.ContainerFromItem(changed) is ListBoxItem container) { Decorate(container, changed); }
             }
 
-            foreach (LibraryDay day in days)
-            {
-                rows.Add(DayRow(day.Title(today)));
-                foreach (LibraryItem item in day.Items)
-                {
-                    listed.Add(item);
-                    rows.Add(item switch
-                    {
-                        LibraryItem.Dictation dictation => DictationRow(dictation),
-                        LibraryItem.Recording recording => RecordingRow(recording, day.NeedsSeconds(recording.Value)),
-                        _ => throw new InvalidOperationException(),
-                    });
-                }
-            }
-
-            ItemList.ItemsSource = rows;
             // What is selected has to be something the list still shows; nothing left - the first.
             var available = listed.Select(item => item.Id).ToHashSet();
             selection.IntersectWith(available);
             if (selection.Count == 0 && listed.Count > 0) { selection = [listed[0].Id]; }
-            ApplySelectionToList(scroll: !onlyIfMatchesChanged && !refiltered);
+            ApplySelectionToList();
             if (refiltered) { ItemList.Scroll?.Offset = default; }
         }
         finally
@@ -343,18 +342,64 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             updating = false;
         }
 
+        RenderLiveRow();
         RenderStatusLines();
         RenderDetail();
         RenderToolbar();
     }
 
-    private static ListBoxItem DayRow(string title) => new()
+    /// <summary>The look of one row; made again whenever the row changes.</summary>
+    private Control BuildRow(LibraryRow row) => row switch
     {
-        Classes = { "dayHeader" },
-        IsEnabled = false,
-        Focusable = false,
-        Content = new TextBlock { Classes = { "small" }, Text = title, FontWeight = FontWeight.Medium },
+        DayHeaderRow header => new TextBlock { Classes = { "small" }, Text = header.Title, FontWeight = FontWeight.Medium },
+        LiveRow live => LiveContent(live),
+        ItemRow { Item: LibraryItem.Dictation dictation } => DictationContent(dictation.Entry),
+        ItemRow { Item: LibraryItem.Recording recording } item => RecordingContent(recording.Value, item),
+        _ => throw new InvalidOperationException(),
     };
+
+    /// <summary>
+    /// What a row's container carries besides its look: the class saying what kind of row it is,
+    /// headers that cannot be selected, the context menu, the tooltip and what a screen reader says.
+    /// Containers are recycled, so every property is set or cleared each time.
+    /// </summary>
+    private void Decorate(ListBoxItem container, LibraryRow row)
+    {
+        bool header = row is DayHeaderRow;
+        container.Classes.Set("dayHeader", header);
+        container.Classes.Set("libraryRow", !header);
+        container.IsEnabled = !header;
+        container.Focusable = !header;
+        if (row is LiveRow) { container.Padding = new Thickness(10, 10); }
+        else { container.ClearValue(PaddingProperty); }
+
+        container.ContextMenu = row is LiveRow ? null : row.Item switch
+        {
+            LibraryItem.Dictation dictation => DictationMenu(dictation),
+            LibraryItem.Recording recording => RecordingMenu(recording),
+            _ => null,
+        };
+        ToolTip.SetTip(container, null);
+        AutomationProperties.SetHelpText(container, null);
+        switch (row)
+        {
+            case DayHeaderRow day:
+                AutomationProperties.SetName(container, day.Title);
+                break;
+            case LiveRow live:
+                AutomationProperties.SetName(container, live.Paused ? "Recording, paused" : "Recording");
+                AutomationProperties.SetHelpText(container, RecordingTime.Spoken(live.Duration));
+                break;
+            case ItemRow { Item: LibraryItem.Dictation dictation }:
+                AutomationProperties.SetName(container, dictation.Entry.Text.Length > 0 ? dictation.Entry.Text : "Nothing recognized");
+                break;
+            case ItemRow { Item: LibraryItem.Recording { Value: var recording } }:
+                ToolTip.SetTip(container, TimeZoneInfo.ConvertTime(recording.StartedAt, TimeZoneInfo.Local).ToString("F", CultureInfo.CurrentCulture));
+                AutomationProperties.SetName(container, recording.Title ?? RecordingsPlaceholder.DefaultTitle(recording.StartedAt));
+                AutomationProperties.SetHelpText(container, RecordingsPlaceholder.Kind(recording.Kind));
+                break;
+        }
+    }
 
     /// <summary>A row: the disc saying what it is, then its lines.</summary>
     private static Grid RowLayout(string iconKey, Control lines)
@@ -382,9 +427,8 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         return line;
     }
 
-    private ListBoxItem DictationRow(LibraryItem.Dictation item)
+    private static Grid DictationContent(HistoryEntry entry)
     {
-        HistoryEntry entry = item.Entry;
         bool hasWords = entry.Text.Length > 0;
         var words = new TextBlock
         {
@@ -401,35 +445,28 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             Classes = { "small", "tnum" },
             Text = entry.Date.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture),
         };
-        Grid grid = RowLayout("IconQuote", new StackPanel { Spacing = 2, Children = { words, TimeLine(time, entry.IsKept) } });
+        return RowLayout("IconQuote", new StackPanel { Spacing = 2, Children = { words, TimeLine(time, entry.IsKept) } });
+    }
 
-        var copy = new MenuItem { Header = "Copy", IsEnabled = hasWords };
+    private ContextMenu DictationMenu(LibraryItem.Dictation item)
+    {
+        HistoryEntry entry = item.Entry;
+        var copy = new MenuItem { Header = "Copy", IsEnabled = entry.Text.Length > 0 };
         copy.Click += (_, _) => state.CopyHistoryEntry(entry);
         var keep = new MenuItem { Header = entry.IsKept ? "Stop keeping this one" : "Keep this one" };
         keep.Click += (_, _) => state.SetHistoryEntryKept(!entry.IsKept, entry);
         var delete = new MenuItem { Header = "Delete" };
         delete.Click += (_, _) => _ = DeleteItems([item]);
-
-        var row = new ListBoxItem
-        {
-            Classes = { "libraryRow" },
-            Content = grid,
-            Tag = item,
-            ContextMenu = new ContextMenu { ItemsSource = new Control[] { copy, keep, new Separator(), delete } },
-        };
-        AutomationProperties.SetName(row, hasWords ? entry.Text : "Nothing recognized");
-        return row;
+        return new ContextMenu { ItemsSource = new Control[] { copy, keep, new Separator(), delete } };
     }
 
-    private ListBoxItem RecordingRow(LibraryItem.Recording item, bool showsSeconds)
+    private static Grid RecordingContent(ILibraryRecording recording, ItemRow row)
     {
-        ILibraryRecording recording = item.Value;
-        string kind = RecordingsPlaceholder.Kind(recording.Kind);
         var top = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         top.Children.Add(new TextBlock
         {
             Classes = { "words14" },
-            Text = recording.Title ?? kind,
+            Text = recording.Title ?? RecordingsPlaceholder.Kind(recording.Kind),
             TextWrapping = TextWrapping.NoWrap,
             TextTrimming = TextTrimming.CharacterEllipsis,
         });
@@ -437,10 +474,10 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         Grid.SetColumn(duration, 1);
         top.Children.Add(duration);
 
+        // Import progress in place of the start time; the start time comes back when it is done.
         string start = TimeZoneInfo.ConvertTime(recording.StartedAt, TimeZoneInfo.Local)
-            .ToString(showsSeconds ? "HH:mm:ss" : "HH:mm", CultureInfo.InvariantCulture);
-        var status = new TextBlock { Classes = { "small", "tnum" }, Text = start, Tag = start, TextTrimming = TextTrimming.CharacterEllipsis };
-        statusLines[recording.Id] = status;
+            .ToString(row.ShowsSeconds ? "HH:mm:ss" : "HH:mm", CultureInfo.InvariantCulture);
+        var status = new TextBlock { Classes = { "small", "tnum" }, Text = row.Status ?? start, TextTrimming = TextTrimming.CharacterEllipsis };
 
         var stack = new StackPanel { Spacing = 2, Children = { top, status } };
         if (recording is LibraryRecording { Metadata: { } metadata }
@@ -462,6 +499,12 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             stack.Children.Add(new DockPanel { Children = { alert, text } });
         }
 
+        return RowLayout(recording.Kind is RecordingKind.ScreenRecording ? "IconMonitor" : "IconMic", stack);
+    }
+
+    private ContextMenu RecordingMenu(LibraryItem.Recording item)
+    {
+        ILibraryRecording recording = item.Value;
         var rename = new MenuItem { Header = "Rename…" };
         rename.Click += (_, _) => Rename(recording.Id);
         var trash = new MenuItem { Header = "Move to Trash" };
@@ -477,49 +520,49 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         }
 
         menu.AddRange([new Separator(), trash]);
-
-        string icon = recording.Kind is RecordingKind.ScreenRecording ? "IconMonitor" : "IconMic";
-        var row = new ListBoxItem
-        {
-            Classes = { "libraryRow" },
-            Content = RowLayout(icon, stack),
-            Tag = item,
-            ContextMenu = new ContextMenu { ItemsSource = menu },
-        };
-        ToolTip.SetTip(row, TimeZoneInfo.ConvertTime(recording.StartedAt, TimeZoneInfo.Local).ToString("F", CultureInfo.CurrentCulture));
-        AutomationProperties.SetName(row, recording.Title ?? RecordingsPlaceholder.DefaultTitle(recording.StartedAt));
-        AutomationProperties.SetHelpText(row, kind);
-        return row;
+        return new ContextMenu { ItemsSource = menu };
     }
 
     /// <summary>The recording in progress: a red dot, Recording or Paused, and how long so far.</summary>
-    private ListBoxItem LiveRow(LibraryItem item)
+    private Grid LiveContent(LiveRow live)
     {
-        var dot = new Ellipse { Width = 8, Height = 8, VerticalAlignment = VerticalAlignment.Center };
-        var label = new TextBlock { FontSize = 14, FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center };
-        var time = new TextBlock { Classes = { "clock" }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+        var dot = new Ellipse
+        {
+            Width = 8,
+            Height = 8,
+            VerticalAlignment = VerticalAlignment.Center,
+            Fill = live.Paused ? ThemeTokens.BrushOf(this, ThemeTokens.Label3) : StatusBrushes.Recording,
+        };
+        var label = new TextBlock
+        {
+            FontSize = 14,
+            FontWeight = FontWeight.Medium,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            Text = live.Paused ? "Paused" : "Recording",
+        };
+        var time = new TextBlock
+        {
+            Classes = { "clock" },
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            Text = RecordingTime.Clock(live.Duration),
+        };
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
-        label.Margin = new Thickness(8, 0, 0, 0);
         grid.Children.Add(dot);
         Grid.SetColumn(label, 1);
         grid.Children.Add(label);
         Grid.SetColumn(time, 2);
         grid.Children.Add(time);
-        var row = new ListBoxItem { Classes = { "libraryRow" }, Content = grid, Tag = item, Padding = new Thickness(10, 10) };
-        liveRow = (row, dot, label, time);
-        RenderLiveRow();
-        return row;
+        return grid;
     }
 
+    /// <summary>The live row's state and time, once a second.</summary>
     private void RenderLiveRow()
     {
-        if (liveRow is not { } live) { return; }
-        bool paused = state.RecordingState == MeetingRecordingState.Paused;
-        live.Dot.Fill = paused ? ThemeTokens.BrushOf(this, ThemeTokens.Label3) : StatusBrushes.Recording;
-        live.State.Text = paused ? "Paused" : "Recording";
-        live.Time.Text = RecordingTime.Clock(state.LiveDuration);
-        AutomationProperties.SetName(live.Row, paused ? "Recording, paused" : "Recording");
-        AutomationProperties.SetHelpText(live.Row, RecordingTime.Spoken(state.LiveDuration));
+        if (rows.FirstOrDefault() is not LiveRow live) { return; }
+        live.Tick(state.RecordingState == MeetingRecordingState.Paused, state.LiveDuration);
+        if (ItemList.ContainerFromItem(live) is ListBoxItem container) { Decorate(container, live); }
     }
 
     /// <summary>Import progress rewrites only the status lines; the start time comes back when it is done.</summary>
@@ -527,9 +570,12 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     {
         RecordingImportActivity activity = state.ImportActivity;
         bool isDictating = state.DictationStateValue != DictationState.Idle;
-        foreach ((Guid id, TextBlock line) in statusLines)
+        foreach (ItemRow row in rows.OfType<ItemRow>())
         {
-            line.Text = RecordingsPlaceholder.ImportLine(id, activity, isDictating) ?? (string?)line.Tag;
+            if (row.Item is LibraryItem.Recording recording)
+            {
+                row.Status = RecordingsPlaceholder.ImportLine(recording.Id, activity, isDictating);
+            }
         }
     }
 
@@ -550,13 +596,23 @@ public sealed partial class LibraryWindow : Window, IDictationSink
 
     private List<LibraryItem> SelectedItems => [.. listed.Where(item => selection.Contains(item.Id))];
 
+    /// <summary>
+    /// Select by id because a person or the app asked to (open, a new recording, a file brought in,
+    /// a rename): the only place the list scrolls to its selection.
+    /// </summary>
     private void Select(IEnumerable<Guid> ids)
     {
         selection = [.. ids];
         updating = true;
         try
         {
-            ApplySelectionToList();
+            if (ApplySelectionToList() is { } last)
+            {
+                // A row inserted just now gets its container first, so the list scrolls to where
+                // it is rather than to where an estimate puts it.
+                ItemList.UpdateLayout();
+                ItemList.ScrollIntoView(last);
+            }
         }
         finally
         {
@@ -567,27 +623,23 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         RenderToolbar();
     }
 
-    private void ApplySelectionToList(bool scroll = true)
+    /// <summary>Make the list's selection the ids in <see cref="selection"/>; the last selected row, if any.</summary>
+    private LibraryRow? ApplySelectionToList()
     {
-        ItemList.SelectedItems?.Clear();
-        if (ItemList.ItemsSource is not IEnumerable<ListBoxItem> rows) { return; }
-        ListBoxItem? last = null;
-        foreach (ListBoxItem row in rows)
+        List<LibraryRow> wanted = [.. rows.Where(row => row.Item is { } item && selection.Contains(item.Id))];
+        if (ItemList.SelectedItems is { } selected && !wanted.ToHashSet().SetEquals(selected.OfType<LibraryRow>()))
         {
-            if (row.Tag is LibraryItem item && selection.Contains(item.Id))
-            {
-                ItemList.SelectedItems?.Add(row);
-                last = row;
-            }
+            selected.Clear();
+            foreach (LibraryRow row in wanted) { selected.Add(row); }
         }
 
-        if (scroll && last is not null) { ItemList.ScrollIntoView(last); }
+        return wanted.LastOrDefault();
     }
 
     private void OnListSelectionChanged(object? sender, SelectionChangedEventArgs args)
     {
         if (updating) { return; }
-        selection = [.. (ItemList.SelectedItems?.OfType<ListBoxItem>() ?? []).Select(row => row.Tag).OfType<LibraryItem>().Select(item => item.Id)];
+        selection = [.. (ItemList.SelectedItems?.OfType<LibraryRow>() ?? []).Select(row => row.Item).OfType<LibraryItem>().Select(item => item.Id)];
         RenderDetail();
         RenderToolbar();
     }

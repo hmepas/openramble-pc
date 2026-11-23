@@ -33,6 +33,19 @@ public static class RecordingWaveformLayout
     }
 
     /// <summary>
+    /// Where bar <paramref name="index"/> of <paramref name="count"/> sits in a strip
+    /// <paramref name="width"/> wide with <paramref name="spacing"/> between bars: the bars share
+    /// what the gaps leave, never thinner than one unit.
+    /// </summary>
+    public static (double X, double Width) BarSlot(int index, int count, double width, double spacing)
+    {
+        if (count <= 0) { return (0, 0); }
+        double available = Math.Max(0, width - (spacing * (count - 1)));
+        double barWidth = Math.Max(1, available / count);
+        return (index * (barWidth + spacing), barWidth);
+    }
+
+    /// <summary>
     /// A whole recording's peaks (one array per channel, one value per bucket) squeezed into
     /// <paramref name="count"/> columns: each the loudest bucket of any channel in its stretch.
     /// Fewer buckets than columns leaves the columns at one bucket each.

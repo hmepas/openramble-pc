@@ -38,4 +38,35 @@ public sealed class RecordingWaveformTests
 
         Assert.Equal(1.0, RecordingWaveformLayout.BarOpacity(0, 1));
     }
+
+    /// <summary>
+    /// The dictation meter's strip: 24 bars with 2-unit gaps fill the width exactly, the last bar
+    /// ending on the right edge.
+    /// </summary>
+    [Fact]
+    public void BarsShareTheWidthTheGapsLeave()
+    {
+        (double firstX, double width) = RecordingWaveformLayout.BarSlot(0, 24, 142, 2);
+        (double lastX, double lastWidth) = RecordingWaveformLayout.BarSlot(23, 24, 142, 2);
+
+        Assert.Equal(0, firstX, 6);
+        Assert.Equal(4, width, 6);
+        Assert.Equal(lastWidth, width, 6);
+        Assert.Equal(142, lastX + lastWidth, 6);
+    }
+
+    [Fact]
+    public void ANarrowStripKeepsEveryBarAtLeastOneUnitWide()
+    {
+        (double x, double width) = RecordingWaveformLayout.BarSlot(3, 24, 20, 2);
+
+        Assert.Equal(1, width, 6);
+        Assert.Equal(9, x, 6);
+    }
+
+    [Fact]
+    public void NoBarsHaveNoSlot()
+    {
+        Assert.Equal((0d, 0d), RecordingWaveformLayout.BarSlot(0, 0, 100, 2));
+    }
 }

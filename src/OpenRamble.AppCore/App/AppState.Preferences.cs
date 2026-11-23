@@ -8,6 +8,13 @@ public sealed partial class AppState
 {
     private bool copiesToClipboard;
     private KeyCombination? copyShortcut;
+    private readonly KeyCombination? defaultLastTakeShortcut;
+
+    /// <summary>
+    /// The chord a person has before choosing one - the platform's, from the composition root -
+    /// and what the revert arrow gives back.
+    /// </summary>
+    public KeyCombination? DefaultLastTakeShortcut => defaultLastTakeShortcut;
     private bool appendsTrailingSpace;
     private AppAppearance appearance;
     private string? inputDeviceUid;
@@ -37,36 +44,26 @@ public sealed partial class AppState
     }
 
     /// <summary>
-    /// The shortcut that copies the last dictation, or nothing.
+    /// The shortcut that pastes the last take into the app in front, or nothing.
     ///
-    /// Optional because most people will not want a second global shortcut taken out of their
-    /// keyboard, and one nobody asked for is one that collides with something they already use.
+    /// Clearable because a global shortcut taken out of someone's keyboard is one that can
+    /// collide with something they already use.
     /// </summary>
-    public KeyCombination? CopyShortcut
+    /// <remarks>
+    /// Stored under the old copy shortcut's key: a chord someone chose for "the last dictation"
+    /// still means the last dictation.
+    /// </remarks>
+    public KeyCombination? LastTakeShortcut
     {
         get { lock (gate) { return copyShortcut; } }
         set
         {
             if (!Set(ref copyShortcut, value)) { return; }
-            UpdateSettings(current => current with { CopyShortcut = value?.RawValue });
-            ApplyCopyShortcut();
-            Raise(nameof(CopyLastMenuTitle));
+            // Cleared is stored as empty, not null: null is "never chosen", which reads as the default.
+            UpdateSettings(current => current with { CopyShortcut = value?.RawValue ?? string.Empty });
+            ApplyLastTakeShortcut();
         }
     }
-
-    /// <summary>
-    /// The menu row that copies the last dictation, with its shortcut written into the title.
-    /// </summary>
-    /// <remarks>
-    /// Written into the title rather than set as a real shortcut: the tray menu of neither
-    /// platform can display a global chord it does not own, and a bare function key cannot be
-    /// expressed as a menu accelerator at all. The title is the one place every binding can be
-    /// seen.
-    /// </remarks>
-    public string CopyLastMenuTitle =>
-        CopyShortcut is { } shortcut
-            ? $"Copy Last Dictation   {shortcut.DisplayString(shortcutKeymap)}"
-            : "Copy Last Dictation";
 
     /// <summary>
     /// End every dictation with a space.
@@ -217,13 +214,13 @@ public sealed partial class AppState
     /// no permission and starts once at assembly, so the one rule left is the monitor's own: a
     /// monitor with nothing to look for is a monitor that only costs.
     /// </remarks>
-    private void ApplyCopyShortcut()
+    private void ApplyLastTakeShortcut()
     {
-        if (copyShortcutMonitor is null) { return; }
-        KeyCombination? shortcut = CopyShortcut;
-        copyShortcutMonitor.SetShortcut(shortcut);
+        if (lastTakeShortcutMonitor is null) { return; }
+        KeyCombination? shortcut = LastTakeShortcut;
+        lastTakeShortcutMonitor.SetShortcut(shortcut);
         if (shortcut is null) { return; }
-        if (!copyShortcutMonitor.IsRunning) { copyShortcutMonitor.Start(); }
+        if (!lastTakeShortcutMonitor.IsRunning) { lastTakeShortcutMonitor.Start(); }
     }
 
     /// <summary>

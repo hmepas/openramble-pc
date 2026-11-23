@@ -68,15 +68,15 @@
           <TextBlock x:Name="HotkeyWarning" TextWrapping="Wrap" Margin="0,4,0,0" IsVisible="False" />
 
           <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
-            <TextBlock Classes="row" Text="Copy last dictation" />
+            <TextBlock Classes="row" Text="Paste last take" />
             <local:ShortcutRecorderButton Grid.Column="1" x:Name="CopyShortcutRecorder"
-                                          automation:AutomationProperties.HelpText="Press this shortcut to put the last dictation back on the clipboard" />
+                                          automation:AutomationProperties.HelpText="Press this shortcut to paste your newest dictation into the app in front" />
             <Button Grid.Column="2" Classes="revert" x:Name="RevertCopyShortcut" Click="OnRevertCopyShortcut" />
           </Grid>
           <TextBlock x:Name="CopyShortcutProblem" Classes="hint" HorizontalAlignment="Right"
                      IsVisible="False" />
           <TextBlock Classes="hint" Margin="0,6,0,0"
-                     Text="Hold to talk, or double-press for hands-free dictation. Press once more to finish. The copy shortcut is off until you choose one, so it never collides with a key you already use." />
+                     Text="Hold to talk, or double-press for hands-free dictation. Press once more to finish. The paste shortcut puts your newest dictation into the app in front; clear it to give the keys back to another app." />
 
           <TextBlock Classes="section" Text="Behavior" />
 

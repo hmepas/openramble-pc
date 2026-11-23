@@ -242,12 +242,13 @@ internal sealed class WaylandClipboard
     /// The tool is missing or refused. The insertion stops here, which is the point of doing this
     /// before the paste.
     /// </exception>
-    public void Write(string text)
+    /// <param name="receipt">Where the offer's reads are counted, or <c>null</c> for an offer nobody watches.</param>
+    public void Write(string text, Receipt? receipt = null)
     {
         bool sensitive;
         lock (gate) { sensitive = offersSensitiveHint; }
 
-        if (TryWrite(text, sensitive)) { return; }
+        if (TryWrite(text, sensitive, receipt)) { return; }
 
         if (!sensitive)
         {
@@ -257,7 +258,7 @@ internal sealed class WaylandClipboard
         // wl-clipboard learned --sensitive late. An older one exits with a usage error, and the
         // choice is between a dictation that fails on a supported desktop and one marker that KDE
         // alone would have honoured.
-        if (!TryWrite(text, sensitive: false))
+        if (!TryWrite(text, sensitive: false, receipt))
         {
             throw new TextInsertionError.ClipboardWriteFailed();
         }
@@ -272,7 +273,7 @@ internal sealed class WaylandClipboard
         runner.Run(new CommandRequest(Copy, ClearArguments(), Budget: Budget, CaptureOutput: false))
             .Succeeded;
 
-    private bool TryWrite(string text, bool sensitive) =>
+    private bool TryWrite(string text, bool sensitive, Receipt? receipt) =>
         runner.Run(new CommandRequest(
             Copy,
             WriteArguments(sensitive),
@@ -280,5 +281,7 @@ internal sealed class WaylandClipboard
             Budget,
             // Not captured: wl-copy forks a daemon that owns the selection and keeps our pipes, so
             // reading its output to the end would wait for the offer to be withdrawn.
-            CaptureOutput: false)).Succeeded;
+            CaptureOutput: false,
+            // The daemon inherits it, and every read it serves lands on the receipt.
+            Environment: receipt?.Environment)).Succeeded;
 }

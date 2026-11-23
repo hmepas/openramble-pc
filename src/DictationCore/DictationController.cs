@@ -64,6 +64,23 @@ public sealed class DictationController
 
     private RecoveredDictation? pendingRecovery;
 
+    /// <summary>
+    /// A press of the dictation key while the paste was finishing, and whether its stop came too:
+    /// the key is up again, or, hands-free, pressed a second time. The text was already in place,
+    /// so the person went on: the press starts its take the moment the paste is done.
+    /// </summary>
+    /// <remarks>
+    /// Kept only by a paste that lands; every other ending clears it in its cleanup and speaks
+    /// for itself. The gate must be held.
+    /// </remarks>
+    private PressDuringInsertion? pressDuringInsertion;
+
+    /// <summary>A press that waits for the paste in front of it. See <see cref="pressDuringInsertion"/>.</summary>
+    private sealed record PressDuringInsertion(bool HandsFree, bool IsEnabled, bool IsModelReady)
+    {
+        public bool Stopped { get; set; }
+    }
+
     public RecoveredDictation? PendingRecovery { get { lock (gate) { return pendingRecovery; } } }
 
     public Action<DictationState>? OnStateChange { get; set; }
@@ -419,6 +436,17 @@ public sealed class DictationController
         Take started;
         lock (gate)
         {
+            if (state == DictationState.Inserting)
+            {
+                // The paste may be waiting for its read: nothing has appeared, so the person is
+                // trying again. End the wait, and a paste nobody read is said out loud now instead
+                // of this press vanishing unheard. Or it has landed and only holds the clipboard
+                // for the restore floor: then this press starts its take as soon as that is over.
+                inserter.EndTheReadWait();
+                pressDuringInsertion = new PressDuringInsertion(handsFree, isEnabled, isModelReady);
+                return;
+            }
+
             // The first check is synchronous, before any waiting. Between it and
             // the asynchronous start, a second press can arrive.
             if (!DictationStopPolicy.CanStart(state, isEnabled, isModelReady)) { return; }
@@ -547,6 +575,15 @@ public sealed class DictationController
         Take? stopping;
         lock (gate)
         {
+            if (state == DictationState.Inserting && pressDuringInsertion is { HandsFree: false } kept)
+            {
+                // The release of a press that waits for the paste: it is replayed with it, so a
+                // tap stays a tap and no key that is up keeps the microphone on. A hands-free
+                // press's release means nothing here either.
+                kept.Stopped = true;
+                return;
+            }
+
             stopping = take;
             decision = DictationStopPolicy.DecideStop(state, stopping?.IsHandsFree ?? false);
             if (stopping is null) { return; }
@@ -620,6 +657,15 @@ public sealed class DictationController
         Take? stopping;
         lock (gate)
         {
+            if (state == DictationState.Inserting && pressDuringInsertion is { HandsFree: true } kept)
+            {
+                // The second press of a hands-free press that waits for the paste. Replayed with
+                // it, as a hold's release is: lost here, it would leave that take listening for
+                // nobody.
+                kept.Stopped = true;
+                return;
+            }
+
             stopping = take;
             if (stopping is null || !stopping.IsHandsFree) { return; }
 
@@ -1364,7 +1410,7 @@ public sealed class DictationController
             return;
         }
 
-        await Insert(
+        PressDuringInsertion? press = await Insert(
             processed,
             run.Provenance,
             recognizedAt,
@@ -1381,6 +1427,26 @@ public sealed class DictationController
 
         _ = takeFinished?.Invoke(processed.Text, recording.Url, insertionTarget);
         await Discard(take, EndingOwner.Finish, recording.Url).ConfigureAwait(false);
+        if (press is not null) { Replay(press); }
+    }
+
+    /// <summary>
+    /// A press that came while a landed paste finished: the text is in place, so the person went
+    /// on, and the press starts its take now - with its stop, if that came too.
+    /// </summary>
+    /// <remarks>
+    /// The stop is replayed only onto the take this press started. A fresh press in the moment
+    /// between the cleanup and here may have started one of its own already, and the kept press's
+    /// release is not that take's.
+    /// </remarks>
+    private void Replay(PressDuringInsertion press)
+    {
+        int before = CurrentSession;
+        Begin(press.HandsFree, press.IsEnabled, press.IsModelReady);
+        if (!press.Stopped || CurrentSession == before) { return; }
+
+        if (press.HandsFree) { StopHandsFree(); }
+        else { Stop(); }
     }
 
     /// <summary>
@@ -1623,10 +1689,15 @@ public sealed class DictationController
             marks.PasteDispatchedAt is { } paste ? releasedAt.DurationTo(paste) : null,
             marks.ClipboardRestoredAt is { } restored ? releasedAt.DurationTo(restored) : null,
             microphoneStartup,
-            phases));
+            phases,
+            marks.FirstReadAt is { } read ? releasedAt.DurationTo(read) : null));
     }
 
-    private async Task Insert(
+    /// <returns>
+    /// The press that came while this paste finished, to be replayed once the take is put away -
+    /// and only when the words landed: every other ending speaks for itself and forgets the press.
+    /// </returns>
+    private async Task<PressDuringInsertion?> Insert(
         TextPipeline.Output output,
         PipelineProvenance provenance,
         MonotonicInstant recognizedAt,
@@ -1639,14 +1710,14 @@ public sealed class DictationController
         lock (gate)
         {
             // Escape may have taken the ending over; from here on it cannot.
-            if (!take.Owns(EndingOwner.Finish)) { return; }
+            if (!take.Owns(EndingOwner.Finish)) { return null; }
 
             SetState(DictationState.Inserting);
         }
 
         // Cmd+V is the meaningful completion feedback. Do not leave a redundant
-        // "Inserting" panel over the destination application while the clipboard
-        // is restored in the background.
+        // "Inserting" panel over the destination application while the inserter
+        // waits for it to read the paste and puts the clipboard back.
         await overlay.Dismiss().ConfigureAwait(false);
 
         // Last point where cancellation is still possible. Then the event goes
@@ -1654,7 +1725,7 @@ public sealed class DictationController
         if (!ShouldContinue(take, token))
         {
             await FinishWithoutInsertion(take, EndingOwner.Finish).ConfigureAwait(false);
-            return;
+            return null;
         }
 
         InsertionMarks marks;
@@ -1666,22 +1737,22 @@ public sealed class DictationController
         }
         catch (TranscriptionTimeout)
         {
-            if (!ShouldContinue(take, token)) { return; }
+            if (!ShouldContinue(take, token)) { return null; }
 
             await HandleInsertionTimeout(output.Text, take).ConfigureAwait(false);
-            return;
+            return null;
         }
         catch (Exception error)
         {
-            if (!ShouldContinue(take, token)) { return; }
+            if (!ShouldContinue(take, token)) { return null; }
 
             await HandleInsertionFailure(error, output.Text, take).ConfigureAwait(false);
-            return;
+            return null;
         }
 
         // Paste may already be irreversible, but a late completion from an old session must not
         // mutate callbacks, history, UI, or the next session.
-        if (!ShouldContinue(take, token)) { return; }
+        if (!ShouldContinue(take, token)) { return null; }
 
         lock (gate)
         {
@@ -1709,16 +1780,17 @@ public sealed class DictationController
             }
             catch (Exception)
             {
-                if (!ShouldContinue(take, token)) { return; }
+                if (!ShouldContinue(take, token)) { return null; }
 
                 await ReportReturnFailure(take).ConfigureAwait(false);
-                return;
+                return null;
             }
 
-            if (!ShouldContinue(take, token)) { return; }
+            if (!ShouldContinue(take, token)) { return null; }
         }
 
-        await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
+        // The words landed: the press that came meanwhile is the one ending that is kept.
+        return await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1733,7 +1805,7 @@ public sealed class DictationController
 
         await Report(take, EndingOwner.Finish, new DictationNotice(
             kind: DictationNoticeKind.Warning,
-            message: "Insertion couldn't be confirmed in time. The text is saved in the menu and may already have been pasted.",
+            message: "The paste couldn't be confirmed in time. Your words are waiting and may already be in place.",
             recoverableText: text,
             wordsDidNotLand: true)).ConfigureAwait(false);
         await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
@@ -1769,16 +1841,26 @@ public sealed class DictationController
 
         lock (gate) { pendingRecovery = new RecoveredDictation(text); }
 
-        // Not a failure, but a normal situation: the password field is active.
-        string message = error is TextInsertionError.SecureInputActive
-            ? "Text not inserted: secure input is active. Your text is saved in the menu."
-            : "The text couldn't be inserted. It's saved in the menu.";
+        var insertion = error as TextInsertionError;
+        string message = insertion switch
+        {
+            // Not a failure, but a normal situation: typing is protected. The words wait, and a
+            // tap copies them for the person's own Ctrl+V.
+            TextInsertionError.SecureInputActive =>
+                "Didn't paste while typing is protected. Your words are waiting.",
+            // Nothing was pasted and what the person had copied is gone: both are theirs to know.
+            TextInsertionError.ClipboardRestoreFailed =>
+                "The words couldn't be pasted, and the previous clipboard couldn't be restored. Your words are waiting.",
+            _ => "The words couldn't be pasted. They are waiting.",
+        };
 
         await Report(take, EndingOwner.Finish, new DictationNotice(
             kind: DictationNoticeKind.Warning,
             message: message,
             recoverableText: text,
-            wordsDidNotLand: true)).ConfigureAwait(false);
+            wordsDidNotLand: true,
+            reason: insertion?.FailureReason ?? DictationFailureReason.PasteFailed,
+            insertionFailure: insertion)).ConfigureAwait(false);
         await Cleanup(take, EndingOwner.Finish).ConfigureAwait(false);
     }
 
@@ -1791,6 +1873,10 @@ public sealed class DictationController
         CancellationTokenSource? running;
         lock (gate)
         {
+            // A press that waits for the paste is no take yet, so cancelling it only forgets it.
+            // The hotkey monitor swallows the release of a hold it cancels, and a replayed press
+            // would listen with the key up.
+            pressDuringInsertion = null;
             cancelled = take;
             if (cancelled is null || !DictationStopPolicy.CanCancel(state)) { return; }
 
@@ -2070,12 +2156,17 @@ public sealed class DictationController
     /// And only the path that owns the ending cleans up, exactly once: a second cleanup's
     /// dismiss could land on the next take's panel.
     /// </summary>
-    private async Task Cleanup(Take finished, EndingOwner owner)
+    /// <returns>
+    /// The press that came while this take was inserting, taken in the same turn of the gate as
+    /// the return to idle so no press can fall between the two. Only a paste that landed replays
+    /// it; every other ending says what happened, and its press is forgotten here.
+    /// </returns>
+    private async Task<PressDuringInsertion?> Cleanup(Take finished, EndingOwner owner)
     {
         lock (gate)
         {
             // From here the ending is committed: nothing can take it over any more.
-            if (!finished.TryCompleteEnding(owner)) { return; }
+            if (!finished.TryCompleteEnding(owner)) { return null; }
         }
 
         // The terminal panel command goes out while this session is still current, before any
@@ -2083,6 +2174,7 @@ public sealed class DictationController
         // session synchronously, and a dismiss issued after that would take its panel away.
         await overlay.Dismiss().ConfigureAwait(false);
 
+        PressDuringInsertion? press;
         lock (gate)
         {
             // Only the completed take's own cleanup gets here, and no take can begin before it
@@ -2091,6 +2183,8 @@ public sealed class DictationController
             // the target, the stream, the sound already played. Nothing of it can flow into the
             // next one, and nothing still holding this take can reach the next one through it.
             take = null;
+            press = pressDuringInsertion;
+            pressDuringInsertion = null;
             SetHandsFreeActive(false);
             isAnnouncingEngineWait = false;
             SetState(DictationState.Idle);
@@ -2098,6 +2192,7 @@ public sealed class DictationController
 
         // Whatever the stream still had queued can never publish into the next take.
         finished.Streamed?.Cancel();
+        return press;
     }
 
     /// <summary>The gate must be held.</summary>

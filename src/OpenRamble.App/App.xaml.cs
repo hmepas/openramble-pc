@@ -62,7 +62,7 @@ public partial class App : Application
 
         AppPaths paths = AppPaths.Standard();
         var transcriber = new LocalTranscriber(new SherpaOnnxAdapter());
-        // The chord that copies the last dictation reads the one keyboard hook the dictation key
+        // The chord that pastes the last take reads the one keyboard hook the dictation key
         // reads; a second WH_KEYBOARD_LL would be a second thread every keystroke waits on.
         copyShortcut = new WindowsShortcutMonitor(hotkeys.Hook);
         var inserter = new TextInserter(reportRestoreFailure: _ => state?.ReportClipboardRestoreFailure());
@@ -73,7 +73,9 @@ public partial class App : Application
             Settings = SettingsStore.Under(paths),
             Permissions = new MicrophonePermissions(),
             HotkeyMonitor = hotkeys,
-            CopyShortcutMonitor = copyShortcut,
+            LastTakeShortcutMonitor = copyShortcut,
+            // Ctrl+Win+V, upstream's Control-Command-V: 0x56 is VK_V.
+            DefaultLastTakeShortcut = new KeyCombination(0x56, HotkeyModifiers.Control | HotkeyModifiers.Windows),
             // Labels asked of the live keyboard layout, so a shortcut recorded on a Latin layout
             // still names a real key after switching to Cyrillic.
             ShortcutKeymap = LiveWindowsShortcutKeymap.Instance,
@@ -332,12 +334,25 @@ public partial class App : Application
             state.DictationStateValue,
             state.IsDictationReady,
             state.RecoveredText is not null,
-            state.RecentDictations.Count > 0);
+            state.MenuTakes.Count > 0);
 
         foreach (IReadOnlyList<MenuRow> section in sections)
         {
             if (items.Count > 0) { items.Add(TrayMenuItem.Separator); }
-            foreach (MenuRow row in section) { items.Add(Row(row)); }
+            foreach (MenuRow row in section)
+            {
+                if (row == MenuRow.Takes)
+                {
+                    // A click pastes the take into the app in front, the last take first.
+                    items.AddRange(state.MenuTakes.Select((take, index) => new TrayMenuItem(
+                        state.TakeMenuTitle(take, isLastTake: index == 0),
+                        () => state.PasteTake(take))));
+                }
+                else
+                {
+                    items.Add(Row(row));
+                }
+            }
         }
 
         return items;
@@ -368,12 +383,11 @@ public partial class App : Application
                 null),
             MenuRow.FinishSetup => new TrayMenuItem("Finish Setup…", ShowOnboarding),
             MenuRow.InsertLastDictation => new TrayMenuItem("Insert Last Dictation", current.RetryRecoveredText),
-            MenuRow.RecentDictations => new TrayMenuItem("Recent Dictations", null)
+            MenuRow.CopyTakes => new TrayMenuItem("Copy", null)
             {
-                Children = [.. current.RecentDictations.Select(entry =>
-                    new TrayMenuItem(entry.MenuTitle, () => current.CopyRecentDictation(entry)))],
+                Children = [.. current.MenuTakes.Select(take =>
+                    new TrayMenuItem(current.TakeMenuTitle(take, isLastTake: false), () => current.CopyRecentDictation(take)))],
             },
-            MenuRow.CopyLast => new TrayMenuItem(current.CopyLastMenuTitle, current.CopyLastDictation),
             MenuRow.Settings => new TrayMenuItem("Settings…", ShowSettings),
             MenuRow.Quit => new TrayMenuItem("Quit OpenRamble", Shutdown),
             _ => TrayMenuItem.Separator,

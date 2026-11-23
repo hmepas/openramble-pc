@@ -21,13 +21,25 @@ public sealed class AppEnvironment
     public required IHotkeyMonitoring HotkeyMonitor { get; init; }
 
     /// <summary>
-    /// A second watcher, for the shortcut that copies the last dictation.
+    /// A second watcher, for the shortcut that pastes the last take.
     ///
     /// Its own monitor rather than another callback on the first: that one watches a bare
     /// modifier being held, this one watches a chord being pressed. Different events, different
-    /// machinery. Optional: a platform without one simply has no copy shortcut.
+    /// machinery. Optional: a platform without one simply has no such shortcut.
     /// </summary>
-    public IShortcutMonitoring? CopyShortcutMonitor { get; init; }
+    public IShortcutMonitoring? LastTakeShortcutMonitor { get; init; }
+
+    /// <summary>
+    /// The paste-last-take chord a person gets before choosing one, in this platform's key codes;
+    /// <c>null</c> - none until chosen. Upstream's is Control-Command-V.
+    /// </summary>
+    public KeyCombination? DefaultLastTakeShortcut { get; init; }
+
+    /// <summary>
+    /// How long the dictation key is held over waiting words before it means "dictate again"
+    /// rather than "do what the panel says". Test-only override; <c>null</c> - 600 ms, as upstream.
+    /// </summary>
+    public TimeSpan? WaitingTapLimit { get; init; }
 
     /// <summary>
     /// How the platform names keys, for the shortcut shown in the menu. Defaults to the Windows
@@ -39,6 +51,13 @@ public sealed class AppEnvironment
     public IAudioInputDeviceSource? InputDevices { get; init; }
 
     public required ITextInserting Inserter { get; init; }
+
+    /// <summary>
+    /// How long an insertion may take before the words are kept as unconfirmed. The inserter's
+    /// own fact: one that waits up to three seconds for the target to read the paste needs longer
+    /// than the kernel's two. <c>null</c> - the kernel's default.
+    /// </summary>
+    public TimeSpan? InsertionDeadline { get; init; }
 
     public required IOverlayPresenting Overlay { get; init; }
 

@@ -210,6 +210,36 @@ public interface IEngineWaitPresenting
 }
 
 /// <summary>
+/// A panel that can hold words that could not land, with the one action that works now.
+/// </summary>
+/// <remarks>
+/// Optional, and its absence is a decision rather than a gap: the application owns the waiting
+/// words, and they outlive the take that produced them - but only where the person can see them.
+/// Without a panel that shows them, the dictation key stays a dictation key and a failed paste is
+/// a notice, as it was before (the Windows panel, for now).
+/// </remarks>
+public interface IWaitingWordsPresenting
+{
+    /// <summary>The panel's own action button: the same as a tap of the dictation key.</summary>
+    Action? OnWaitingAction { get; set; }
+
+    /// <summary>The panel's Later button: the words leave the panel and stay in History.</summary>
+    Action? OnWaitingLater { get; set; }
+
+    /// <summary>
+    /// The words that wait, or <c>null</c> once they no longer do, and the dictation key the panel
+    /// names - also told when nothing waits, so a key changed in Settings is the one shown later.
+    /// </summary>
+    void SetWaiting(WaitingWords? waiting, DictationHotkey key);
+
+    /// <summary>Say how a waiting take ended, then leave.</summary>
+    void ShowOutcome(TakeOutcome outcome);
+
+    /// <summary>The dictation key went down over the waiting words, or came up.</summary>
+    void SetKeyDown(bool down);
+}
+
+/// <summary>
 /// An overlay that can be told where on the screen to sit.
 /// </summary>
 /// <remarks>
@@ -230,7 +260,7 @@ public delegate Func<string, CancellationToken, Task<ASRResult>> TranscribeFacto
     string engineDirectory);
 
 /// <summary>
-/// Watches the whole machine for one shortcut - the chord that copies the last dictation.
+/// Watches the whole machine for one shortcut - the chord that pastes the last take.
 /// </summary>
 /// <remarks>
 /// Its own monitor rather than another callback on <see cref="IHotkeyMonitoring"/>: that one

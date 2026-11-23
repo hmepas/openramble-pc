@@ -118,7 +118,7 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         HistoryLimitPicker.SelectionChanged += (_, _) => Pick(HistoryLimitPicker, HistoryLimits, limit => state.HistoryLimit = limit);
         DevicePicker.SelectionChanged += OnDeviceChanged;
 
-        CopyShortcutRecorder.ShortcutChanged += shortcut => state.CopyShortcut = shortcut;
+        CopyShortcutRecorder.ShortcutChanged += shortcut => state.LastTakeShortcut = shortcut;
         CopyShortcutRecorder.ProblemChanged += problem =>
         {
             CopyShortcutProblem.Text = problem ?? string.Empty;
@@ -211,8 +211,8 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         HotkeyWarning.Foreground = StatusBrushes.Attention;
         HotkeyWarning.IsVisible = state.HotkeyWarning is not null;
 
-        CopyShortcutRecorder.Shortcut = state.CopyShortcut;
-        Changed(RevertCopyShortcut, state.CopyShortcut != SettingsDefaults.CopyShortcut);
+        CopyShortcutRecorder.Shortcut = state.LastTakeShortcut;
+        Changed(RevertCopyShortcut, state.LastTakeShortcut != state.DefaultLastTakeShortcut);
 
         LaunchToggle.IsChecked = state.LaunchAtLogin;
         Changed(RevertLaunch, state.LaunchAtLogin != SettingsDefaults.LaunchAtLogin);
@@ -360,7 +360,7 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
     private void OnRevertHotkey(object? sender, RoutedEventArgs args) => state.Hotkey = SettingsDefaults.Hotkey;
 
-    private void OnRevertCopyShortcut(object? sender, RoutedEventArgs args) => state.CopyShortcut = SettingsDefaults.CopyShortcut;
+    private void OnRevertCopyShortcut(object? sender, RoutedEventArgs args) => state.LastTakeShortcut = state.DefaultLastTakeShortcut;
 
     private void OnRevertLaunch(object? sender, RoutedEventArgs args) => state.LaunchAtLogin = SettingsDefaults.LaunchAtLogin;
 

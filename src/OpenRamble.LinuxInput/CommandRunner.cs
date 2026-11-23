@@ -17,12 +17,17 @@ namespace OpenRamble.LinuxInput;
 /// Whether the tool's output is read back. Either way it is redirected away from ours - see
 /// <see cref="SubprocessCommandRunner"/>.
 /// </param>
+/// <param name="Environment">
+/// Variables set for this run on top of ours, or <c>null</c> for none. Never the dictation: a
+/// process's environment is as readable as its command line.
+/// </param>
 internal readonly record struct CommandRequest(
     string Executable,
     IReadOnlyList<string> Arguments,
     string? Input = null,
     TimeSpan Budget = default,
-    bool CaptureOutput = true);
+    bool CaptureOutput = true,
+    IReadOnlyDictionary<string, string>? Environment = null);
 
 /// <summary>What a tool did.</summary>
 /// <param name="Started">Whether the process ran at all. <c>false</c> means it is not installed.</param>
@@ -109,6 +114,11 @@ internal sealed class SubprocessCommandRunner : ICommandRunner
         foreach (string argument in request.Arguments)
         {
             start.ArgumentList.Add(argument);
+        }
+
+        foreach ((string name, string value) in request.Environment ?? new Dictionary<string, string>())
+        {
+            start.Environment[name] = value;
         }
 
         Process? process;

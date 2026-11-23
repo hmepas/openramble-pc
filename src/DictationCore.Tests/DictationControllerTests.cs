@@ -219,6 +219,75 @@ internal sealed class FakeSounds : ISounding
     }
 }
 
+/// <summary>
+/// A paste that waits for a read nobody makes, until the person presses the key again.
+/// </summary>
+internal sealed class ReadWaitingInserter : ITextInserting
+{
+    private readonly Lock gate = new();
+    private bool waiting;
+    private bool ended;
+
+    public bool IsWaiting { get { lock (gate) { return waiting; } } }
+
+    public async Task Insert(string text, TargetApplication? target)
+    {
+        lock (gate) { waiting = true; }
+        for (int i = 0; i < 1000; i += 1)
+        {
+            lock (gate)
+            {
+                if (ended) { break; }
+            }
+
+            await Task.Delay(5);
+        }
+
+        throw new TextInsertionError.PasteNotRead();
+    }
+
+    public void EndTheReadWait()
+    {
+        lock (gate)
+        {
+            if (waiting) { ended = true; }
+        }
+    }
+
+    public Task PressReturn() => Task.CompletedTask;
+
+    public TargetApplication? FrontmostApplication() => null;
+}
+
+/// <summary>
+/// A paste the target reads 18 ms after Ctrl+V, held to the restore floor the way the real
+/// inserter holds it: the text is already in place while the insertion still has 250 ms to go.
+/// </summary>
+internal sealed class LandedPasteInserter : ITextInserting
+{
+    private readonly Lock gate = new();
+    private readonly List<MonotonicInstant> pastes = [];
+
+    public MonotonicInstant? LastPaste { get { lock (gate) { return pastes.Count == 0 ? null : pastes[^1]; } } }
+
+    public int PasteCount { get { lock (gate) { return pastes.Count; } } }
+
+    public async Task Insert(string text, TargetApplication? target) =>
+        _ = await InsertReportingMarks(text, target);
+
+    public async Task<InsertionMarks> InsertReportingMarks(string text, TargetApplication? target)
+    {
+        MonotonicInstant paste = MonotonicInstant.Now;
+        lock (gate) { pastes.Add(paste); }
+        await Task.Delay(TimeSpan.FromMilliseconds(250));
+        return new InsertionMarks(paste, MonotonicInstant.Now, paste.Advanced(TimeSpan.FromMilliseconds(18)));
+    }
+
+    public Task PressReturn() => Task.CompletedTask;
+
+    public TargetApplication? FrontmostApplication() => null;
+}
+
 // MARK: - Tests
 
 [Collection(DictationControllerCollection.Name)]
@@ -233,7 +302,8 @@ public sealed class DictationControllerTests
         string recognized = "привет мир",
         TimeSpan transcribeDelay = default,
         Exception? transcribeError = null,
-        IReadOnlyList<DictionaryReplacement>? replacements = null) =>
+        IReadOnlyList<DictionaryReplacement>? replacements = null,
+        ITextInserting? insertingWith = null) =>
         new(
             capture: capture,
             transcribe: async (_, token) =>
@@ -245,7 +315,7 @@ public sealed class DictationControllerTests
                     audioDuration: TimeSpan.FromSeconds(2),
                     processingDuration: TimeSpan.FromSeconds(0.1));
             },
-            inserter: inserter,
+            inserter: insertingWith ?? inserter,
             overlay: overlay,
             sounds: sounds,
             pipeline: _ => new TextPipeline(replacements: replacements ?? []));
@@ -618,8 +688,258 @@ public sealed class DictationControllerTests
         controller.Stop();
         await Settle();
 
+        // The cause travels with the notice, so the interface can offer the action that works
+        // now: copy, while typing is protected.
+        Assert.IsType<TextInsertionError.SecureInputActive>(overlay.Notices[^1].InsertionFailure);
+        // ...and, as a case name, into the journal: "it did not paste" has several causes, and a
+        // report has to say which.
+        Assert.Equal(DictationFailureReason.PasteUnreadWhileTypingProtected, overlay.Notices[^1].Reason);
+        Assert.Equal(controller.PendingRecovery?.Text, overlay.Notices[^1].RecoverableText);
         // The person must be told why the text did not land.
-        Assert.Contains(overlay.Notices, notice => notice.Message.Contains("secure input", StringComparison.Ordinal));
+        Assert.Contains(overlay.Notices, notice => notice.Message.Contains("typing is protected", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Ctrl+V went out, but no application ever read the clipboard: nothing was pasted. That is
+    /// words that did not land, said out loud, with the text kept - never a silent success.
+    /// </summary>
+    [Fact]
+    public async Task TestAPasteNobodyReadIsReportedAsWordsThatDidNotLand()
+    {
+        inserter.SetError(new TextInsertionError.PasteNotRead());
+        var controller = MakeController(recognized: "nobody read this");
+        List<string> archived = [];
+        controller.OnTakeFinished = (text, _, _) =>
+        {
+            archived.Add(text);
+            return true;
+        };
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        await Settle();
+
+        DictationNotice notice = overlay.Notices[^1];
+        Assert.Equal(DictationNoticeKind.Warning, notice.Kind);
+        Assert.True(notice.WordsDidNotLand);
+        Assert.Equal("Nobody read this", notice.RecoverableText);
+        Assert.Equal(DictationFailureReason.PasteUnread, notice.Reason);
+        Assert.Equal("Nobody read this", controller.PendingRecovery?.Text);
+        Assert.Equal(["Nobody read this"], archived);
+    }
+
+    /// <summary>
+    /// The person presses the key again while the paste waits for its read: nothing has appeared,
+    /// so they are trying again. The press ends the wait, and the paste nobody read is said out
+    /// loud now - never a press that vanishes while they speak into nothing. The next press starts.
+    /// </summary>
+    [Fact]
+    public async Task TestAPressWhileThePasteWaitsForItsReadEndsTheWaitOutLoud()
+    {
+        var waiting = new ReadWaitingInserter();
+        var controller = MakeController(recognized: "nobody read this", insertingWith: waiting);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        for (int i = 0; i < 400 && !waiting.IsWaiting; i += 1) { await Task.Delay(5); }
+        Assert.Equal(DictationState.Inserting, controller.State);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+
+        DictationNotice notice = overlay.Notices[^1];
+        Assert.True(notice.WordsDidNotLand);
+        Assert.Equal("Nobody read this", notice.RecoverableText);
+        Assert.Equal("Nobody read this", controller.PendingRecovery?.Text);
+        Assert.Equal(1, sounds.AttentionPlays);
+        Assert.Equal(DictationState.Idle, controller.State);
+        // The press that ended the wait is not a take.
+        Assert.Equal(1, capture.StartCount);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        // The next press starts normally.
+        Assert.Equal(2, capture.StartCount);
+    }
+
+    /// <summary>
+    /// The text is already in place, but the insertion holds on to the restore floor. The person
+    /// presses again and speaks: that press is late by at most the floor, never lost.
+    /// </summary>
+    [Fact]
+    public async Task TestAPressWhileALandedPasteFinishesStartsItsTake()
+    {
+        var landed = new LandedPasteInserter();
+        var controller = MakeController(insertingWith: landed);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        MonotonicInstant pasted = await WaitForPaste(landed, count: 1);
+        await Until(pasted, TimeSpan.FromMilliseconds(100));
+        Assert.Equal(DictationState.Inserting, controller.State);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        for (int i = 0; i < 200 && capture.StartCount < 2; i += 1) { await Task.Delay(5); }
+
+        // The press starts its take once the paste is done.
+        Assert.Equal(2, capture.StartCount);
+        Assert.Contains(controller.State, new[] { DictationState.Preparing, DictationState.Listening });
+
+        controller.Stop();
+        await WaitForPaste(landed, count: 2);
+    }
+
+    /// <summary>
+    /// A press and release inside the hold is the tap it would have been a moment later: its take
+    /// starts and stops, and the microphone is never left on for a key that is already up.
+    /// </summary>
+    [Fact]
+    public async Task TestATapWhileALandedPasteFinishesIsStillATap()
+    {
+        var landed = new LandedPasteInserter();
+        var controller = MakeController(insertingWith: landed);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        MonotonicInstant pasted = await WaitForPaste(landed, count: 1);
+        await Until(pasted, TimeSpan.FromMilliseconds(100));
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Until(pasted, TimeSpan.FromMilliseconds(150));
+        controller.Stop();
+        Assert.Equal(DictationState.Inserting, controller.State);
+
+        await WaitForPaste(landed, count: 2);
+        await WaitForState(controller, DictationState.Idle);
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.Equal(2, capture.StartCount);
+        // The tap's take was stopped, not left listening.
+        Assert.Equal(2, capture.StopCount);
+    }
+
+    /// <summary>
+    /// A hands-free press inside the hold, and its second press inside the hold too, are the take
+    /// they would have been a moment later: it starts and stops. The second press is not lost to
+    /// the paste, or the take would listen on for someone who has already ended it.
+    /// </summary>
+    [Fact]
+    public async Task TestAHandsFreeTakeEndedWhileALandedPasteFinishesIsStopped()
+    {
+        var landed = new LandedPasteInserter();
+        var controller = MakeController(insertingWith: landed);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        MonotonicInstant pasted = await WaitForPaste(landed, count: 1);
+        await Until(pasted, TimeSpan.FromMilliseconds(100));
+        controller.Begin(handsFree: true, isEnabled: true, isModelReady: true);
+        await Until(pasted, TimeSpan.FromMilliseconds(150));
+        controller.StopHandsFree();
+        Assert.Equal(DictationState.Inserting, controller.State);
+
+        await WaitForPaste(landed, count: 2);
+        await WaitForState(controller, DictationState.Idle);
+        Assert.Equal(DictationState.Idle, controller.State);
+        Assert.Equal(2, capture.StartCount);
+        // The hands-free take was stopped, not left listening.
+        Assert.Equal(2, capture.StopCount);
+    }
+
+    /// <summary>
+    /// Releasing the key of a hands-free press means nothing inside the hold, as anywhere else:
+    /// its take listens until the second press.
+    /// </summary>
+    [Fact]
+    public async Task TestAHandsFreePressWhileALandedPasteFinishesListensUntilItsSecondPress()
+    {
+        var landed = new LandedPasteInserter();
+        var controller = MakeController(insertingWith: landed);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        MonotonicInstant pasted = await WaitForPaste(landed, count: 1);
+        await Until(pasted, TimeSpan.FromMilliseconds(100));
+        controller.Begin(handsFree: true, isEnabled: true, isModelReady: true);
+        controller.Stop();
+        Assert.Equal(DictationState.Inserting, controller.State);
+
+        await WaitForState(controller, DictationState.Listening);
+        Assert.Equal(DictationState.Listening, controller.State);
+        Assert.Equal(1, capture.StopCount);
+
+        controller.StopHandsFree();
+        await WaitForPaste(landed, count: 2);
+        Assert.Equal(2, capture.StopCount);
+    }
+
+    /// <summary>
+    /// A press inside the hold that turns out to be a shortcut is no take. The hotkey monitor
+    /// cancels the hold and swallows its release, so the press that waits for the paste must go
+    /// with it, or its take would listen with the key up.
+    /// </summary>
+    [Fact]
+    public async Task TestAShortcutPressedWhileALandedPasteFinishesStartsNothing()
+    {
+        var landed = new LandedPasteInserter();
+        var controller = MakeController(insertingWith: landed);
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        MonotonicInstant pasted = await WaitForPaste(landed, count: 1);
+        await Until(pasted, TimeSpan.FromMilliseconds(80));
+        Assert.Equal(DictationState.Inserting, controller.State);
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        // What OnAbortShortcut does; the release that follows never comes.
+        controller.Cancel();
+
+        await Until(pasted, TimeSpan.FromMilliseconds(600));
+        Assert.Equal(DictationState.Idle, controller.State);
+        // The shortcut started no take.
+        Assert.Equal(1, capture.StartCount);
+    }
+
+    /// <summary>
+    /// Nothing was pasted, and putting the person's clipboard back failed too. Both are said: the
+    /// words are waiting, and what they had copied is gone.
+    /// </summary>
+    [Fact]
+    public async Task TestAFailedPasteThatAlsoLostTheClipboardSaysSo()
+    {
+        inserter.SetError(new TextInsertionError.ClipboardRestoreFailed());
+        var controller = MakeController(recognized: "lost both");
+
+        controller.Begin(handsFree: false, isEnabled: true, isModelReady: true);
+        await Settle();
+        controller.Stop();
+        await Settle();
+
+        DictationNotice notice = overlay.Notices[^1];
+        Assert.Equal(DictationNoticeKind.Warning, notice.Kind);
+        Assert.True(notice.WordsDidNotLand);
+        Assert.Equal("Lost both", notice.RecoverableText);
+        Assert.Equal(
+            "The words couldn't be pasted, and the previous clipboard couldn't be restored. Your words are waiting.",
+            notice.Message);
+    }
+
+    private static async Task<MonotonicInstant> WaitForPaste(LandedPasteInserter landed, int count)
+    {
+        for (int i = 0; i < 1000 && landed.PasteCount < count; i += 1) { await Task.Delay(2); }
+        Assert.Equal(count, landed.PasteCount);
+        return landed.LastPaste!.Value;
+    }
+
+    /// <summary>Sleep until <paramref name="after"/> past <paramref name="start"/>.</summary>
+    private static async Task Until(MonotonicInstant start, TimeSpan after)
+    {
+        TimeSpan left = after - start.DurationTo(MonotonicInstant.Now);
+        if (left > TimeSpan.Zero) { await Task.Delay(left); }
     }
 
     [Fact]

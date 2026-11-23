@@ -40,7 +40,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly SettingsStore settingsStore;
     private readonly IPermissionReading permissions;
     private readonly IHotkeyMonitoring hotkeyMonitor;
-    private readonly IShortcutMonitoring? copyShortcutMonitor;
+    private readonly IShortcutMonitoring? lastTakeShortcutMonitor;
     private readonly IShortcutKeymap shortcutKeymap;
     private readonly IAudioInputDeviceSource? inputDevices;
     private readonly ITextInserting inserter;
@@ -84,6 +84,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private bool isRecoveryOperationActive;
     private DictationNotice? noticeAfterSession;
     private bool disposed;
+    private readonly TimeSpan waitingTapLimit;
 
     /// <summary>The loudest sample of the running take, for <see cref="MicrophoneLevelHint"/>.</summary>
     private float takePeak;
@@ -105,11 +106,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         bundledModelDirectory = environment.BundledModelDirectory;
         permissions = environment.Permissions;
         hotkeyMonitor = environment.HotkeyMonitor;
-        copyShortcutMonitor = environment.CopyShortcutMonitor;
+        lastTakeShortcutMonitor = environment.LastTakeShortcutMonitor;
         shortcutKeymap = environment.ShortcutKeymap ?? WindowsShortcutKeymap.Instance;
         inputDevices = environment.InputDevices;
         inserter = environment.Inserter;
         overlay = environment.Overlay;
+        waitingTapLimit = environment.WaitingTapLimit ?? DefaultWaitingTapLimit;
         permissionPollInterval = environment.PermissionPollInterval;
         modelDownloader = environment.ModelDownloader;
         microphoneConsent = environment.MicrophoneConsent;
@@ -137,7 +139,10 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // Every one of these reads through the defaults the revert arrow uses, so what the app
         // starts with and what the arrow gives back cannot be two different values.
         copiesToClipboard = settings.CopiesToClipboard;
-        copyShortcut = KeyCombination.Parse(settings.CopyShortcut);
+        defaultLastTakeShortcut = environment.DefaultLastTakeShortcut;
+        copyShortcut = settings.CopyShortcut is null
+            ? defaultLastTakeShortcut
+            : KeyCombination.Parse(settings.CopyShortcut);
         appendsTrailingSpace = settings.AppendsTrailingSpace;
         appearance = AppAppearances.Parse(settings.Appearance);
         inputDeviceUid = string.IsNullOrEmpty(settings.InputDeviceUid) ? null : settings.InputDeviceUid;
@@ -301,7 +306,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 prepareDeadline: environment.PrepareDeadline ?? TimeSpan.FromSeconds(90),
                 // A take past the memory cap lives in its file; reading it back is what lets the
                 // pieces recognized while the person spoke be reused instead of redone.
-                readSamples: (url, token) => new AudioFileReader().SamplesOnDiskThread(url, token));
+                readSamples: (url, token) => new AudioFileReader().SamplesOnDiskThread(url, token),
+                insertionDeadline: environment.InsertionDeadline);
 
             built.OnStateChange = state =>
             {
@@ -343,6 +349,23 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             built.OnNotice = notice =>
             {
                 EmitNotice("dictation.notice", notice, DiagnosticLog.Session);
+                // The reason is a case name from an allowlist, never the message: which kind of
+                // paste failed is what a report has to answer.
+                if (notice.Kind == DictationNoticeKind.Failure)
+                {
+                    journal.Record(DiagnosticEvent.DictationFailed, failureReason: notice.Reason);
+                }
+                else if (notice.Kind == DictationNoticeKind.Warning)
+                {
+                    journal.Record(DiagnosticEvent.DictationWarning, failureReason: notice.Reason);
+                }
+
+                // Before the notice reaches the panel: words that wait are not a passing notice.
+                if (notice.RecoverableText is string waiting && notice.WordsDidNotLand)
+                {
+                    WordsWait(waiting, notice.InsertionFailure);
+                }
+
                 LastNotice = notice;
                 if (notice.RecoverableText is string text)
                 {
@@ -431,7 +454,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 LastDictationValue = new LastDictation(provenance.FinalText, provenance);
             // The last moment the take still exists: whoever keeps a history has to take its
             // copy now; the kernel deletes the original right after.
-            built.OnTakeFinished = Archive;
+            built.OnTakeFinished = (text, audio, target) =>
+            {
+                bool kept = Archive(text, audio, target);
+                if (!kept) { WordsKeptNowhereElse(); }
+                return kept;
+            };
             // Named for the one notice that needs it: a take that heard only silence. The
             // microphone chosen in Settings, when it is plugged in; the system default has no
             // name this app can read, and the notice then says what it always said.
@@ -456,7 +484,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // Unlike macOS, the hook needs no permission - it starts once and stays for the life of
         // the process. Nothing about a revoked microphone makes the keyboard hook invalid.
         hotkeyMonitor.Start();
-        ApplyCopyShortcut();
+        ApplyLastTakeShortcut();
         RefreshPermissions();
 
         _ = Task.Run(async () =>
@@ -556,12 +584,15 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
     private void WireHotkey()
     {
-        if (copyShortcutMonitor is not null) { copyShortcutMonitor.OnPress = CopyLastDictation; }
+        if (lastTakeShortcutMonitor is not null) { lastTakeShortcutMonitor.OnPress = PasteLastTake; }
         hotkeyMonitor.SetHotkey(Hotkey);
         hotkeyMonitor.OnPress = BeginHoldToDictate;
         hotkeyMonitor.OnRelease = EndHoldToDictate;
+        WireWaitingPanel();
         hotkeyMonitor.OnDoubleTap = () =>
         {
+            // Over waiting words a second tap is a tap like any other.
+            if (KeyDownOverWaitingWords()) { return; }
             switch (DictationStateValue)
             {
                 case DictationState.Preparing:
@@ -618,16 +649,31 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // The hold turned out to be a shortcut over the chosen key: the recording ends quietly -
         // no insertion, no message, no error sound. The person pressed a shortcut, they did not
         // dictate.
-        hotkeyMonitor.OnAbortShortcut = () => controller?.Cancel();
-        // Escape cancels only a dictation in progress. The rest of the time it is an ordinary
-        // key and is not intercepted.
-        hotkeyMonitor.OnEscape = CancelCurrentDictation;
+        hotkeyMonitor.OnAbortShortcut = () =>
+        {
+            ShortcutOverWaitingWords();
+            controller?.Cancel();
+        };
+        // Escape cancels only a dictation in progress, or sends waiting words to History. The
+        // rest of the time it is an ordinary key and is not intercepted.
+        hotkeyMonitor.OnEscape = () =>
+        {
+            if (ReleaseWaitingWords()) { return; }
+            CancelCurrentDictation();
+        };
     }
 
     /// <summary>
     /// The dictation key went down. The only place a hold-to-dictate gesture may start from.
     /// </summary>
     private void BeginHoldToDictate()
+    {
+        // Over waiting words the press is first a question: tap or hold.
+        if (KeyDownOverWaitingWords()) { return; }
+        BeginHoldToDictateNow();
+    }
+
+    private void BeginHoldToDictateNow()
     {
         // The on-screen button has no raw key edge to ride; it wakes the engine here.
         RewarmEngineIfCold(RewarmTrigger.KeyDown);
@@ -682,6 +728,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// <summary>The dictation key came back up.</summary>
     private void EndHoldToDictate()
     {
+        if (KeyUpOverWaitingWords()) { return; }
         DiagnosticLog.Emit(
             "dictation.stop",
             ("session", DiagnosticLog.Session),
@@ -905,12 +952,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     {
         journal.Record(DiagnosticEvent.SystemWoke);
         hotkeyMonitor.Stop();
-        copyShortcutMonitor?.Stop();
+        lastTakeShortcutMonitor?.Stop();
         // The release never arrived, so nothing will ever say the key came up. Restarting
         // tracking erases the gesture; this erases the same memory on our side.
         IsHotkeyHeld = false;
         hotkeyMonitor.Start();
-        ApplyCopyShortcut();
+        ApplyLastTakeShortcut();
         RefreshPermissions();
         RevalidateEngineAfterWake();
     }
@@ -1200,16 +1247,17 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // Drains the queue: every event recorded so far reaches the disk.
         journal.Dispose();
         hotkeyMonitor.Stop();
-        if (copyShortcutMonitor is not null)
+        if (lastTakeShortcutMonitor is not null)
         {
-            copyShortcutMonitor.Stop();
-            copyShortcutMonitor.OnPress = null;
+            lastTakeShortcutMonitor.Stop();
+            lastTakeShortcutMonitor.OnPress = null;
         }
 
         // The monitor outlives us - it owns an OS hook. Leaving our callbacks on it would keep
         // this object, its controller and its capture alive for the rest of the process.
         hotkeyMonitor.OnPress = null;
         hotkeyMonitor.OnRelease = null;
+        UnwireWaitingPanel();
         hotkeyMonitor.OnDoubleTap = null;
         hotkeyMonitor.OnSingleTapWhileHandsFree = null;
         hotkeyMonitor.OnAbortShortcut = null;

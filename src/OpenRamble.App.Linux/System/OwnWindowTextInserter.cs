@@ -96,6 +96,9 @@ public sealed class OwnWindowTextInserter : ITextInserting
 
     public Task PressReturn(TargetApplication? target) => PressReturn();
 
+    /// <summary>Our own fields take the text at once; only the inner paste can be waiting for a read.</summary>
+    public void EndTheReadWait() => inner.EndTheReadWait();
+
     private Task<bool> TryOwnWindow(string text) =>
         onUiThread(() => activeSink()?.TryInsert(text) ?? false);
 }

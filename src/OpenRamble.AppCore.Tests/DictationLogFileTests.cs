@@ -7,9 +7,9 @@ namespace OpenRamble.AppCore.Tests;
 /// <remarks>
 /// Not ported: <c>testCompletedDictationRecordsFullEngineTimeDiskReadsAndIdle</c> - the total
 /// engine time, lost audio, disk reads and engine idle time are not measured by this port.
-/// <c>testFailureReasonIsACaseNameThatSurvivesExport</c> is adapted to the failure stage: this
-/// port's notices carry no allowlisted reason yet, and the invariant it pins - a value outside
-/// the allowlist cannot be smuggled in through the file - is the same.
+/// <c>testFailureReasonIsACaseNameThatSurvivesExport</c> is adapted to the failure stage, and
+/// the paste failure's own case name has <see cref="APasteFailureIsRecordedByItsKind"/>: the
+/// invariant both pin - a value outside the allowlist cannot be smuggled in - is the same.
 /// </remarks>
 public sealed class DictationLogFileTests : IDisposable
 {
@@ -214,7 +214,8 @@ public sealed class DictationLogFileTests : IDisposable
             ToRecognizedText: TimeSpan.FromMilliseconds(170),
             ToPasteDispatched: TimeSpan.FromMilliseconds(190),
             MicrophoneStartup: TimeSpan.FromMilliseconds(212),
-            Phases: phases));
+            Phases: phases,
+            ToFirstRead: TimeSpan.FromMilliseconds(260)));
         DictationLogFile.Recognition? unmeasured = DictationLogFile.Recognition.From(new DictationSpeedReport(
             ToRecognizedText: TimeSpan.FromMilliseconds(170),
             Phases: phases));
@@ -233,9 +234,27 @@ public sealed class DictationLogFileTests : IDisposable
         Assert.Equal(2, lines.Length);
         Assert.Contains("\"microphoneStartupMilliseconds\":212", lines[0], StringComparison.Ordinal);
         Assert.Contains("\"pasteMilliseconds\":190", lines[0], StringComparison.Ordinal);
+        Assert.Contains("\"readMilliseconds\":260", lines[0], StringComparison.Ordinal);
         Assert.Contains("\"preparationMilliseconds\":3", lines[0], StringComparison.Ordinal);
         Assert.DoesNotContain("microphoneStartupMilliseconds", lines[1], StringComparison.Ordinal);
         Assert.DoesNotContain("pasteMilliseconds", lines[1], StringComparison.Ordinal);
+        Assert.DoesNotContain("readMilliseconds", lines[1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Which kind of paste did not land is a case name from an allowlist, and a line naming a kind
+    /// the allowlist does not know is dropped from a report, not copied into it.
+    /// </summary>
+    [Fact]
+    public void APasteFailureIsRecordedByItsKind()
+    {
+        using var log = new DictationLogFile(root, enabled: true);
+        log.Record(DiagnosticEvent.DictationWarning, failureReason: DictationFailureReason.PasteUnread);
+        log.Record(DiagnosticEvent.DictationWarning, failureReason: (DictationFailureReason)999);
+        (byte[] data, _, _) = log.Snapshot();
+        string[] lines = Lines(data);
+        Assert.Single(lines);
+        Assert.Contains("\"failureReason\":\"pasteUnread\"", lines[0], StringComparison.Ordinal);
     }
 
     /// <summary>

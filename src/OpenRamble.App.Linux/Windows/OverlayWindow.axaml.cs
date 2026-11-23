@@ -2,6 +2,10 @@ using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Media.Immutable;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using DictationCore;
@@ -19,9 +23,11 @@ namespace OpenRamble.App.Linux;
 /// <c>ShowActivated="False"</c> and <c>Focusable="False"</c> are what this platform offers for
 /// that, and they are weaker than the Windows trio: there is no <c>WS_EX_NOACTIVATE</c> to stop a
 /// click from activating the window and no <c>WS_EX_TRANSPARENT</c> to let the click through to
-/// the document underneath. The panel is small, has nothing to click and sits well clear of where
-/// people type, so the exposure is a mis-aimed click - but it is a real difference from the other
-/// platform and not a detail that will be noticed later.
+/// the document underneath. The panel sits well clear of where people type, so the exposure is a
+/// mis-aimed click - but it is a real difference from the other platform and not a detail that
+/// will be noticed later. Waiting words add buttons, which are not focusable; still, a window
+/// manager that activates on click hands the panel the keyboard, and the action's paste then
+/// goes to whatever has focus after that click. Escape on the panel works only in that case.
 /// </para>
 /// <para>
 /// <b>It is a plain top-level window, not a layer-shell surface.</b> A dictation panel wants
@@ -42,8 +48,12 @@ public sealed partial class OverlayWindow : Window,
     IOverlayPresenting,
     IAccessibilityAnnouncing,
     IOverlayPlacementConfiguring,
-    IEngineWaitPresenting
+    IEngineWaitPresenting,
+    IWaitingWordsPresenting
 {
+    private static readonly IBrush KeyCapUp = new ImmutableSolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF));
+    private static readonly IBrush KeyCapDown = new ImmutableSolidColorBrush(Color.FromArgb(0x73, 0xFF, 0xFF, 0xFF));
+
     private readonly OverlayModel model;
     private readonly DispatcherTimer redraw;
     private readonly DispatcherTimer meter;
@@ -60,6 +70,17 @@ public sealed partial class OverlayWindow : Window,
 
         model = new OverlayModel(this);
         model.OnVisibilityChange = visible => Dispatcher.UIThread.Post(() => SetVisible(visible));
+
+        ActionButton.Click += (_, _) => OnWaitingAction?.Invoke();
+        LaterButton.Click += (_, _) => OnWaitingLater?.Invoke();
+        // Escape reaches the panel only when the window manager gave it the keyboard - after a
+        // click on it, say. The global Escape is the cancel shortcut's, not this.
+        AddHandler(KeyDownEvent, OnPanelKeyDown, RoutingStrategies.Tunnel);
+        // Waiting words grow the panel; it is placed again so it stays centred and on screen.
+        PropertyChanged += (_, change) =>
+        {
+            if (change.Property == ClientSizeProperty && IsVisible) { Place(); }
+        };
 
         for (int index = 0; index < bars.Length; index++)
         {
@@ -146,6 +167,38 @@ public sealed partial class OverlayWindow : Window,
             Render();
         });
 
+    public Action? OnWaitingAction { get; set; }
+
+    public Action? OnWaitingLater { get; set; }
+
+    public void SetWaiting(WaitingWords? waiting, DictationHotkey key) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            model.SetWaiting(waiting, key);
+            Render();
+        });
+
+    public void ShowOutcome(TakeOutcome outcome) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            model.ShowOutcome(outcome);
+            Render();
+        });
+
+    public void SetKeyDown(bool down) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            model.SetKeyDown(down);
+            Render();
+        });
+
+    private void OnPanelKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape || model.Waiting is null) { return; }
+        e.Handled = true;
+        OnWaitingLater?.Invoke();
+    }
+
     /// <summary>Live microphone level for the waveform. Called from the audio thread; kept, not drawn.</summary>
     public void UpdateInputLevel(float level) => latestLevel = level;
 
@@ -218,10 +271,37 @@ public sealed partial class OverlayWindow : Window,
         SubtitleText.IsVisible = content.Subtitle is not null;
         ToneDot.Fill = StatusBrushes.For(content.Tone.ColorRole);
         AutomationProperties.SetName(Panel, content.AccessibilityLabel);
+        RenderWaiting(content);
 
         bool recording = model.State == DictationState.Listening && model.Notice is null;
         Waveform.IsVisible = recording;
         if (recording) { RenderWaveform(); }
+    }
+
+    private void RenderWaiting(OverlayContent content)
+    {
+        WaitingWords? waiting = content.Waiting;
+        LinePanel.IsVisible = waiting is null;
+        WaitingPanel.IsVisible = waiting is not null;
+        if (waiting is null) { return; }
+
+        string key = model.Key.Title;
+        if (WordsText.Text != waiting.Words)
+        {
+            WordsText.Text = waiting.Words;
+            WordsScroll.Offset = default;
+        }
+
+        NoteText.Text = waiting.Note ?? string.Empty;
+        NoteText.IsVisible = waiting.Note is not null;
+        ReasonText.Text = waiting.Reason(key);
+        ReasonDot.Fill = StatusBrushes.For(content.Tone.ColorRole);
+        // Copied words have nothing left to press but the way out.
+        ActionButton.IsVisible = !waiting.IsCopied;
+        KeyCapText.Text = key;
+        KeyCap.Background = model.IsKeyDown ? KeyCapDown : KeyCapUp;
+        ActionVerbText.Text = waiting.ActionVerb;
+        AutomationProperties.SetName(ActionButton, waiting.Action == WaitingAction.Copy ? "Copy" : "Paste");
     }
 
     private void RenderWaveform()

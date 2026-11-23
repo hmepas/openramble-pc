@@ -36,7 +36,18 @@ public sealed class OverlayModel
     private readonly Lock gate = new();
     private readonly IAccessibilityAnnouncing announcer;
     private readonly TimeSpan noticeDuration;
+    private readonly TimeSpan? outcomeDuration;
     private readonly float[] waveformSamples = new float[WaveformSampleCount];
+
+    /// <summary>Words that could not land. The application owns them; the panel only shows them.</summary>
+    private WaitingWords? waiting;
+
+    /// <summary>How a waiting take just ended.</summary>
+    private TakeOutcome? outcome;
+
+    private CancellationTokenSource? outcomeHide;
+    private DictationHotkey key = SettingsDefaults.Hotkey;
+    private bool isKeyDown;
 
     private DictationState state = DictationState.Idle;
     private DictationNotice? notice;
@@ -58,11 +69,122 @@ public sealed class OverlayModel
     /// </summary>
     private string? lastAnnouncement;
 
-    public OverlayModel(IAccessibilityAnnouncing announcer, TimeSpan? noticeDuration = null)
+    /// <param name="outcomeDuration">A fixed time for every outcome, so a test need not wait out the real ones.</param>
+    public OverlayModel(
+        IAccessibilityAnnouncing announcer,
+        TimeSpan? noticeDuration = null,
+        TimeSpan? outcomeDuration = null)
     {
         this.announcer = announcer;
         this.noticeDuration = noticeDuration ?? TimeSpan.FromSeconds(4);
+        this.outcomeDuration = outcomeDuration;
     }
+
+    public WaitingWords? Waiting { get { lock (gate) { return waiting; } } }
+
+    public TakeOutcome? Outcome { get { lock (gate) { return outcome; } } }
+
+    /// <summary>The dictation key, as the panel names it.</summary>
+    public DictationHotkey Key { get { lock (gate) { return key; } } }
+
+    /// <summary>Whether the real key is down over the waiting words: the drawn one goes down with it.</summary>
+    public bool IsKeyDown { get { lock (gate) { return isKeyDown; } } }
+
+    /// <summary>The words that wait, or <c>null</c> once they no longer do.</summary>
+    public void SetWaiting(WaitingWords? value, DictationHotkey dictationKey)
+    {
+        bool? visibilityChange;
+        OverlayContent? toAnnounce = null;
+        lock (gate)
+        {
+            key = dictationKey;
+            if (waiting == value) { return; }
+
+            waiting = value;
+            if (value is null)
+            {
+                isKeyDown = false;
+                visibilityChange = IsAtRestLocked && notice is null ? SetVisibleLocked(RestsVisibleLocked) : null;
+            }
+            else
+            {
+                // The panel is the answer now; whatever it said a moment ago is not.
+                ClearOutcomeLocked();
+                CancelAutoHideLocked();
+                notice = null;
+                dismissalDeferred = false;
+                visibilityChange = SetVisibleLocked(true);
+                toAnnounce = TakeAnnouncementLocked();
+            }
+        }
+
+        Raise(visibilityChange, toAnnounce);
+    }
+
+    /// <summary>Say how a waiting take ended, then leave.</summary>
+    public void ShowOutcome(TakeOutcome value)
+    {
+        bool? visibilityChange;
+        OverlayContent? toAnnounce;
+        CancellationToken token;
+        lock (gate)
+        {
+            ClearOutcomeLocked();
+            waiting = null;
+            isKeyDown = false;
+            outcome = value;
+            visibilityChange = SetVisibleLocked(true);
+            toAnnounce = TakeAnnouncementLocked();
+            outcomeHide = new CancellationTokenSource();
+            token = outcomeHide.Token;
+        }
+
+        Raise(visibilityChange, toAnnounce);
+        _ = ExpireOutcome(outcomeDuration ?? value.Duration, token);
+    }
+
+    /// <summary>The dictation key went down over the waiting words, or came back up.</summary>
+    public void SetKeyDown(bool down)
+    {
+        lock (gate) { isKeyDown = down; }
+    }
+
+    private async Task ExpireOutcome(TimeSpan duration, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(duration, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        bool? visibilityChange = null;
+        lock (gate)
+        {
+            if (token.IsCancellationRequested) { return; }
+
+            outcome = null;
+            outcomeHide = null;
+            lastAnnouncement = null;
+            if (IsAtRestLocked && notice is null) { visibilityChange = SetVisibleLocked(RestsVisibleLocked); }
+        }
+
+        Raise(visibilityChange, null);
+    }
+
+    private void ClearOutcomeLocked()
+    {
+        outcomeHide?.Cancel();
+        outcomeHide = null;
+        outcome = null;
+    }
+
+    private bool IsAtRestLocked => state is DictationState.Idle or DictationState.Inserting;
+
+    /// <summary>Nothing but waiting words or their outcome keeps the panel up at rest.</summary>
+    private bool RestsVisibleLocked => waiting is not null || outcome is not null;
 
     /// <summary>Whether the panel should be on the screen. Shown by its owner.</summary>
     public bool IsVisible
@@ -141,7 +263,7 @@ public sealed class OverlayModel
         {
             lock (gate)
             {
-                return OverlayContent.Make(state, notice, ElapsedLocked(), enginePreparation, isWaitingForEngine);
+                return OverlayContent.Make(state, notice, ElapsedLocked(), enginePreparation, isWaitingForEngine, waiting, outcome, key);
             }
         }
     }
@@ -206,6 +328,8 @@ public sealed class OverlayModel
             // take is not waiting for anything yet.
             dismissalDeferred = false;
             if (newState != DictationState.Transcribing) { isWaitingForEngine = false; }
+            // A take in progress is the news; how the last one ended is not.
+            if (newState is not (DictationState.Idle or DictationState.Inserting)) { ClearOutcomeLocked(); }
 
             // Once text is recognized, the destination application is the only useful feedback
             // surface. Do not cover it with a redundant insertion HUD.
@@ -252,6 +376,10 @@ public sealed class OverlayModel
 
         lock (gate)
         {
+            // Words that did not land are not a four-second notice: the application has handed
+            // them to SetWaiting, where they stay, in full, with their action.
+            if (newNotice.RecoverableText is not null && newNotice.WordsDidNotLand && waiting is not null) { return; }
+
             CancelAutoHideLocked();
             // Keep the recording clock alive behind a transient notice. The notice does not
             // display elapsed time, but returning to the HUD must not lose the seconds during
@@ -305,7 +433,7 @@ public sealed class OverlayModel
         state = DictationState.Idle;
         isWaitingForEngine = false;
         CancelAutoHideLocked();
-        bool? change = SetVisibleLocked(false);
+        bool? change = SetVisibleLocked(RestsVisibleLocked);
         // The next dictation must announce itself again, even if the state matches the
         // previous one.
         lastAnnouncement = null;
@@ -349,7 +477,8 @@ public sealed class OverlayModel
                 state = DictationState.Idle;
                 isWaitingForEngine = false;
                 SetElapsedLocked(ElapsedLocked(), ticking: false);
-                visibilityChange = SetVisibleLocked(false);
+                visibilityChange = SetVisibleLocked(RestsVisibleLocked);
+                if (RestsVisibleLocked) { toAnnounce = TakeAnnouncementLocked(); }
             }
             else
             {
@@ -367,7 +496,9 @@ public sealed class OverlayModel
                         break;
 
                     default:
-                        visibilityChange = SetVisibleLocked(false);
+                        // At rest, only words that wait - or how they ended - keep the panel up.
+                        visibilityChange = SetVisibleLocked(RestsVisibleLocked);
+                        if (RestsVisibleLocked) { toAnnounce = TakeAnnouncementLocked(); }
                         break;
                 }
             }
@@ -417,7 +548,7 @@ public sealed class OverlayModel
 
     private OverlayContent? TakeAnnouncementLocked()
     {
-        OverlayContent content = OverlayContent.Make(state, notice, ElapsedLocked(), enginePreparation, isWaitingForEngine);
+        OverlayContent content = OverlayContent.Make(state, notice, ElapsedLocked(), enginePreparation, isWaitingForEngine, waiting, outcome, key);
         if (content.Announcement is not string announcement || announcement == lastAnnouncement)
         {
             return null;

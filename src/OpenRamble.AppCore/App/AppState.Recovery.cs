@@ -37,8 +37,9 @@ public sealed partial class AppState
     }
 
     /// <summary>
-    /// Copy a completed dictation without opening another window or writing history to disk.
-    /// Successful copies stay quiet; the menu action itself is sufficient feedback.
+    /// Copy one of the menu's takes without opening another window or writing history to disk.
+    /// Host-only, like every copy this app makes. Successful copies stay quiet; the menu action
+    /// itself is sufficient feedback.
     /// </summary>
     public void CopyRecentDictation(RecentDictation dictation)
     {
@@ -53,33 +54,85 @@ public sealed partial class AppState
         }
     }
 
+    // MARK: - The menu's takes
+
     /// <summary>
-    /// Put the last dictation back on the clipboard.
-    ///
-    /// The text as it was inserted, not the raw words: this is the "I need that again" action,
-    /// and what the person saw appear is what they mean.
-    ///
-    /// The write is host-only, exactly like the insertion: a plain write would hand the dictation
-    /// to Clipboard History and Cloud Clipboard.
+    /// The newest takes of this session, newest first: the menu's first rows. The first is the
+    /// last take, the one the last-take shortcut pastes. The same words twice are one row.
     /// </summary>
-    public void CopyLastDictation()
+    public IReadOnlyList<RecentDictation> MenuTakes =>
+        [.. RecentDictations.DistinctBy(entry => entry.Text).Take(MenuSections.TakeLimit)];
+
+    /// <summary>
+    /// A take's row: its words, in quotes, on one line. The last take carries the shortcut that
+    /// pastes it - written into the title, as no tray menu here can show a global chord.
+    /// </summary>
+    public string TakeMenuTitle(RecentDictation take, bool isLastTake) =>
+        isLastTake && LastTakeShortcut is { } shortcut
+            ? $"\u201C{take.MenuTitle}\u201D   {shortcut.DisplayString(shortcutKeymap)}"
+            : $"\u201C{take.MenuTitle}\u201D";
+
+    /// <summary>
+    /// Paste the last take into the app in front: the last-take shortcut and the menu's first row.
+    /// </summary>
+    public void PasteLastTake()
     {
-        string? text = LastDictationValue?.InsertedText;
-        if (text is null || text.Trim().Length == 0)
+        IReadOnlyList<RecentDictation> takes = MenuTakes;
+        if (takes.Count == 0)
         {
             Notify(new DictationNotice(DictationNoticeKind.Info, "Nothing dictated yet."));
             return;
         }
 
-        try
+        PasteTake(takes[0]);
+    }
+
+    /// <summary>
+    /// Paste one of the menu's takes into the app in front, through the inserter every dictation
+    /// uses. Only while nothing else is being dictated or inserted.
+    /// </summary>
+    public void PasteTake(RecentDictation take)
+    {
+        if (!RecentDictations.Any(entry => entry.Id == take.Id)) { return; }
+        lock (gate)
         {
-            clipboard?.Copy(text);
-            Notify(new DictationNotice(DictationNoticeKind.Info, "Copied — to this PC only."));
+            if (dictationState != DictationState.Idle || isRecoveryOperationActive) { return; }
+            isRecoveryOperationActive = true;
         }
-        catch (Exception error) when (error is InvalidOperationException or ExternalException)
+
+        DictationStateValue = DictationState.Inserting;
+
+        _ = Task.Run(async () =>
         {
-            Notify(new DictationNotice(DictationNoticeKind.Failure, "Couldn't copy the dictation."));
-        }
+            try
+            {
+                // Asked here, off the caller's thread: on Linux the answer is a round trip.
+                TargetApplication? target = inserter.FrontmostApplication();
+                // The words were shaped for the app they were dictated into; the app in front now
+                // may be a terminal, which never gets a paragraph break.
+                string fitted = ParagraphBreaks.Fit(take.Text, new PromptModePolicy().Mode(target));
+                await overlay.Dismiss().ConfigureAwait(false);
+                await inserter.Insert(fitted, target).ConfigureAwait(false);
+            }
+            catch (TextInsertionError.InsertedButClipboardRestoreFailed)
+            {
+                // Landed: the words are where the person is; only the clipboard is not.
+                Notify(new DictationNotice(
+                    DictationNoticeKind.Warning,
+                    "The text was inserted, but the previous clipboard couldn't be restored."));
+            }
+            catch (TextInsertionError)
+            {
+                Notify(new DictationNotice(
+                    DictationNoticeKind.Warning,
+                    "The words couldn't be pasted. They stay in the menu."));
+            }
+            finally
+            {
+                DictationStateValue = DictationState.Idle;
+                lock (gate) { isRecoveryOperationActive = false; }
+            }
+        });
     }
 
     // MARK: - Recovering a failed insertion

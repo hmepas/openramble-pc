@@ -1,12 +1,11 @@
 using System.ComponentModel;
-using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using Avalonia.Media;
 using Avalonia.Threading;
 using DictationCore;
+using LocalASR;
 using OpenRamble.AppCore;
 
 namespace OpenRamble.App.Linux;
@@ -52,8 +51,15 @@ public sealed partial class OnboardingWindow : Window, IDictationSink
         InitializeComponent();
         Icon = TrayIconArt.WindowMark();
 
-        TryHotkeyPicker.ItemsSource = DictationHotkeyInfo.AllCases.Select(hotkey => hotkey.Title).ToArray();
-        TryHotkeyPicker.SelectionChanged += OnHotkeyChanged;
+        string[] hotkeyTitles = DictationHotkeyInfo.AllCases.Select(hotkey => hotkey.Title).ToArray();
+        foreach (ComboBox picker in new[] { WelcomeHotkeyPicker, TryHotkeyPicker })
+        {
+            picker.ItemsSource = hotkeyTitles;
+            picker.SelectionChanged += OnHotkeyChanged;
+        }
+
+        ModelRow.ActionClick += OnModelAction;
+        MicrophoneRow.ActionClick += OnPermissionAction;
 
         // The hold has to survive the pointer leaving the button, so the button captures the
         // pointer and the release is taken from the capture rather than from the click: a release
@@ -97,8 +103,12 @@ public sealed partial class OnboardingWindow : Window, IDictationSink
 
     private void Render()
     {
-        ProgressText.Text = step.ProgressText;
-        AutomationProperties.SetName(ProgressText, step.ProgressAccessibilityLabel);
+        for (int index = 0; index < ProgressDots.Children.Count; index++)
+        {
+            ProgressDots.Children[index].Classes.Set("current", index == (int)step);
+        }
+        AutomationProperties.SetName(ProgressDots, step.ProgressAccessibilityLabel);
+        ToolTip.SetTip(ProgressDots, step.ProgressText);
 
         WelcomePage.IsVisible = step == OnboardingStep.Welcome;
         SetupPage.IsVisible = step == OnboardingStep.Setup;
@@ -106,7 +116,7 @@ public sealed partial class OnboardingWindow : Window, IDictationSink
 
         BackButton.IsVisible = step.HasPrevious;
         SkipButton.IsVisible = step == OnboardingStep.TryIt && !TrialSucceeded;
-        NextButton.Content = step.NextButtonTitle;
+        NextButton.Content = step.ContinueTitle(state.ModelStateValue, ModelCard.DownloadMegabytes);
 
         string? reason = OnboardingGate.BlockReason(
             step,
@@ -114,16 +124,53 @@ public sealed partial class OnboardingWindow : Window, IDictationSink
 
         NextButton.IsEnabled = reason is null;
         BlockReason.Text = reason ?? string.Empty;
-        BlockReason.Foreground = StatusBrushes.Attention;
-        BlockReason.IsVisible = reason is not null;
 
+        RenderHotkeyPickers();
+        if (step == OnboardingStep.Welcome) { RenderWelcome(); }
         if (step == OnboardingStep.Setup) { RenderSetup(); }
         if (step == OnboardingStep.TryIt) { RenderTry(); }
         else { levelClock.Stop(); }
     }
 
+    /// <summary>The key on the welcome page answers the real one before anything is granted.</summary>
+    private void RenderWelcome()
+    {
+        WelcomeKey.Text = state.Hotkey.Title;
+        WelcomeKey.IsPressed = state.IsHotkeyHeld;
+        WelcomeKeyLine.Text = state.HotkeyPressCount > pressesAtStart
+            ? "That is your dictation key."
+            : $"Press {state.Hotkey.Title} to find it.";
+    }
+
     private void RenderSetup()
     {
+        ModelStatus status = ModelCard;
+        ModelStatus.Action? modelAction = status.Actions.Count > 0 ? status.Actions[0] : null;
+
+        ModelRow.Glyph = status.ToneValue switch
+        {
+            ModelStatus.Tone.Success => StateGlyphKind.Pasted,
+            ModelStatus.Tone.Failure => StateGlyphKind.Attention,
+            _ => status.Progress is not null || state.IsPreparingEngine
+                || state.ModelStateValue is ModelState.Downloading or ModelState.Verifying or ModelState.Deleting
+                ? StateGlyphKind.Working
+                : StateGlyphKind.Silent,
+        };
+        ModelRow.Title = status.Title;
+        ModelRow.Detail = status.ProgressLabel is not string label ? status.Detail
+            : status.Detail is null ? label
+            : $"{status.Detail}\n{label}";
+        ModelRow.Progress = status.Progress;
+        ModelRow.ActionText = modelAction switch
+        {
+            null => null,
+            ModelStatus.Action.Install => SetupRow.DownloadLabel(status.DownloadMegabytes),
+            ModelStatus.Action other => status.TitleFor(other),
+        };
+        ModelRow.IsPrimaryAction = modelAction is not null and not ModelStatus.Action.Cancel;
+        ToolTip.SetTip(ModelRow.ActionButton, modelAction is ModelStatus.Action hinted ? status.HintFor(hinted) : null);
+        AutomationProperties.SetHelpText(ModelRow.ActionButton, modelAction is ModelStatus.Action spoken ? status.HintFor(spoken) : null);
+
         PermissionStatus permission = PermissionStatus.Microphone(
             state.MicrophoneState,
             state.MicrophoneGranted
@@ -131,39 +178,38 @@ public sealed partial class OnboardingWindow : Window, IDictationSink
                 : "OpenRamble needs it to hear you. It opens the microphone only while you hold the dictation key.",
             state.MicrophoneRemedy);
 
-        PermissionDetail.Text = permission.Detail;
-        PermissionButton.Content = permission.ActionTitle ?? string.Empty;
-        PermissionButton.IsVisible = permission.ActionTitle is not null;
+        MicrophoneRow.Glyph = permission.Granted ? StateGlyphKind.Pasted
+            : state.MicrophoneState == MicrophoneConsentState.Denied ? StateGlyphKind.Silent
+            : StateGlyphKind.Attention;
+        MicrophoneRow.Detail = permission.Detail;
+        MicrophoneRow.ActionText = permission.ActionTitle;
+        // Ink marks the next thing to do: the model's button when it has one, otherwise this one.
+        MicrophoneRow.IsPrimaryAction = !ModelRow.IsPrimaryAction;
+        AutomationProperties.SetName(MicrophoneRow.ActionButton, permission.ActionAccessibilityLabel);
 
-        ModelStatus status = ModelCard;
+        // The Linux input path: the key arrives through /dev/input (the input group) or a
+        // compositor keybind feeding the control socket. Only an edge proves either.
+        string key = state.Hotkey.Title;
+        (KeyRow.Glyph, KeyRow.Detail) =
+            state.HotkeyTrackingFailure is string failure ? (StateGlyphKind.Attention, failure)
+            : state.HotkeyWarning is string warning ? (StateGlyphKind.Attention, warning)
+            : state.HotkeyPressCount > pressesAtStart ? (StateGlyphKind.Pasted, $"OpenRamble hears {key}.")
+            : (StateGlyphKind.Silent,
+                $"Press {key} to check that it reaches OpenRamble — through the input group, keyd or a compositor keybind.");
 
-        ModelTitle.Text = status.Title;
-        ModelDetail.Text = status.Detail ?? string.Empty;
-        ModelDetail.IsVisible = status.Detail is not null;
-        ModelProgress.IsVisible = status.Progress is not null;
-        ModelProgress.Value = status.Progress ?? 0;
-        ModelProgressLabel.Text = status.ProgressLabel ?? string.Empty;
-        ModelProgressLabel.IsVisible = status.ProgressLabel is not null;
-
-        ModelActions.Children.Clear();
-        foreach (ModelStatus.Action action in status.Actions)
-        {
-            var button = new Button
-            {
-                Content = status.TitleFor(action),
-                Padding = new Thickness(12, 4, 12, 4),
-                Margin = new Thickness(0, 0, 8, 0),
-            };
-            ToolTip.SetTip(button, status.HintFor(action));
-            ModelStatus.Action captured = action;
-            button.Click += (_, _) =>
-            {
-                if (captured == ModelStatus.Action.Cancel) { state.CancelModelInstall(); }
-                else { state.InstallModel(); }
-            };
-            ModelActions.Children.Add(button);
-        }
+        bool typingReady = TypingToolsInstalled;
+        TypingRow.Glyph = typingReady ? StateGlyphKind.Pasted : StateGlyphKind.Attention;
+        TypingRow.Detail = typingReady
+            ? "wl-copy and a typing tool are installed, so the words land at your cursor."
+            : "Install wl-clipboard and wtype (or ydotool) so the words can land at your cursor.";
     }
+
+    private bool? typingToolsInstalled;
+
+    /// <summary>Asked once: the tools do not come and go while the window is open.</summary>
+    private bool TypingToolsInstalled => typingToolsInstalled ??=
+        DesktopTools.IsInstalled("wl-copy")
+        && (DesktopTools.IsInstalled("wtype") || DesktopTools.IsInstalled("ydotool"));
 
     /// <summary>
     /// What the app has to say about the model, written once for both steps that show it. The
@@ -196,32 +242,21 @@ public sealed partial class OnboardingWindow : Window, IDictationSink
             state.IsDictationButtonHeld,
             state.HotkeyTrackingFailure);
 
-        updating = true;
-        try
-        {
-            TryHotkeyPicker.SelectedIndex = DictationHotkeyInfo.AllCases.ToList().IndexOf(state.Hotkey);
-        }
-        finally
-        {
-            updating = false;
-        }
-
-        // Changing the key mid-dictation would leave the running session with no key to stop it.
-        TryHotkeyPicker.IsEnabled = state.DictationStateValue == DictationState.Idle;
         TryHotkeyWarning.Text = state.HotkeyWarning ?? string.Empty;
         TryHotkeyWarning.Foreground = StatusBrushes.Attention;
         TryHotkeyWarning.IsVisible = state.HotkeyWarning is not null;
 
+        TryTitle.Text = $"Hold {state.Hotkey.Title} and say something.";
         TryInstruction.Text = tryOut.Instruction;
-        TryKeyName.Text = state.Hotkey.Title;
+        TryKey.Text = state.Hotkey.Title;
+        TryKey.IsPressed = state.IsHotkeyHeld || state.IsDictationButtonHeld;
+        TryNote.Classes.Set("success", state.SuccessfulDictationCount > successesAtStart);
 
-        // Neutral until something is seen: a badge that is already coloured says the key arrived
+        // Neutral until something is seen: a line that is already coloured says the key arrived
         // before it did.
-        IBrush tone = tryOut.Tone is null ? StatusBrushes.Neutral : StatusBrushes.For(tryOut.Tone);
-        TryKeyBadge.BorderBrush = tone;
-        TryKeyDot.Fill = tone;
         TryStatus.Text = tryOut.Status;
-        TryStatus.Foreground = tryOut.Tone is null ? Brushes.Gray : tone;
+        if (tryOut.Tone is null) { TryStatus.ClearValue(TextBlock.ForegroundProperty); }
+        else { TryStatus.Foreground = StatusBrushes.For(tryOut.Tone); }
 
         TryLevel.IsVisible = tryOut.ShowsInputLevel;
         if (tryOut.ShowsInputLevel) { levelClock.Start(); }
@@ -232,10 +267,31 @@ public sealed partial class OnboardingWindow : Window, IDictationSink
         }
     }
 
+    /// <summary>Both pickers show the one stored key.</summary>
+    private void RenderHotkeyPickers()
+    {
+        int selected = DictationHotkeyInfo.AllCases.ToList().IndexOf(state.Hotkey);
+        updating = true;
+        try
+        {
+            WelcomeHotkeyPicker.SelectedIndex = selected;
+            TryHotkeyPicker.SelectedIndex = selected;
+        }
+        finally
+        {
+            updating = false;
+        }
+
+        // Changing the key mid-dictation would leave the running session with no key to stop it.
+        bool idle = state.DictationStateValue == DictationState.Idle;
+        WelcomeHotkeyPicker.IsEnabled = idle;
+        TryHotkeyPicker.IsEnabled = idle;
+    }
+
     private void OnHotkeyChanged(object? sender, SelectionChangedEventArgs args)
     {
-        if (updating) { return; }
-        int index = TryHotkeyPicker.SelectedIndex;
+        if (updating || sender is not ComboBox picker) { return; }
+        int index = picker.SelectedIndex;
         if (index < 0 || index >= DictationHotkeyInfo.AllCases.Count) { return; }
 
         // One property for both pickers: it persists the choice and re-arms the live monitor, so
@@ -276,6 +332,13 @@ public sealed partial class OnboardingWindow : Window, IDictationSink
 
     private void OnPermissionAction(object? sender, RoutedEventArgs args) => state.RequestMicrophone();
 
+    private void OnModelAction(object? sender, RoutedEventArgs args)
+    {
+        IReadOnlyList<ModelStatus.Action> actions = ModelCard.Actions;
+        if (actions.Count > 0 && actions[0] == ModelStatus.Action.Cancel) { state.CancelModelInstall(); }
+        else { state.InstallModel(); }
+    }
+
     private void OnSkip(object? sender, RoutedEventArgs args)
     {
         skippedTryOut = true;
@@ -293,6 +356,8 @@ public sealed partial class OnboardingWindow : Window, IDictationSink
     {
         if (step.Next is OnboardingStep next)
         {
+            // The one download starts here and runs while the rest is granted.
+            if (step.DownloadsOnContinue(state.ModelStateValue)) { state.InstallModel(); }
             step = next;
             if (step == OnboardingStep.TryIt) { TryBox.Focus(); }
             Render();

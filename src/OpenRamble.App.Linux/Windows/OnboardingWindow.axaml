@@ -1,138 +1,193 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:automation="clr-namespace:Avalonia.Automation;assembly=Avalonia.Controls"
+        xmlns:local="using:OpenRamble.App.Linux"
         x:Class="OpenRamble.App.Linux.OnboardingWindow"
         Title="Welcome to OpenRamble"
-        Width="560"
-        Height="640"
+        Width="640"
+        Height="680"
+        Background="{DynamicResource WindowBackground}"
         WindowStartupLocation="CenterScreen"
         CanResize="False">
-  <DockPanel Margin="24">
+  <Window.Styles>
+    <!-- Progress dots: the current step is a stretched accent capsule. -->
+    <Style Selector="Border.dot">
+      <Setter Property="Width" Value="6" />
+      <Setter Property="Height" Value="6" />
+      <Setter Property="CornerRadius" Value="3" />
+      <Setter Property="Background" Value="{DynamicResource Label3}" />
+    </Style>
+    <Style Selector="Border.dot.current">
+      <Setter Property="Width" Value="18" />
+      <Setter Property="Background" Value="{DynamicResource Accent}" />
+    </Style>
 
-    <TextBlock x:Name="ProgressText" DockPanel.Dock="Top" Foreground="Gray" />
+    <!-- The try-out note is the page: no field chrome, the block around it is the surface. -->
+    <Style Selector="TextBox.note /template/ Border#PART_BorderElement, TextBox.note:pointerover /template/ Border#PART_BorderElement, TextBox.note:focus /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="Border.content.success">
+      <Setter Property="Background" Value="{StaticResource SuccessTint}" />
+    </Style>
+  </Window.Styles>
 
-    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
-                Margin="0,16,0,0">
-      <Button x:Name="SkipButton" Content="Skip the try-out" Padding="12,4" Margin="0,0,8,0"
-              IsVisible="False" Click="OnSkip" />
-      <Button x:Name="BackButton" Content="Back" Padding="12,4" Margin="0,0,8,0" Click="OnBack" />
-      <Button x:Name="NextButton" Content="Continue" Padding="16,4" IsDefault="True" Click="OnNext" />
+  <DockPanel>
+
+    <!-- Whitespace separates the footer; a hairline here read as a form's edge. -->
+    <StackPanel DockPanel.Dock="Bottom" Margin="32,20" Spacing="6">
+      <Grid>
+        <!-- Dots hug the window centre, not the buttons: Back disappearing must not move them. -->
+        <StackPanel x:Name="ProgressDots" Orientation="Horizontal" Spacing="6"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+          <Border Classes="dot" />
+          <Border Classes="dot" />
+          <Border Classes="dot" />
+        </StackPanel>
+        <Button x:Name="BackButton" Classes="quiet" Content="Back" HorizontalAlignment="Left"
+                Click="OnBack" />
+        <Button x:Name="NextButton" Classes="ink" HorizontalAlignment="Right" IsDefault="True"
+                Click="OnNext" />
+      </Grid>
+
+      <!-- Why the button is disabled. Always laid out, so its arrival does not shift the page. -->
+      <TextBlock x:Name="BlockReason" Classes="detail" MinHeight="16" MaxLines="2"
+                 TextAlignment="Right" HorizontalAlignment="Right" />
     </StackPanel>
 
-    <TextBlock x:Name="BlockReason" DockPanel.Dock="Bottom" TextWrapping="Wrap"
-               Margin="0,12,0,0" IsVisible="False" />
+    <Panel x:Name="Body" Margin="48,44,48,8">
 
-    <StackPanel x:Name="Body" Margin="0,16,0,0">
-
-      <StackPanel x:Name="WelcomePage">
-        <TextBlock Text="Hold a key. Speak. Let go." FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap" />
-        <TextBlock Margin="0,12,0,0" TextWrapping="Wrap"
-                   Text="The text appears where your cursor already was — in any application, without switching windows." />
-        <TextBlock Margin="0,12,0,0" TextWrapping="Wrap"
-                   Text="Recognition happens on this PC. Nothing you say is sent anywhere, and there is no account to create." />
-        <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="Gray"
-                   Text="Two things are needed before the first dictation: the microphone, and a recognition model to download once." />
-      </StackPanel>
-
-      <StackPanel x:Name="SetupPage" IsVisible="False">
-        <TextBlock Text="Microphone" FontSize="18" FontWeight="SemiBold" />
-        <TextBlock x:Name="PermissionDetail" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="Gray" />
-        <Button x:Name="PermissionButton" HorizontalAlignment="Left" Padding="12,4" Margin="0,8,0,0"
-                Click="OnPermissionAction" />
-
-        <Separator Margin="0,18" />
-
-        <TextBlock x:Name="ModelTitle" FontSize="18" FontWeight="SemiBold" />
-        <TextBlock x:Name="ModelDetail" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="Gray" />
-        <ProgressBar x:Name="ModelProgress" Height="6" Margin="0,10,0,0" Minimum="0" Maximum="1"
-                     IsVisible="False" />
-        <TextBlock x:Name="ModelProgressLabel" Foreground="Gray" Margin="0,4,0,0" IsVisible="False" />
-        <StackPanel x:Name="ModelActions" Orientation="Horizontal" Margin="0,12,0,0" />
-      </StackPanel>
-
-      <StackPanel x:Name="TryPage" IsVisible="False">
-        <TextBlock Text="Try it once" FontSize="18" FontWeight="SemiBold" />
-
-        <!--
-            The header has just asked for a key press. If the model cannot answer one yet - the
-            first load after a fresh install, or a model deleted from Settings meanwhile - that
-            belongs on the screen, with the same step counter the setup page shows, rather than
-            only in the notice that appears after the person has already pressed and seen nothing
-            happen. A loaded engine, and a resting one whose comeback is that very press, say
-            nothing.
-        -->
-        <TextBlock x:Name="TryModelLine" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="Gray"
-                   IsVisible="False"
+      <!-- One thing on the screen: the key. It goes down when the real one does. -->
+      <Grid x:Name="WelcomePage" RowDefinitions="*,Auto,Auto,Auto,Auto,Auto,*,Auto">
+        <TextBlock Grid.Row="1" Classes="display38" Text="Hold a key, speak, let go."
+                   TextAlignment="Center" HorizontalAlignment="Center" />
+        <TextBlock Grid.Row="2" FontSize="16" Foreground="{DynamicResource Label2}" Margin="0,12,0,0"
+                   TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center"
+                   Text="The words appear at your cursor, in any application." />
+        <local:KeyCap Grid.Row="3" x:Name="WelcomeKey" CapSize="Hero" HorizontalAlignment="Center"
+                      Margin="0,52,0,0" automation:AutomationProperties.AccessibilityView="Raw" />
+        <TextBlock Grid.Row="4" x:Name="WelcomeKeyLine" FontSize="13" Margin="0,22,0,0"
+                   Foreground="{DynamicResource Label2}" HorizontalAlignment="Center"
                    automation:AutomationProperties.LiveSetting="Polite" />
+        <ComboBox Grid.Row="5" x:Name="WelcomeHotkeyPicker" Width="180" Margin="0,10,0,0"
+                  HorizontalAlignment="Center"
+                  automation:AutomationProperties.Name="Dictation key"
+                  automation:AutomationProperties.HelpText="The key you hold down while dictating" />
 
-        <!--
-            The key is chosen here and not only in Settings, because this is the page where a key
-            that does not arrive is discovered - and sending somebody out of the first-launch flow
-            to fix it is how a first launch ends. Same property, same file on disk, same live
-            re-arming as the Settings picker: one source of truth.
-        -->
-        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-          <TextBlock Text="Dictation key" VerticalAlignment="Center" Margin="0,0,10,0" />
-          <ComboBox x:Name="TryHotkeyPicker" Width="180"
-                    automation:AutomationProperties.Name="Dictation key"
-                    automation:AutomationProperties.HelpText="The key you hold down while dictating" />
+        <!-- The promise, in the open: no box, no icon, two sentences. -->
+        <StackPanel Grid.Row="7" MaxWidth="440" Spacing="4" HorizontalAlignment="Center">
+          <TextBlock FontSize="13" TextWrapping="Wrap" TextAlignment="Center"
+                     Text="Recognition happens on this PC. Nothing you say is sent anywhere." />
+          <TextBlock FontSize="13" Foreground="{DynamicResource Label2}" TextAlignment="Center"
+                     Text="No account. Free and open source." />
         </StackPanel>
-        <TextBlock x:Name="TryHotkeyWarning" TextWrapping="Wrap" Margin="0,6,0,0"
-                   IsVisible="False" />
+      </Grid>
 
-        <TextBlock x:Name="TryInstruction" Margin="0,8,0,0" TextWrapping="Wrap" />
+      <!-- One list, one layout per row: each says what it is for and turns green when done. -->
+      <StackPanel x:Name="SetupPage" IsVisible="False">
+        <TextBlock Classes="display30" Text="Set up OpenRamble"
+                   TextAlignment="Center" HorizontalAlignment="Center" />
+        <TextBlock Classes="body" MaxWidth="440" Margin="0,6,0,28" TextWrapping="Wrap"
+                   TextAlignment="Center" HorizontalAlignment="Center"
+                   Text="One download and a few checks — speech never leaves this PC." />
 
-        <!--
-            The badge and the line beside it are the step's whole purpose: they change the moment
-            the key reaches OpenRamble, so a key that never arrives - swallowed by a virtual-machine
-            client, or never tracked at all - looks different from a dictation that started and came
-            back empty. Live-announced, because for a blind person a badge that lights up silently
-            is the same as no badge.
-        -->
-        <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-          <Border x:Name="TryKeyBadge" CornerRadius="6" Padding="10,4" BorderThickness="1"
-                  VerticalAlignment="Center">
-            <StackPanel Orientation="Horizontal">
-              <Ellipse x:Name="TryKeyDot" Width="8" Height="8" Margin="0,0,8,0"
-                       VerticalAlignment="Center" />
-              <TextBlock x:Name="TryKeyName" FontWeight="SemiBold" />
-            </StackPanel>
-          </Border>
-          <TextBlock x:Name="TryStatus" Margin="12,0,0,0" MaxWidth="360"
-                     TextWrapping="Wrap" VerticalAlignment="Center"
+        <Separator Classes="hairline" />
+        <local:SetupRow x:Name="ModelRow" />
+        <Separator Classes="hairline" />
+        <local:SetupRow x:Name="MicrophoneRow" Title="Microphone" />
+        <Separator Classes="hairline" />
+        <local:SetupRow x:Name="KeyRow" Title="Dictation key" />
+        <Separator Classes="hairline" />
+        <local:SetupRow x:Name="TypingRow" Title="Typing and clipboard" />
+        <Separator Classes="hairline" />
+
+        <TextBlock Classes="detail" Margin="0,14,0,0" LineSpacing="2"
+                   Text="Only your dictation key is read from the keyboard. Other keystrokes are never logged or stored." />
+      </StackPanel>
+
+      <!-- Teach by doing: the key goes down with the real one, the words land in the note. -->
+      <DockPanel x:Name="TryPage" IsVisible="False">
+        <StackPanel DockPanel.Dock="Top" Spacing="6">
+          <TextBlock x:Name="TryTitle" Classes="display30"
+                     TextAlignment="Center" HorizontalAlignment="Center" />
+          <TextBlock x:Name="TryInstruction" Classes="body" MaxWidth="440" TextWrapping="Wrap"
+                     TextAlignment="Center" HorizontalAlignment="Center" />
+
+          <!--
+              The header has just asked for a key press. If the model cannot answer one yet - the
+              first load after a fresh install, or a model deleted from Settings meanwhile - that
+              belongs on the screen, rather than only in the notice that appears after the person
+              has already pressed and seen nothing happen. A loaded engine, and a resting one
+              whose comeback is that very press, say nothing.
+          -->
+          <TextBlock x:Name="TryModelLine" Classes="detail" TextAlignment="Center"
+                     HorizontalAlignment="Center" IsVisible="False"
                      automation:AutomationProperties.LiveSetting="Polite" />
         </StackPanel>
 
-        <!-- Same scale as the panel's waveform, so silence still shows a line rather than an empty
-             bar that reads as a dead microphone. -->
-        <ProgressBar x:Name="TryLevel" Height="6" Margin="0,10,0,0" Minimum="0" Maximum="100"
-                     IsVisible="False"
-                     automation:AutomationProperties.Name="Microphone level" />
-
-        <TextBlock Margin="0,12,0,0" TextWrapping="Wrap" Foreground="Gray"
-                   Text="Click into the box below first, so the words have somewhere to land." />
-
         <!--
-            Hold with the mouse instead of the key. Not a shortcut around the try-out but a way
-            through it: a key eaten by a virtual machine client or a remote desktop never reaches
-            this process, and without this button the person cannot tell that from a product that
-            does not work at all.
-
-            Focusable="False" on purpose, and it is a real trade-off. The text is inserted into
-            whatever has focus, so a button that took focus would paste the dictation into itself;
-            the price is that the hold is mouse and touch only.
+            The key's own line: the key, what it is doing, and the way out at the column's edge.
+            The status line is the step's whole purpose: it changes the moment the key reaches
+            OpenRamble, so a key that never arrives - swallowed by a virtual-machine client, or
+            never tracked at all - looks different from a dictation that came back empty.
+            Live-announced, because a line that changes silently is no line for a blind person.
         -->
-        <Button x:Name="TryHoldButton" Content="Hold to dictate"
-                HorizontalAlignment="Left" Padding="16,6" Margin="0,10,0,0"
-                Focusable="False"
-                automation:AutomationProperties.Name="Hold to dictate"
-                automation:AutomationProperties.HelpText="Press and hold with the mouse, speak, then let go. Does exactly what holding the dictation key does." />
+        <Grid DockPanel.Dock="Bottom" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="16"
+              Margin="0,16,0,12">
+          <local:KeyCap x:Name="TryKey" CapSize="Large" VerticalAlignment="Center"
+                        automation:AutomationProperties.AccessibilityView="Raw" />
 
-        <TextBox x:Name="TryBox" Margin="0,10,0,0" Height="90" AcceptsReturn="True"
-                 TextWrapping="Wrap"
-                 automation:AutomationProperties.Name="Try-out text box" />
-      </StackPanel>
+          <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="6">
+            <TextBlock x:Name="TryStatus" FontSize="14" FontWeight="Medium" TextWrapping="Wrap"
+                       automation:AutomationProperties.LiveSetting="Polite" />
+            <TextBlock x:Name="TryHotkeyWarning" Classes="detail" IsVisible="False" />
 
-    </StackPanel>
+            <!-- Same scale as the panel's waveform, so silence still shows a line rather than an
+                 empty bar that reads as a dead microphone. -->
+            <ProgressBar x:Name="TryLevel" Classes="thin" Minimum="0" Maximum="100"
+                         IsVisible="False"
+                         automation:AutomationProperties.Name="Microphone level" />
+
+            <!--
+                The key is chosen here and not only in Settings, because this is the page where a
+                key that does not arrive is discovered. Same property, same file on disk, same
+                live re-arming as the Settings picker: one source of truth.
+            -->
+            <ComboBox x:Name="TryHotkeyPicker" Width="170"
+                      automation:AutomationProperties.Name="Dictation key"
+                      automation:AutomationProperties.HelpText="The key you hold down while dictating" />
+          </StackPanel>
+
+          <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="6">
+            <!--
+                Hold with the mouse instead of the key. Not a shortcut around the try-out but a way
+                through it: a key eaten by a virtual machine client or a remote desktop never
+                reaches this process, and without this button the person cannot tell that from a
+                product that does not work at all.
+
+                Focusable="False" on purpose, and it is a real trade-off. The text is inserted into
+                whatever has focus, so a button that took focus would paste the dictation into
+                itself; the price is that the hold is mouse and touch only.
+            -->
+            <Button x:Name="TryHoldButton" Classes="quiet" Content="Hold to dictate"
+                    HorizontalAlignment="Right" Focusable="False"
+                    automation:AutomationProperties.Name="Hold to dictate"
+                    automation:AutomationProperties.HelpText="Press and hold with the mouse, speak, then let go. Does exactly what holding the dictation key does." />
+            <Button x:Name="SkipButton" Classes="quiet" Content="Skip the try-out"
+                    HorizontalAlignment="Right" IsVisible="False" Click="OnSkip" />
+          </StackPanel>
+        </Grid>
+
+        <!-- The note: a page of the person's own, so the first take needs no other app. -->
+        <Border x:Name="TryNote" Classes="content" Padding="20" Margin="0,24,0,0">
+          <TextBox x:Name="TryBox" Classes="note" AcceptsReturn="True" TextWrapping="Wrap"
+                   FontFamily="{StaticResource SerifFont}" FontSize="20"
+                   VerticalContentAlignment="Top" MinHeight="120" Padding="0"
+                   Watermark="Your words land here. Keep the cursor in this note."
+                   automation:AutomationProperties.Name="Try-out text box" />
+        </Border>
+      </DockPanel>
+
+    </Panel>
   </DockPanel>
 </Window>

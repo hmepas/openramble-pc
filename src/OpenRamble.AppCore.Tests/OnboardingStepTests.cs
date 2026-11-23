@@ -210,4 +210,17 @@ public sealed class OnboardingStepTests
             }
         }
     }
+
+    [Fact]
+    public void WelcomeContinueStartsTheDownloadOnlyWhenNothingIsInstalled()
+    {
+        ModelState missing = new ModelState.NotInstalled();
+
+        Assert.True(OnboardingStep.Welcome.DownloadsOnContinue(missing));
+        Assert.Equal("Continue and download 720 MB", OnboardingStep.Welcome.ContinueTitle(missing, 720));
+        Assert.False(OnboardingStep.Welcome.DownloadsOnContinue(Ready));
+        Assert.Equal("Continue", OnboardingStep.Welcome.ContinueTitle(Ready, 720));
+        Assert.False(OnboardingStep.Setup.DownloadsOnContinue(missing));
+        Assert.Equal("Done", OnboardingStep.TryIt.ContinueTitle(missing, 720));
+    }
 }

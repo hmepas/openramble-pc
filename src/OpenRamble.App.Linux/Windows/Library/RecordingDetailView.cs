@@ -19,7 +19,9 @@ namespace OpenRamble.App.Linux;
 /// One recording in the Library (upstream RecordingDetail.swift, RecordingTransport.swift,
 /// TranscriptView.swift): its title (double-click to rename), what kind it is, the transcript
 /// with clickable timestamps and the paragraph being heard highlighted, and a transport whose
-/// slider sits on the recording's waveform.
+/// slider sits on the recording's waveform. The recording in progress shows here too
+/// (upstream LiveRecordingDetail, CaptureHealthStrip, TranscriptStatusLine): its transcript as it
+/// grows, what is wrong with either side, how far behind the words are - and no player.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -37,6 +39,10 @@ namespace OpenRamble.App.Linux;
 public sealed class RecordingDetailView : UserControl
 {
     private static readonly IBrush CurrentRow = new SolidColorBrush(Color.FromArgb(0x24, 0x3E, 0x63, 0xDD));
+    private static readonly IBrush AttentionWash = new SolidColorBrush(Color.FromArgb(0x1A, 0xF7, 0x6B, 0x15));
+
+    /// <summary>How far behind the live words may be before the line is worth saying (upstream TranscriptStatusPolicy).</summary>
+    private const double BacklogVisibleAfter = 3;
 
     private readonly AppState state;
     private readonly RecordingPlayer player;
@@ -82,7 +88,14 @@ public sealed class RecordingDetailView : UserControl
     };
 
     private readonly StackPanel placeholder = new() { Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBlock importLine = new() { Foreground = Brushes.Gray, Margin = new Thickness(24, 4) };
+    private readonly TextBlock importLine = new() { Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+    private readonly Button retryButton = new() { Content = "Retry", Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+    private readonly DockPanel statusLine = new() { Margin = new Thickness(24, 4) };
+    private readonly StackPanel healthStrip = new() { Spacing = 6, MaxWidth = 560, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 6, 0, 0) };
+    private readonly MenuItem exportTranscript = new() { Header = "Export Transcript…" };
+    private readonly MenuItem exportAudio = new() { Header = "Export Audio…" };
+    private readonly Button exportButton = new() { Content = "Export…", VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(12, 4, 0, 0) };
+    private readonly Grid transportBar = new() { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto"), Margin = new Thickness(24, 8) };
     private readonly Button playButton = new() { Width = 40, Height = 36, HorizontalContentAlignment = HorizontalAlignment.Center };
     private readonly TextBlock positionText = new() { MinWidth = 48, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock durationText = new() { MinWidth = 48, VerticalAlignment = VerticalAlignment.Center };
@@ -101,6 +114,9 @@ public sealed class RecordingDetailView : UserControl
     private bool attached;
     private bool updatingSlider;
 
+    /// <summary>The shown recording was the one in progress when last drawn: its end is noticed once.</summary>
+    private bool wasLive;
+
     public RecordingDetailView(AppState state, RecordingPlayer player)
     {
         this.state = state;
@@ -113,11 +129,28 @@ public sealed class RecordingDetailView : UserControl
         titleEditor.KeyDown += OnEditorKey;
         titleEditor.LostFocus += (_, _) => CommitRename();
         AutomationProperties.SetName(titleEditor, "Recording name");
+        exportTranscript.Click += (_, _) =>
+        {
+            if (recording is { } shown) { _ = RecordingExport.Transcript(this, state, shown); }
+        };
+        exportAudio.Click += (_, _) =>
+        {
+            if (recording is { } shown) { _ = RecordingExport.Audio(this, state, shown); }
+        };
+        exportButton.Flyout = new MenuFlyout { Items = { exportTranscript, exportAudio } };
+        AutomationProperties.SetName(exportButton, "Export");
+        var naming = new Panel();
+        naming.Children.Add(title);
+        naming.Children.Add(titleEditor);
+        var titleRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        titleRow.Children.Add(naming);
+        Grid.SetColumn(exportButton, 1);
+        titleRow.Children.Add(exportButton);
         var header = new StackPanel { Spacing = 4, Margin = new Thickness(24, 20, 24, 12) };
-        header.Children.Add(title);
-        header.Children.Add(titleEditor);
+        header.Children.Add(titleRow);
         header.Children.Add(details);
         header.Children.Add(note);
+        header.Children.Add(healthStrip);
 
         // The transcript, with its placeholder and the way back to the latest words over it.
         scroller.Content = transcript;
@@ -150,11 +183,7 @@ public sealed class RecordingDetailView : UserControl
         var track = new Panel();
         track.Children.Add(waveform);
         track.Children.Add(slider);
-        var transport = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto"),
-            Margin = new Thickness(24, 8),
-        };
+        Grid transport = transportBar;
         transport.Children.Add(playButton);
         Grid.SetColumn(positionText, 1);
         transport.Children.Add(positionText);
@@ -169,8 +198,12 @@ public sealed class RecordingDetailView : UserControl
         layout.Children.Add(header);
         DockPanel.SetDock(transport, Dock.Bottom);
         layout.Children.Add(transport);
-        DockPanel.SetDock(importLine, Dock.Bottom);
-        layout.Children.Add(importLine);
+        retryButton.Click += (_, _) => state.ResumeTranscription();
+        DockPanel.SetDock(retryButton, Dock.Right);
+        statusLine.Children.Add(retryButton);
+        statusLine.Children.Add(importLine);
+        DockPanel.SetDock(statusLine, Dock.Bottom);
+        layout.Children.Add(statusLine);
         layout.Children.Add(body);
         Content = layout;
 
@@ -196,6 +229,7 @@ public sealed class RecordingDetailView : UserControl
             highlighted = null;
             waveform.Channels = [];
             waveform.Progress = 0;
+            wasLive = state.LiveRecordingId == shown.Id;
             LoadPeaks(shown.Id);
         }
 
@@ -206,7 +240,7 @@ public sealed class RecordingDetailView : UserControl
     /// <summary>Start renaming, as a double-click on the title does (the window's Return and context menu).</summary>
     public void BeginRename()
     {
-        if (recording is null) { return; }
+        if (recording is null || IsLive) { return; }
         renaming = true;
         titleEditor.Text = recording.Title ?? string.Empty;
         titleEditor.Watermark = RecordingsPlaceholder.DefaultTitle(recording.StartedAt);
@@ -249,7 +283,8 @@ public sealed class RecordingDetailView : UserControl
 
     private void OnStateChanged(object? sender, PropertyChangedEventArgs args) => Dispatcher.UIThread.Post(() =>
     {
-        if (recording is null) { return; }
+        // The meters live in the window's record bar; ten redraws a second here would be waste.
+        if (recording is null || args.PropertyName == nameof(AppState.LiveLevels)) { return; }
         // Renamed, or transcribed further: the metadata as listed now. Gone: the window decides.
         if (state.Recordings.FirstOrDefault(listed => listed.Id == recording.Id) is { } current)
         {
@@ -325,9 +360,17 @@ public sealed class RecordingDetailView : UserControl
 
     private bool IsAudioLoaded => recording is { } current && player.LoadedId == current.Id;
 
+    /// <summary>The shown recording is the one in progress: no player, no export, no rename yet.</summary>
+    private bool IsLive => recording is { } current && state.LiveRecordingId == current.Id;
+
     private void Render()
     {
         if (recording is null) { return; }
+        bool live = IsLive;
+        // Just filed: the waveform is there to read now (the audio follows through RefreshAudio).
+        if (wasLive && !live) { LoadPeaks(recording.Id); }
+        wasLive = live;
+        transportBar.IsVisible = !live;
         RenderHeader();
         RenderTranscript();
         UpdatePlayhead();
@@ -336,18 +379,97 @@ public sealed class RecordingDetailView : UserControl
     private void RenderHeader()
     {
         if (recording is null) { return; }
+        bool live = IsLive;
         title.Text = recording.Title ?? RecordingsPlaceholder.DefaultTitle(recording.StartedAt);
         title.IsVisible = !renaming;
         titleEditor.IsVisible = renaming;
         DateTimeOffset started = recording.StartedAt.ToLocalTime();
+        string length = !live
+            ? RecordingTime.Brief(TimeSpan.FromSeconds(recording.Duration))
+            : (state.RecordingState == MeetingRecordingState.Paused ? "Paused — " : "Recording — ") + RecordingTime.Clock(state.LiveDuration);
         details.Text = string.Join(
             " · ",
             RecordingsPlaceholder.Kind(LibraryRecording.KindOf(recording)),
             started.ToString("D", CultureInfo.CurrentCulture) + ", " + started.ToString("t", CultureInfo.CurrentCulture),
-            RecordingTime.Brief(TimeSpan.FromSeconds(recording.Duration)));
-        string? warning = RecordingsPlaceholder.EndNote(recording.EndReason) ?? RecordingsPlaceholder.DegradedNote(recording);
+            length);
+        string? warning = live ? null : RecordingsPlaceholder.EndNote(recording.EndReason) ?? RecordingsPlaceholder.DegradedNote(recording);
         note.Text = warning;
         note.IsVisible = warning is not null;
+
+        exportButton.IsVisible = !live;
+        exportTranscript.IsEnabled = state.Transcript(recording.Id).Count > 0;
+        exportAudio.IsEnabled = audioPath is not null;
+        RenderHealth(live);
+    }
+
+    /// <summary>
+    /// While recording, one card per side that is not arriving as it should (upstream
+    /// CaptureHealthStrip): orange when the recording is missing that side, grey when it is only
+    /// something this computer cannot do.
+    /// </summary>
+    private void RenderHealth(bool live)
+    {
+        healthStrip.Children.Clear();
+        if (live)
+        {
+            MicrophoneHealth microphone = state.LiveMicrophoneHealth;
+            CaptureHealth others = state.LiveCaptureHealth;
+            if (microphone.Title is { } microphoneTitle)
+            {
+                healthStrip.Children.Add(HealthCard(microphoneTitle, microphone.Detail, microphone.MarksRecordingDegraded));
+            }
+
+            if (others.Title is { } othersTitle)
+            {
+                healthStrip.Children.Add(HealthCard(othersTitle, others.Detail, others.MarksRecordingDegraded));
+            }
+        }
+
+        healthStrip.IsVisible = healthStrip.Children.Count > 0;
+    }
+
+    private static Border HealthCard(string heading, string? detail, bool degraded)
+    {
+        var text = new StackPanel { Spacing = 2 };
+        text.Children.Add(new TextBlock
+        {
+            Text = (degraded ? "⚠ " : string.Empty) + heading,
+            FontWeight = FontWeight.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        if (detail is not null)
+        {
+            text.Children.Add(new TextBlock { Text = detail, FontSize = 12, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap });
+        }
+
+        var card = new Border
+        {
+            Child = text,
+            BorderBrush = degraded ? StatusBrushes.Attention : StatusBrushes.Neutral,
+            BorderThickness = new Thickness(3, 0, 0, 0),
+            Padding = new Thickness(10, 6),
+            CornerRadius = new CornerRadius(4),
+        };
+        if (degraded) { card.Background = AttentionWash; }
+        AutomationProperties.SetName(card, detail is null ? heading : heading + ". " + detail);
+        return card;
+    }
+
+    /// <summary>
+    /// One honest line under a live transcript about how far behind it is, and nothing when it
+    /// is not worth saying (upstream TranscriptStatusLine). Orange only for a stopped
+    /// transcription: the audio is safe either way.
+    /// </summary>
+    private (string Text, bool Paused)? TranscriptStatus(Guid id)
+    {
+        if (!IsLive && state.TranscribingRecordingId != id) { return null; }
+        if (state.IsTranscriptionPaused) { return ("Transcription paused.", true); }
+        if (!state.IsEngineReady) { return ("Waiting for the speech model.", false); }
+        if (state.DictationStateValue != DictationState.Idle) { return ("Transcription paused while you dictate.", false); }
+        double backlog = state.TranscriptBacklogSeconds;
+        return backlog >= BacklogVisibleAfter
+            ? ($"Transcribing — about {Math.Round(backlog).ToString(CultureInfo.CurrentCulture)} seconds behind.", false)
+            : null;
     }
 
     private void RenderTranscript()
@@ -355,18 +477,24 @@ public sealed class RecordingDetailView : UserControl
         if (recording is not { } current) { return; }
         IReadOnlyList<MeetingUtterance> utterances = state.Transcript(current.Id);
         RecordingImportActivity activity = state.ImportActivity;
-        following = activity.Transcribing == current.Id;
+        bool live = IsLive;
+        following = activity.Transcribing == current.Id || live || state.TranscribingRecordingId == current.Id;
 
         bool isDictating = state.DictationStateValue != DictationState.Idle;
         string? line = activity.Transcribing == current.Id || utterances.Count > 0
             ? RecordingsPlaceholder.ImportLine(current.Id, activity, isDictating)
             : null;
-        importLine.Text = line;
-        importLine.IsVisible = line is not null;
+        (string Text, bool Paused)? status = line is null ? TranscriptStatus(current.Id) : null;
+        importLine.Text = line ?? status?.Text;
+        importLine.Foreground = status is { Paused: true } ? StatusBrushes.Attention : Brushes.Gray;
+        retryButton.IsVisible = status is { Paused: true };
+        statusLine.IsVisible = importLine.Text is not null;
 
         if (utterances.Count == 0)
         {
-            RecordingsPlaceholder shown = audioMissing || (!IsAudioLoaded && player.FailedToLoad)
+            RecordingsPlaceholder shown = live
+                ? RecordingsPlaceholder.Listening
+                : audioMissing || (!IsAudioLoaded && player.FailedToLoad)
                 ? RecordingsPlaceholder.AudioMissing
                 : RecordingsPlaceholder.Importing(current.Id, activity)
                     ?? RecordingsPlaceholder.Transcript(current.TranscriptionState);

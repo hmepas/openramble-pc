@@ -31,9 +31,10 @@
 
   <Panel>
     <DockPanel>
-      <!-- The toolbar: Import, Open folder, Copy, Trash. -->
+      <!-- The toolbar: the record bar; Import, Open folder, Copy, Trash. -->
       <Border DockPanel.Dock="Top" BorderBrush="#33808080" BorderThickness="0,0,0,1" Padding="10,8">
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
           <Button Classes="tool" x:Name="ImportButton" Click="OnImport"
                   ToolTip.Tip="Import audio or video to transcribe"
                   automation:AutomationProperties.Name="Import Audio or Video…">
@@ -48,6 +49,39 @@
           <Button Classes="tool" x:Name="CopyButton" Content="Copy" Click="OnCopy" />
           <Button Classes="tool" x:Name="TrashButton" Content="Trash" Click="OnTrash" />
         </StackPanel>
+
+        <!--
+          Upstream RecordBar.swift: Record (you and the other side, or only you), and while it runs
+          the red dot, the time, a meter per side, Pause/Resume and Stop.
+        -->
+        <StackPanel x:Name="RecordBar" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <StackPanel x:Name="LiveStatusPanel" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+            <Ellipse x:Name="LiveDot" Width="9" Height="9" VerticalAlignment="Center" />
+            <TextBlock x:Name="LiveStatus" VerticalAlignment="Center" />
+          </StackPanel>
+          <StackPanel x:Name="LiveMeters" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+              <TextBlock Classes="secondary" Text="You" VerticalAlignment="Center" />
+              <ProgressBar x:Name="YouMeter" Minimum="0" Maximum="1" Width="48" MinWidth="48" Height="6" MinHeight="6"
+                           VerticalAlignment="Center" automation:AutomationProperties.Name="Your level" />
+            </StackPanel>
+            <StackPanel x:Name="OthersMeterPanel" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+              <TextBlock Classes="secondary" Text="Others" VerticalAlignment="Center" />
+              <ProgressBar x:Name="OthersMeter" Minimum="0" Maximum="1" Width="48" MinWidth="48" Height="6" MinHeight="6"
+                           VerticalAlignment="Center" automation:AutomationProperties.Name="Other side's level" />
+            </StackPanel>
+          </StackPanel>
+          <Button x:Name="PauseButton" Content="Pause" Click="OnPauseResume" MinHeight="30" Padding="10,4" />
+          <Button x:Name="RecordButton" Click="OnRecord" MinHeight="30" Padding="10,4">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <Ellipse x:Name="RecordDot" Width="9" Height="9" VerticalAlignment="Center" />
+              <TextBlock x:Name="RecordLabel" Text="Record" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <CheckBox x:Name="MicOnlyToggle" Content="Mic only" VerticalAlignment="Center"
+                    ToolTip.Tip="Record only your microphone: a voice note" />
+        </StackPanel>
+        </DockPanel>
       </Border>
 
       <Grid ColumnDefinitions="300,Auto,*">

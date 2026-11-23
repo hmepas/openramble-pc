@@ -83,12 +83,20 @@ internal static class ThemeTokens
         {
             IBrush brush => brush,
             Color color => new ImmutableSolidColorBrush(color),
-            _ => new ImmutableSolidColorBrush(Fallback(key, IsDark(target))),
+            // Not found yet - typically a control built in code and not attached to a window,
+            // where no theme dictionary is in reach. Leave the property unset: the observable
+            // fires again with the real value once the control joins the tree.
+            _ => Fallbacks.ContainsKey(key)
+                ? new ImmutableSolidColorBrush(Fallback(key, IsDark(target)))
+                : AvaloniaProperty.UnsetValue,
         }));
 
-    private static Color Fallback(string key, bool dark)
-    {
-        (uint light, uint darkValue) = Fallbacks[key];
-        return Color.FromUInt32(dark ? darkValue : light);
-    }
+    /// <summary>
+    /// The spec's value for the foundation controls' own keys; any other key has no fallback and
+    /// draws transparent until the theme dictionary answers - never an exception from a lookup.
+    /// </summary>
+    private static Color Fallback(string key, bool dark) =>
+        Fallbacks.TryGetValue(key, out (uint Light, uint Dark) value)
+            ? Color.FromUInt32(dark ? value.Dark : value.Light)
+            : Colors.Transparent;
 }

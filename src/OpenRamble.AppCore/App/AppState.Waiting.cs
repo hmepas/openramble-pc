@@ -168,10 +168,12 @@ public sealed partial class AppState
                         break;
 
                     // A second press while the first is still undecided: the double tap cancelled
-                    // the first one's release. The first was a tap.
-                    case Wait.KeyUndecided:
+                    // the first one's release. The first was a tap - decided here, so the first
+                    // press's timer, which may fire before the second release, finds no hold.
+                    case Wait.KeyUndecided undecided:
                         tapFirst = true;
                         press = 0;
+                        wait = new Wait.Words(undecided.Value);
                         break;
 
                     case Wait.Words words:
@@ -191,13 +193,15 @@ public sealed partial class AppState
                 return true;
             }
 
+            // The take is the news: no outcome to cover its waveform.
             if (releaseAndDictate)
             {
-                return !ReleaseWaitingWords();
+                return !ReleaseWaitingWords(showOutcome: false);
             }
 
             if (tapFirst)
             {
+                WaitingPanel?.SetKeyDown(false);
                 ActOnWaitingWords();
                 return true;
             }
@@ -257,7 +261,8 @@ public sealed partial class AppState
 
     /// <summary>
     /// A tap of the dictation key over waiting words, or the panel's own button: paste them again
-    /// into the app in front now, or copy them while typing is protected.
+    /// into the app in front now, or copy them while typing is protected. While another paste
+    /// holds the inserter the tap is ignored and the words keep waiting.
     /// </summary>
     public void ActOnWaitingWords()
     {
@@ -266,7 +271,11 @@ public sealed partial class AppState
         {
             if (wait is not Wait.Words words || words.Value.IsCopied) { return; }
             waiting = words.Value;
-            if (waiting.Action == WaitingAction.Paste) { wait = new Wait.Retrying(waiting); }
+            if (waiting.Action == WaitingAction.Paste)
+            {
+                if (!TryClaimInsertionLocked(InsertionOwner.WaitingRetry)) { return; }
+                wait = new Wait.Retrying(waiting);
+            }
         }
 
         if (waiting.Action == WaitingAction.Copy)
@@ -318,6 +327,10 @@ public sealed partial class AppState
         {
             failure = error;
         }
+        finally
+        {
+            ReleaseInsertion(InsertionOwner.WaitingRetry);
+        }
 
         if (failure is not null)
         {
@@ -334,9 +347,26 @@ public sealed partial class AppState
         WaitingPanel?.ShowOutcome(new TakeOutcome.Pasted(target?.LocalizedName));
     }
 
+    /// <summary>The same words landed another way, through the menu: they wait no more.</summary>
+    private void WaitingWordsLanded(string words)
+    {
+        lock (gate)
+        {
+            if (wait is not Wait.Words w || w.Value.Words != words) { return; }
+            wait = Wait.None;
+        }
+
+        WaitingPanel?.SetWaiting(null, Hotkey);
+    }
+
     /// <summary>
     /// Later, Escape, or a new take: the words leave the panel and stay in History.
     /// </summary>
+    /// <remarks>
+    /// The menu's recovered words are the same failed words, and leave with them. Words History
+    /// never had keep that slot: it is then the one place left that holds them - a new take's
+    /// hold releases them quietly, so the waveform is not covered, but they do not vanish.
+    /// </remarks>
     /// <returns><c>false</c> when nothing waited or the words cannot leave yet.</returns>
     private bool ReleaseWaitingWords(bool showOutcome = true)
     {
@@ -352,6 +382,8 @@ public sealed partial class AppState
 
             wait = Wait.None;
         }
+
+        if (!released.IsKeptNowhereElse && RecoveredText == released.Words) { RecoveredText = null; }
 
         if (WaitingPanel is { } panel)
         {

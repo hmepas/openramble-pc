@@ -375,8 +375,17 @@ public sealed partial class AppState
     /// <summary>Is the preparation countdown running? The "the app is silent at rest" test asks this.</summary>
     public bool IsCountingEnginePreparation { get { lock (gate) { return preparationTimer is not null; } } }
 
-    /// <summary>Retry and Delete recovery run one at a time and block the hotkey.</summary>
-    public bool IsRecoveryOperationActive { get { lock (gate) { return isRecoveryOperationActive; } } }
+    /// <summary>
+    /// A paste of the app's own - a menu take, the recovered words, waiting words tapped again - is
+    /// in flight. One at a time, and it blocks the hotkey.
+    /// </summary>
+    public bool IsRecoveryOperationActive
+    {
+        get { lock (gate) { return insertionOwner is not (InsertionOwner.None or InsertionOwner.Take); } }
+    }
+
+    /// <summary>Some paste, a take's included, has not yet returned from the inserter.</summary>
+    public bool IsInsertionInFlight { get { lock (gate) { return insertionOwner != InsertionOwner.None; } } }
 
     public bool IsDictationReady =>
         MicrophoneGranted && ModelStateValue.IsReady && (IsEngineReady || HasEngineBeenReady);

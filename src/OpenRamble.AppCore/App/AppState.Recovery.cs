@@ -89,15 +89,22 @@ public sealed partial class AppState
 
     /// <summary>
     /// Paste one of the menu's takes into the app in front, through the inserter every dictation
-    /// uses. Only while nothing else is being dictated or inserted.
+    /// uses. Only while nothing else is being dictated or inserted; over another paste it says so.
     /// </summary>
     public void PasteTake(RecentDictation take)
     {
         if (!RecentDictations.Any(entry => entry.Id == take.Id)) { return; }
+        bool claimed;
         lock (gate)
         {
-            if (dictationState != DictationState.Idle || isRecoveryOperationActive) { return; }
-            isRecoveryOperationActive = true;
+            if (dictationState != DictationState.Idle) { return; }
+            claimed = TryClaimInsertionLocked(InsertionOwner.MenuTake);
+        }
+
+        if (!claimed)
+        {
+            NotifyStillPasting();
+            return;
         }
 
         DictationStateValue = DictationState.Inserting;
@@ -130,7 +137,7 @@ public sealed partial class AppState
             finally
             {
                 DictationStateValue = DictationState.Idle;
-                lock (gate) { isRecoveryOperationActive = false; }
+                ReleaseInsertion(InsertionOwner.MenuTake);
             }
         });
     }
@@ -140,17 +147,18 @@ public sealed partial class AppState
     public void RetryRecoveredText()
     {
         string text;
+        bool claimed;
         lock (gate)
         {
-            if (dictationState != DictationState.Idle
-                || isRecoveryOperationActive
-                || recoveredText is null)
-            {
-                return;
-            }
-
+            if (dictationState != DictationState.Idle || recoveredText is null) { return; }
             text = recoveredText;
-            isRecoveryOperationActive = true;
+            claimed = TryClaimInsertionLocked(InsertionOwner.Recovery);
+        }
+
+        if (!claimed)
+        {
+            NotifyStillPasting();
+            return;
         }
 
         DictationStateValue = DictationState.Inserting;
@@ -176,6 +184,8 @@ public sealed partial class AppState
                 // else's text, the other would protect someone else's spans.
                 SuccessfulDictationCount += 1;
                 RecoveredText = null;
+                // The same words, if they also wait on the panel: landed, they wait no more.
+                WaitingWordsLanded(text);
                 LastDictationValue = null;
                 await overlay.Dismiss().ConfigureAwait(false);
             }
@@ -189,7 +199,7 @@ public sealed partial class AppState
             finally
             {
                 DictationStateValue = DictationState.Idle;
-                lock (gate) { isRecoveryOperationActive = false; }
+                ReleaseInsertion(InsertionOwner.Recovery);
             }
         });
     }

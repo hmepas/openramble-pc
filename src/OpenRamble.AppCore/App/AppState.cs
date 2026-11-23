@@ -81,7 +81,6 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private long mainModelBytes;
 
     private bool didCompleteInitialPermissionRefresh;
-    private bool isRecoveryOperationActive;
     private DictationNotice? noticeAfterSession;
     private bool disposed;
     private readonly TimeSpan waitingTapLimit;
@@ -291,7 +290,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 // Asked per recording rather than once: which model serves can change while the
                 // app runs (see ModelLineup).
                 (path, token) => environment.Transcribe(ServingEngineDirectory)(path, token),
-                inserter,
+                new TakeInserter(inserter, this),
                 overlay,
                 new GatedSounds(environment.Sounds, () => SoundsEnabled),
                 transcribeSamples,
@@ -604,6 +603,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                     break;
 
                 case DictationState.Idle:
+                    // The app's own paste is in flight: no take over it, as for a hold.
+                    if (IsRecoveryOperationActive) { return; }
                     if (!ExplainIfNotReady()) { return; }
                     // Under the lineup's lock: no model switch between its "nothing is being
                     // recognized" check and this take's start. See modelLineupGate.

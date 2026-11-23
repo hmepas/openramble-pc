@@ -165,8 +165,14 @@ public sealed class FakeInserter : ITextInserting
         pending?.TrySetResult();
     }
 
+    private int insertCalls;
+
+    /// <summary>How many insertions began, held or not: two at once is what this counts.</summary>
+    public int InsertCalls => Volatile.Read(ref insertCalls);
+
     public async Task Insert(string text, TargetApplication? target)
     {
+        Interlocked.Increment(ref insertCalls);
         Task? pending;
         lock (gate) { pending = hold?.Task; }
         if (pending is not null) { await pending.ConfigureAwait(false); }
@@ -904,6 +910,9 @@ public sealed class AppHarness : IDisposable
     /// <summary>How long a press over waiting words stays a tap; <c>null</c> - the app's 600 ms.</summary>
     public TimeSpan? WaitingTapLimit { get; set; }
 
+    /// <summary>How long a take's paste may take before it is said to be unconfirmed; <c>null</c> - the kernel's.</summary>
+    public TimeSpan? InsertionDeadline { get; set; }
+
     public bool LayoutHasAltGraph { get; set; }
 
     /// <summary>
@@ -965,6 +974,7 @@ public sealed class AppHarness : IDisposable
             EngineWarmupRetryDelay = EngineWarmupRetryDelay,
             PrepareDeadline = PrepareDeadline,
             WaitingTapLimit = WaitingTapLimit,
+            InsertionDeadline = InsertionDeadline,
             ModelDownloader = Downloader,
             MicrophoneConsent = MicrophoneConsent,
             SystemEvents = SystemEvents,

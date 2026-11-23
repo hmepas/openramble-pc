@@ -100,6 +100,122 @@ public sealed class AppStateWaitingWordsTests : IDisposable
         Assert.Equal(1, harness.Capture.StartCount);
     }
 
+    /// <summary>
+    /// The double tap cancels the first press's release, and the second release can come after
+    /// the tap limit: the first press was still a tap, never a hold that starts a take.
+    /// </summary>
+    [Fact]
+    public async Task ASecondPressWhoseReleaseComesLateIsStillATap()
+    {
+        harness.WaitingTapLimit = TimeSpan.FromMilliseconds(50);
+        AppState state = await StateWithWaitingWords(new TextInsertionError.PasteNotRead());
+        harness.Inserter.SetError(null);
+
+        harness.Monitor.OnPress!();
+        harness.Monitor.OnDoubleTap!();
+        await TestWait.For("the words landed", () => state.WaitingWordsValue is null);
+        await Task.Delay(200);
+        harness.Monitor.OnRelease!();
+
+        Assert.Equal(["Ping test"], harness.Inserter.InsertedTexts);
+        Assert.Equal(1, harness.Capture.StartCount);
+        Assert.Equal(DictationState.Idle, state.DictationStateValue);
+        Assert.IsType<TakeOutcome.Pasted>(panel.Outcomes[^1]);
+    }
+
+    /// <summary>
+    /// One paste at a time: while a tap pastes the waiting words again, the last-take shortcut and
+    /// the menu's recovery paste nothing, and say why.
+    /// </summary>
+    [Fact]
+    public async Task WhileATapPastesTheMenuPastesNothing()
+    {
+        AppState state = await StateWithWaitingWords(new TextInsertionError.PasteNotRead());
+        harness.Inserter.SetError(null);
+        harness.Inserter.HoldInsertions();
+        int callsBefore = harness.Inserter.InsertCalls;
+
+        panel.OnWaitingAction!();
+        await TestWait.For("the retry started", () => harness.Inserter.InsertCalls == callsBefore + 1);
+        state.PasteLastTake();
+        state.RetryRecoveredText();
+        await Task.Delay(100);
+
+        Assert.Equal(callsBefore + 1, harness.Inserter.InsertCalls);
+        Assert.Contains(panel.Notices, notice => notice.Message.Contains("still pasting", StringComparison.Ordinal));
+        harness.Inserter.ReleaseInsertions();
+        await TestWait.For("the retried paste landed", () => state.WaitingWordsValue is null);
+        Assert.Equal(["Ping test"], harness.Inserter.InsertedTexts);
+    }
+
+    /// <summary>
+    /// A take's paste that outlived its deadline is still in someone else's window: its words
+    /// wait, but neither a tap nor the menu pastes them again until that paste returns.
+    /// </summary>
+    [Fact]
+    public async Task NothingPastesOverATakesPasteThatOutlivedItsDeadline()
+    {
+        harness.InsertionDeadline = TimeSpan.FromMilliseconds(100);
+        AppState state = await ReadyState();
+        harness.Inserter.HoldInsertions();
+        await Dictate(state);
+        await TestWait.For("the words wait", () => state.WaitingWordsValue is not null);
+        Assert.Equal(1, harness.Inserter.InsertCalls);
+
+        harness.Monitor.OnPress!();
+        harness.Monitor.OnRelease!();
+        state.PasteLastTake();
+        await Task.Delay(100);
+        Assert.Equal(1, harness.Inserter.InsertCalls);
+        Assert.NotNull(state.WaitingWordsValue);
+
+        harness.Inserter.ReleaseInsertions();
+        await TestWait.For("the late paste returned", () => !state.IsInsertionInFlight);
+        harness.Monitor.OnPress!();
+        harness.Monitor.OnRelease!();
+        await TestWait.For("the tap pasted", () => state.WaitingWordsValue is null);
+        Assert.Equal(2, harness.Inserter.InsertCalls);
+    }
+
+    /// <summary>
+    /// Words History could not keep do not vanish under a hold: the panel makes way for the new
+    /// take, and the words stay in the menu's recovery slot.
+    /// </summary>
+    [Fact]
+    public async Task AHoldOverWordsKeptNowhereElseKeepsThemForTheMenu()
+    {
+        harness.WaitingTapLimit = TimeSpan.FromMilliseconds(50);
+        AppState state = await ReadyState();
+        string historyDirectory = Path.Combine(harness.Paths.Support(), "History");
+        if (Directory.Exists(historyDirectory)) { Directory.Delete(historyDirectory, recursive: true); }
+        File.WriteAllText(historyDirectory, "not a directory");
+        harness.Inserter.SetError(new TextInsertionError.PasteNotRead());
+        await Dictate(state);
+        await TestWait.For("History's failure reached the waiting words", () => state.WaitingWordsValue?.IsKeptNowhereElse == true);
+
+        harness.Monitor.OnPress!();
+        await TestWait.For("the hold started a take", () => state.DictationStateValue == DictationState.Listening);
+
+        Assert.Null(state.WaitingWordsValue);
+        Assert.Equal("Ping test", state.RecoveredText);
+        harness.Monitor.OnRelease!();
+        await TestWait.For("the take ended", () => state.DictationStateValue == DictationState.Idle);
+    }
+
+    /// <summary>The menu's recovered words are the waiting words: landed from the menu, they wait no more.</summary>
+    [Fact]
+    public async Task RecoveredWordsLandedFromTheMenuNoLongerWait()
+    {
+        AppState state = await StateWithWaitingWords(new TextInsertionError.PasteNotRead());
+        harness.Inserter.SetError(null);
+
+        state.RetryRecoveredText();
+
+        await TestWait.For("the words landed", () => state.WaitingWordsValue is null);
+        Assert.Null(state.RecoveredText);
+        Assert.Null(panel.Waitings[^1]);
+    }
+
     /// <summary>While typing is protected a tap copies them, and then the key dictates again.</summary>
     [Fact]
     public async Task WhileTypingIsProtectedATapCopiesAndThenTheKeyDictates()
@@ -118,6 +234,8 @@ public sealed class AppStateWaitingWordsTests : IDisposable
         await Dictate(state);
         Assert.Null(state.WaitingWordsValue);
         Assert.Equal(2, harness.Capture.StartCount);
+        // The take is the news: no outcome over its waveform.
+        Assert.Empty(panel.Outcomes);
     }
 
     /// <summary>a_hold_over_waiting_words_lets_them_go: a hold is a new take.</summary>
@@ -154,6 +272,8 @@ public sealed class AppStateWaitingWordsTests : IDisposable
         Assert.Null(state.WaitingWordsValue);
         Assert.Equal(new TakeOutcome.Kept(InHistory: true, Chord: null), panel.Outcomes[^1]);
         Assert.Equal(["Ping test"], state.RecentDictations.Select(entry => entry.Text));
+        // One set of failed words, one lifecycle: the menu's recovery slot leaves with them.
+        Assert.Null(state.RecoveredText);
     }
 
     /// <summary>

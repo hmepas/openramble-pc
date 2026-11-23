@@ -1128,7 +1128,7 @@ public sealed partial class AppState
         lock (gate)
         {
             if (dictationState != DictationState.Idle
-                || isRecoveryOperationActive
+                || insertionOwner != InsertionOwner.None
                 || isRecyclingEngine
                 || isPreparingEngine
                 || !isEngineReady)

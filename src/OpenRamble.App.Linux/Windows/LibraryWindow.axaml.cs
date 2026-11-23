@@ -27,7 +27,7 @@ namespace OpenRamble.App.Linux;
 /// </para>
 /// <para>
 /// The detail pane is whatever <see cref="CreateDetail"/> makes for the selection; the window owns
-/// the selection rules and nothing else of the detail.
+/// the selection rules and the one player the panes share, and nothing else of the detail.
 /// </para>
 /// </remarks>
 public sealed partial class LibraryWindow : Window, IDictationSink
@@ -44,6 +44,9 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     private static readonly LibraryScope[] Scopes = [LibraryScope.All, LibraryScope.Dictations, LibraryScope.Recordings];
 
     private readonly AppState state;
+
+    /// <summary>The one player every detail pane plays through; released when the window closes.</summary>
+    private readonly RecordingPlayer player = new();
 
     /// <summary>The items the list shows, in its order; headers excluded.</summary>
     private List<LibraryItem> listed = [];
@@ -87,6 +90,8 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         {
             state.PropertyChanged -= OnStateChanged;
             state.TranscriptChanged -= OnTranscriptChanged;
+            DetachDetail();
+            player.Dispose();
         };
 
         state.ReloadRecordings();
@@ -118,26 +123,38 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     /// <remarks>
     /// Made again only when the selected item changes, not when its data does: a pane follows its
     /// item through <see cref="AppState"/> itself, so a player keeps playing through a rename.
-    /// TODO(wave 4a merge): DictationDetailView / RecordingDetailView replace the stand-in.
     /// </remarks>
-    private Control CreateDetail(LibraryItem? selected)
+    private Control CreateDetail(LibraryItem? selected) => selected switch
     {
-        if (selected is null) { return PlaceholderView(Placeholder()); }
+        LibraryItem.Dictation dictation => Shown(new DictationDetailView(state, player), view => view.Show(dictation.Entry)),
+        LibraryItem.Recording recording when Metadata(recording.Value) is { } metadata =>
+            Shown(new RecordingDetailView(state, player), view => view.Show(metadata)),
+        _ => PlaceholderView(Placeholder()),
+    };
 
-        string text = selected switch
+    private static T Shown<T>(T view, Action<T> show)
+    {
+        show(view);
+        return view;
+    }
+
+    private MeetingRecordingMetadata? Metadata(ILibraryRecording recording) =>
+        recording is LibraryRecording { Metadata: { } metadata }
+            ? metadata
+            : state.Recordings.FirstOrDefault(stored => stored.Id == recording.Id);
+
+    /// <summary>The pane being replaced lets go of the player and of the state's events.</summary>
+    private void DetachDetail()
+    {
+        switch (Detail.Content)
         {
-            LibraryItem.Dictation dictation => dictation.Entry.Text,
-            LibraryItem.Recording recording => recording.Value.Title ?? RecordingsPlaceholder.Kind(recording.Value.Kind),
-            _ => string.Empty,
-        };
-        return new TextBlock
-        {
-            Text = text,
-            FontFamily = new FontFamily(SerifFamily),
-            FontSize = 18,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(28),
-        };
+            case DictationDetailView dictation:
+                dictation.Detach();
+                break;
+            case RecordingDetailView recording:
+                recording.Detach();
+                break;
+        }
     }
 
     private RecordingsPlaceholder Placeholder()
@@ -365,7 +382,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         }
 
         var rename = new MenuItem { Header = "Rename…" };
-        rename.Click += (_, _) => _ = Rename(recording);
+        rename.Click += (_, _) => Rename(recording.Id);
         var trash = new MenuItem { Header = "Move to Trash" };
         trash.Click += (_, _) => _ = DeleteItems([item]);
 
@@ -458,6 +475,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         // The placeholder depends on the list too (nothing found / nothing selected): always redone.
         if (key is not null && key == detailFor && Detail.Content is not null) { return; }
         detailFor = key;
+        DetachDetail();
         Detail.Content = CreateDetail(primary);
     }
 
@@ -568,64 +586,14 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         if (confirmed) { state.DeleteRecordingsPermanently(recordings); }
     }
 
-    private async Task Rename(ILibraryRecording recording)
+    /// <summary>Renaming happens in the detail pane's title: the recording is selected, then its title opens.</summary>
+    private void Rename(Guid id)
     {
-        string? title = await AskTitle(recording).ConfigureAwait(true);
-        if (title is not null) { state.RenameRecording(recording.Id, title); }
-    }
-
-    /// <summary>The new name, or <c>null</c> when the person cancelled. Blank means no name.</summary>
-    private async Task<string?> AskTitle(ILibraryRecording recording)
-    {
-        var box = new TextBox
-        {
-            Text = recording.Title ?? string.Empty,
-            Watermark = RecordingsPlaceholder.DefaultTitle(recording.StartedAt),
-            Width = 340,
-        };
-        AutomationProperties.SetName(box, "Recording name");
-        var cancel = new Button { Content = "Cancel", Padding = new Thickness(16, 4, 16, 4), IsCancel = true };
-        var save = new Button { Content = "Rename", Padding = new Thickness(16, 4, 16, 4), Margin = new Thickness(8, 0, 0, 0), IsDefault = true };
-        var window = new Window
-        {
-            Title = "Rename Recording",
-            SizeToContent = SizeToContent.WidthAndHeight,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            CanResize = false,
-            Content = new StackPanel
-            {
-                Margin = new Thickness(24),
-                Spacing = 10,
-                Children =
-                {
-                    new TextBlock { Text = "Recording name", FontWeight = FontWeight.SemiBold },
-                    box,
-                    new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        HorizontalAlignment = HorizontalAlignment.Right,
-                        Margin = new Thickness(0, 6, 0, 0),
-                        Children = { cancel, save },
-                    },
-                },
-            },
-        };
-
-        string? answer = null;
-        cancel.Click += (_, _) => window.Close();
-        save.Click += (_, _) =>
-        {
-            answer = box.Text ?? string.Empty;
-            window.Close();
-        };
-        window.Opened += (_, _) =>
-        {
-            box.Focus();
-            box.SelectAll();
-        };
-
-        await window.ShowDialog(this).ConfigureAwait(true);
-        return answer;
+        Select([id]);
+        // A pane made just now is not in the window yet; its title can take the caret once it is.
+        Dispatcher.UIThread.Post(
+            () => (Detail.Content as RecordingDetailView)?.BeginRename(),
+            DispatcherPriority.Loaded);
     }
 
     private void OnListKeyDown(object? sender, KeyEventArgs args)
@@ -637,7 +605,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
                 args.Handled = true;
                 break;
             case Key.Enter when Primary is LibraryItem.Recording recording:
-                _ = Rename(recording.Value);
+                Rename(recording.Id);
                 args.Handled = true;
                 break;
         }

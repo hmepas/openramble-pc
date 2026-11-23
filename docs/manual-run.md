@@ -149,9 +149,8 @@ delivered nothing.
     `capture.start` line carries `device=chosen` or `device=default`, never
     the device's name.
 12. History playback: play a take from the History tab; it must stop when the
-    next one starts. On Linux playback runs through `pw-play` (or `paplay`,
-    then `aplay`); a machine with none of them logs `history.play ok=false
-    error=no-player` and "Show in folder" still opens the audio.
+    next one starts. On Linux takes play in the Library's detail pane, through
+    `pw-cat`.
 13. Settings → Dictation History: dictate three times with "Keep" at 5, star
     one, dictate six more — the starred one must survive, the others age out
     newest-first to five unstarred. "Recognize again" on a kept take after

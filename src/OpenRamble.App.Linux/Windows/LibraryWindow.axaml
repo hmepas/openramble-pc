@@ -91,8 +91,31 @@
               <TextBlock x:Name="RecordLabel" Text="Record" VerticalAlignment="Center" />
             </StackPanel>
           </Button>
-          <CheckBox x:Name="MicOnlyToggle" Content="Mic only" VerticalAlignment="Center"
-                    ToolTip.Tip="Record only your microphone: a voice note" />
+          <!-- Record (a meeting: you and the other side), or from its menu only you: a voice note. -->
+          <SplitButton x:Name="RecordSplit" Classes="ink" Click="OnRecordMeeting"
+                       ToolTip.Tip="Records you and the other side"
+                       automation:AutomationProperties.Name="Record">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Ellipse x:Name="RecordSplitDot" Width="9" Height="9" VerticalAlignment="Center" />
+              <TextBlock Text="Record" VerticalAlignment="Center" />
+            </StackPanel>
+            <SplitButton.Flyout>
+              <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                <MenuItem x:Name="RecordMeetingItem" Header="Record meeting" Click="OnRecordMeeting"
+                          ToolTip.Tip="Your microphone and the system audio">
+                  <MenuItem.Icon>
+                    <ic:LucideIcon Data="{StaticResource IconMonitor}" Width="14" Height="14" />
+                  </MenuItem.Icon>
+                </MenuItem>
+                <MenuItem x:Name="RecordVoiceNoteItem" Header="Record voice note" Click="OnRecordVoiceNote"
+                          ToolTip.Tip="Your microphone only">
+                  <MenuItem.Icon>
+                    <ic:LucideIcon Data="{StaticResource IconMic}" Width="14" Height="14" />
+                  </MenuItem.Icon>
+                </MenuItem>
+              </MenuFlyout>
+            </SplitButton.Flyout>
+          </SplitButton>
         </StackPanel>
         </DockPanel>
       </Border>

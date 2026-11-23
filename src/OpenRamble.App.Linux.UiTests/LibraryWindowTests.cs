@@ -270,6 +270,96 @@ public sealed class LibraryWindowTests : IDisposable
         }
     }
 
+    // MARK: - The Record control
+
+    private SplitButton RecordSplit => window!.FindControl<SplitButton>("RecordSplit")!;
+
+    private Button Half(string part) =>
+        RecordSplit.GetVisualDescendants().OfType<Button>().Single(button => button.Name == part);
+
+    private double ListY() => Y(List);
+
+    private static async Task StopAndWait(AppState state)
+    {
+        await state.StopRecording();
+        await Ui.WaitFor("the recording was filed", () => state.RecordingState == MeetingRecordingState.Idle);
+        Ui.Settle();
+    }
+
+    private AppState OpenWithRecordings()
+    {
+        Seed();
+        AppState state = harness.MakeState();
+        Open(state);
+        return state;
+    }
+
+    [AvaloniaFact]
+    public async Task RecordRecordsAMeetingAndTheListHoldsStill()
+    {
+        AppState state = OpenWithRecordings();
+        Button primary = Half("PART_PrimaryButton");
+        Assert.True(RecordSplit.IsEffectivelyVisible);
+        Assert.True(primary.Bounds.Width > 0 && primary.Bounds.Height > 0);
+        // The ink split theme, not Fluent's: its chevron is a Lucide icon.
+        Assert.Contains(Half("PART_SecondaryButton").GetVisualDescendants(), visual => visual is OpenRamble.App.Linux.Controls.LucideIcon);
+        Assert.Null(window!.FindControl<CheckBox>("MicOnlyToggle"));
+        double listY = ListY();
+
+        for (int cycle = 0; cycle < 2; cycle++)
+        {
+            Click(Half("PART_PrimaryButton"));
+            await Ui.WaitFor("recording", () => state.RecordingState == MeetingRecordingState.Recording);
+            Ui.Settle();
+
+            Assert.True(state.LiveRecording!.IsMeeting);
+            Assert.False(RecordSplit.IsVisible);
+            Assert.True(window!.FindControl<Button>("RecordButton")!.IsEffectivelyVisible);
+            Assert.True(window!.FindControl<Control>("OthersMeterPanel")!.IsVisible);
+            Assert.Equal(listY, ListY(), 0.5);
+
+            await StopAndWait(state);
+            Assert.True(RecordSplit.IsVisible);
+            Assert.Equal(listY, ListY(), 0.5);
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task RecordVoiceNoteFromTheMenuRecordsOnlyTheMicrophone()
+    {
+        AppState state = OpenWithRecordings();
+        double listY = ListY();
+        var menu = Assert.IsType<MenuFlyout>(RecordSplit.Flyout);
+        List<string?> headers = [.. menu.Items.OfType<MenuItem>().Select(item => item.Header as string)];
+        Assert.Equal(["Record meeting", "Record voice note"], headers);
+        MenuItem voiceNote = menu.Items.OfType<MenuItem>().Single(item => (string?)item.Header == "Record voice note");
+
+        voiceNote.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        await Ui.WaitFor("recording", () => state.RecordingState == MeetingRecordingState.Recording);
+        Ui.Settle();
+
+        Assert.False(state.LiveRecording!.IsMeeting);
+        Assert.False(window!.FindControl<Control>("OthersMeterPanel")!.IsVisible);
+        Assert.Equal(listY, ListY(), 0.5);
+
+        await StopAndWait(state);
+        Assert.Equal(listY, ListY(), 0.5);
+    }
+
+    [AvaloniaFact]
+    public async Task RecordMeetingFromTheMenuRecordsBothSides()
+    {
+        AppState state = OpenWithRecordings();
+        MenuItem meeting = Assert.IsType<MenuFlyout>(RecordSplit.Flyout).Items.OfType<MenuItem>()
+            .Single(item => (string?)item.Header == "Record meeting");
+
+        meeting.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        await Ui.WaitFor("recording", () => state.RecordingState == MeetingRecordingState.Recording);
+
+        Assert.True(state.LiveRecording!.IsMeeting);
+        await StopAndWait(state);
+    }
+
     private RecordingDetailView OpenRecording(string title)
     {
         Click(Row(title));

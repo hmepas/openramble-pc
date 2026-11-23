@@ -5,7 +5,8 @@
   theme-variant tokens, so they are DynamicResource throughout.
 -->
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:c="clr-namespace:OpenRamble.App.Linux.Controls">
 
   <Styles.Resources>
     <!--
@@ -73,6 +74,37 @@
       <Setter Property="Foreground" Value="{DynamicResource InkForeground}" />
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="MinHeight" Value="34" />
+    </ControlTheme>
+
+    <!--
+      The ink capsule split in two: the action on the left, a chevron for its variants on the
+      right, a faint rule between. SplitButton finds the halves by their PART_ names.
+    -->
+    <ControlTheme x:Key="InkSplitButtonTheme" TargetType="SplitButton">
+      <Setter Property="Background" Value="{DynamicResource InkBackground}" />
+      <Setter Property="Foreground" Value="{DynamicResource InkForeground}" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusCapsule}" />
+      <Setter Property="MinHeight" Value="34" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}">
+            <DockPanel>
+              <Button Name="PART_SecondaryButton" DockPanel.Dock="Right" Theme="{StaticResource InkButtonTheme}"
+                      Background="Transparent" Foreground="{TemplateBinding Foreground}" Padding="8,0,12,0"
+                      KeyboardNavigation.IsTabStop="False">
+                <c:LucideIcon Data="{StaticResource IconChevronDown}" Width="14" Height="14" />
+              </Button>
+              <Rectangle DockPanel.Dock="Right" Width="1" Margin="0,9" Fill="{TemplateBinding Foreground}" Opacity="0.3" />
+              <Button Name="PART_PrimaryButton" Theme="{StaticResource InkButtonTheme}"
+                      Background="Transparent" Foreground="{TemplateBinding Foreground}" Padding="14,0,10,0"
+                      Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" />
+            </DockPanel>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:disabled">
+        <Setter Property="Opacity" Value="0.4" />
+      </Style>
     </ControlTheme>
 
     <!-- Everything else beside it: no chrome until pressed or hovered. -->
@@ -245,6 +277,9 @@
   <!-- Buttons by class. -->
   <Style Selector="Button.ink">
     <Setter Property="Theme" Value="{StaticResource InkButtonTheme}" />
+  </Style>
+  <Style Selector="SplitButton.ink">
+    <Setter Property="Theme" Value="{StaticResource InkSplitButtonTheme}" />
   </Style>
   <Style Selector="Button.quiet">
     <Setter Property="Theme" Value="{StaticResource QuietButtonTheme}" />

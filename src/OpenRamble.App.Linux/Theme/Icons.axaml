@@ -25,6 +25,7 @@
   <StreamGeometry x:Key="IconArrowRight">M 5 12 h 14 M 12 5 l 7 7 l -7 7</StreamGeometry>  <!-- arrow-right -->
   <StreamGeometry x:Key="IconRotateCcw">M 3 12 a 9 9 0 1 0 9 -9 a 9.75 9.75 0 0 0 -6.74 2.74 L 3 8 M 3 3 v 5 h 5</StreamGeometry>  <!-- rotate-ccw -->
   <StreamGeometry x:Key="IconRotateCw">M 21 12 a 9 9 0 1 1 -9 -9 c 2.52 0 4.93 1 6.74 2.74 L 21 8 M 21 3 v 5 h -5</StreamGeometry>  <!-- rotate-cw -->
+  <StreamGeometry x:Key="IconChevronDown">M 6 9 l 6 6 l 6 -6</StreamGeometry>  <!-- chevron-down -->
   <StreamGeometry x:Key="IconChevronsUpDown">M 7 15 l 5 5 l 5 -5 M 7 9 l 5 -5 l 5 5</StreamGeometry>  <!-- chevrons-up-down -->
   <StreamGeometry x:Key="IconQuote">M 16 3 a 2 2 0 0 0 -2 2 v 6 a 2 2 0 0 0 2 2 a 1 1 0 0 1 1 1 v 1 a 2 2 0 0 1 -2 2 a 1 1 0 0 0 -1 1 v 2 a 1 1 0 0 0 1 1 a 6 6 0 0 0 6 -6 V 5 a 2 2 0 0 0 -2 -2 z M 5 3 a 2 2 0 0 0 -2 2 v 6 a 2 2 0 0 0 2 2 a 1 1 0 0 1 1 1 v 1 a 2 2 0 0 1 -2 2 a 1 1 0 0 0 -1 1 v 2 a 1 1 0 0 0 1 1 a 6 6 0 0 0 6 -6 V 5 a 2 2 0 0 0 -2 -2 z</StreamGeometry>  <!-- quote -->
   <StreamGeometry x:Key="IconMic">M 12 19 v 3 M 19 10 v 2 a 7 7 0 0 1 -14 0 v -2 M 12 2 H 12 A 3 3 0 0 1 15 5 V 12 A 3 3 0 0 1 12 15 H 12 A 3 3 0 0 1 9 12 V 5 A 3 3 0 0 1 12 2 Z</StreamGeometry>  <!-- mic -->

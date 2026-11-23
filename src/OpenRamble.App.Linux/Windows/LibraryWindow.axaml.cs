@@ -98,7 +98,6 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         };
         ItemList.SelectionChanged += OnListSelectionChanged;
         ItemList.KeyDown += OnListKeyDown;
-        MicOnlyToggle.IsCheckedChanged += (_, _) => RenderRecordBar();
 
         AddHandler(DragDrop.DragEnterEvent, OnDragEnter);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
@@ -695,18 +694,18 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         ToolTip.SetTip(PauseButton, pauseTip);
         AutomationProperties.SetName(PauseButton, pauseTip);
 
-        // Record, then Stop in the same place; nothing to press while it starts or saves.
-        RecordButton.IsVisible = recording is MeetingRecordingState.Idle || live;
+        // Record, then Stop in the same place; nothing to press while it starts or saves. Where the
+        // other side can be heard, Record is split: a meeting, or from its menu a voice note.
+        bool idle = recording == MeetingRecordingState.Idle;
+        RecordSplit.IsVisible = idle && state.SupportsSystemAudio;
+        RecordSplitDot.Fill = StatusBrushes.Recording;
+        RecordButton.IsVisible = (idle && !state.SupportsSystemAudio) || live;
         RecordDot.IsVisible = !live;
         StopIcon.IsVisible = live;
         RecordDot.Fill = StatusBrushes.Recording;
         RecordLabel.Text = live ? "Stop" : "Record";
-        bool microphoneOnly = !state.SupportsSystemAudio || MicOnlyToggle.IsChecked == true;
-        ToolTip.SetTip(RecordButton, live
-            ? "Ends the recording and keeps it"
-            : microphoneOnly ? "Records your voice" : "Records you and the other side");
+        ToolTip.SetTip(RecordButton, live ? "Ends the recording and keeps it" : "Records your voice");
         AutomationProperties.SetName(RecordButton, live ? "Stop recording" : "Record");
-        MicOnlyToggle.IsVisible = recording == MeetingRecordingState.Idle && state.SupportsSystemAudio;
 
         RenderLiveRow();
         RenderMeters();
@@ -752,9 +751,13 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             return;
         }
 
-        // A voice note is never remembered: the next Record is a meeting again unless ticked.
-        _ = state.StartRecording(includeSystemAudio: MicOnlyToggle.IsChecked != true);
+        // Only shown to record where the other side cannot be heard: a voice note.
+        _ = state.StartRecording(includeSystemAudio: false);
     }
+
+    private void OnRecordMeeting(object? sender, RoutedEventArgs args) => _ = state.StartRecording(includeSystemAudio: true);
+
+    private void OnRecordVoiceNote(object? sender, RoutedEventArgs args) => _ = state.StartRecording(includeSystemAudio: false);
 
     private void OnPauseResume(object? sender, RoutedEventArgs args) =>
         _ = state.RecordingState == MeetingRecordingState.Paused ? state.ResumeRecording() : state.PauseRecording();

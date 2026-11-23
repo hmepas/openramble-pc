@@ -92,8 +92,14 @@ public sealed class RecordingPlayerTests : IDisposable
     public void Microphone_system_and_both_play_mixed_without_clipping_then_end()
     {
         int ended = 0;
-        player.Ended += (_, _) => Interlocked.Increment(ref ended);
-        player.Load(Guid.NewGuid(), Recording());
+        Guid endedId = Guid.Empty;
+        player.Ended += (_, id) =>
+        {
+            endedId = id;
+            Interlocked.Increment(ref ended);
+        };
+        var recording = Guid.NewGuid();
+        player.Load(recording, Recording());
         Assert.Equal(3, player.Duration.TotalSeconds, 3);
 
         player.Toggle();
@@ -108,7 +114,8 @@ public sealed class RecordingPlayerTests : IDisposable
         }
 
         Assert.True(LastSink.Finished);
-        Assert.Equal(1, Volatile.Read(ref ended));
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref ended) == 1, 5_000));
+        Assert.Equal(recording, endedId);
         Assert.Equal(3, player.Position.TotalSeconds, 3);
     }
 
@@ -232,6 +239,62 @@ public sealed class RecordingPlayerTests : IDisposable
         player.Load(Guid.NewGuid(), path);
         Assert.True(player.FailedToLoad);
         Assert.NotNull(player.LoadError);
+    }
+
+    [Fact]
+    public void A_failed_load_is_retried_and_a_new_file_for_the_same_id_reloads()
+    {
+        int opens = 0;
+        using var flaky = new RecordingPlayer(
+            path => Interlocked.Increment(ref opens) == 1 ? throw new IOException("busy") : PcmSources.Open(path),
+            _ => Add(new FakeSink()), clock, TimeSpan.Zero);
+        var id = Guid.NewGuid();
+        string path = Recording();
+
+        flaky.Load(id, path);
+        Assert.True(flaky.FailedToLoad);
+        Assert.Null(flaky.LoadedId);
+
+        flaky.Load(id, path);
+        Assert.False(flaky.FailedToLoad);
+        Assert.Equal(id, flaky.LoadedId);
+        Assert.Equal(2, opens);
+
+        flaky.Load(id, path);
+        Assert.Equal(2, opens);
+
+        string moved = Path.Combine(directory, "audio-compressed.wav");
+        File.Copy(path, moved);
+        flaky.Load(id, moved);
+        Assert.Equal(3, opens);
+        Assert.Equal(id, flaky.LoadedId);
+    }
+
+    [Fact]
+    public async Task Opening_a_file_does_not_hold_the_player_and_an_unload_meanwhile_wins()
+    {
+        using var opening = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var slow = new RecordingPlayer(
+            path =>
+            {
+                opening.Set();
+                release.Wait();
+                return PcmSources.Open(path);
+            },
+            _ => Add(new FakeSink()), clock, TimeSpan.Zero);
+        string path = Recording();
+
+        var load = Task.Run(() => slow.Load(Guid.NewGuid(), path));
+        Assert.True(opening.Wait(5_000));
+        // Times out (throws) if the player's lock is held while the file is opening.
+        await Task.Run(() => slow.IsPlaying).WaitAsync(TimeSpan.FromSeconds(5));
+        slow.Unload();
+        release.Set();
+        await load.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Null(slow.LoadedId);
+        Assert.Equal(TimeSpan.Zero, slow.Duration);
     }
 
     [Fact]

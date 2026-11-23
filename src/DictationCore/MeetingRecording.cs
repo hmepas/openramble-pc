@@ -146,9 +146,10 @@ public sealed record SystemAudioSummary
 /// <remarks>
 /// Every field but <see cref="Id"/> and <see cref="StartedAt"/> decodes with a default, on
 /// purpose: a store that refuses its own older files loses exactly the recordings it exists to
-/// keep. Unknown fields are ignored.
+/// keep. Unknown fields are ignored, and an explicit <c>null</c> reads as the default too, as
+/// Swift's <c>decodeIfPresent</c> does.
 /// </remarks>
-public sealed record MeetingRecordingMetadata
+public sealed record MeetingRecordingMetadata : IJsonOnDeserialized
 {
     public const int CurrentSchemaVersion = 2;
 
@@ -283,6 +284,14 @@ public sealed record MeetingRecordingMetadata
         && ImportLanguage == other.ImportLanguage;
 
     public override int GetHashCode() => HashCode.Combine(Id, StartedAt, Duration, Title);
+
+    void IJsonOnDeserialized.OnDeserialized()
+    {
+        ChannelLayout ??= [MeetingChannel.Microphone, MeetingChannel.System];
+        SystemAudio ??= new();
+        Pauses ??= [];
+        Gaps ??= [];
+    }
 }
 
 /// <summary>
@@ -298,7 +307,7 @@ public readonly record struct MeetingSegmentRef(MeetingChannel Channel, int Star
 /// One paragraph of transcript, attributed by channel. Start and end come from where the audio
 /// was cut, on the recording's own timeline, so a line can be clicked to play from.
 /// </summary>
-public sealed record MeetingUtterance
+public sealed record MeetingUtterance : IJsonOnDeserialized
 {
     public MeetingUtterance()
     {
@@ -333,13 +342,15 @@ public sealed record MeetingUtterance
     /// then the transcript says so rather than skipping it.
     /// </summary>
     public bool IsFailed { get; set; }
+
+    void IJsonOnDeserialized.OnDeserialized() => Text ??= string.Empty;
 }
 
 /// <summary>
 /// <c>transcript.json</c>: the utterances so far, and how far each channel has been decoded - the
 /// resumption point after a crash or a relaunch.
 /// </summary>
-public sealed record MeetingTranscript
+public sealed record MeetingTranscript : IJsonOnDeserialized
 {
     public const int CurrentSchemaVersion = 1;
 
@@ -372,6 +383,12 @@ public sealed record MeetingTranscript
         && DecodedFrames.All(pair => other.DecodedFrames.TryGetValue(pair.Key, out int value) && value == pair.Value);
 
     public override int GetHashCode() => HashCode.Combine(SchemaVersion, Utterances.Count);
+
+    void IJsonOnDeserialized.OnDeserialized()
+    {
+        Utterances ??= [];
+        DecodedFrames ??= [];
+    }
 }
 
 /// <summary>

@@ -36,7 +36,8 @@ namespace OpenRamble.App.Linux;
 /// without them such a file fails to load with <see cref="LoadError"/> saying so.
 /// </para>
 /// <para>
-/// <see cref="Ended"/> is raised on a worker thread; a UI marshals it.
+/// <see cref="Ended"/> is raised on a worker thread; a UI marshals it, and drops it when the id it
+/// carries is no longer the recording on screen - by the time it arrives another may be loaded.
 /// </para>
 /// </remarks>
 public sealed class RecordingPlayer : IDisposable
@@ -57,6 +58,10 @@ public sealed class RecordingPlayer : IDisposable
     private IPcmSource? source;
     private Session? session;
     private long currentFrame;
+    private string? loadedPath;
+
+    /// <summary>Bumped by every load and unload, so a load that finishes late knows it was superseded.</summary>
+    private long generation;
 
     public RecordingPlayer()
         : this(PcmSources.Open, PwCatSink.Start, TimeProvider.System, DefaultOutputLatency)
@@ -72,9 +77,10 @@ public sealed class RecordingPlayer : IDisposable
         this.outputLatency = outputLatency;
     }
 
-    /// <summary>The recording whose audio ended - not raised for pause, seek or unload.</summary>
-    public event EventHandler? Ended;
+    /// <summary>The recording (by id) whose audio ended - not raised for pause, seek or unload.</summary>
+    public event EventHandler<Guid>? Ended;
 
+    /// <summary>The recording that loaded; <c>null</c> when none did.</summary>
     public Guid? LoadedId { get; private set; }
 
     /// <summary>Why the loaded recording cannot play, or <c>null</c>.</summary>
@@ -97,24 +103,55 @@ public sealed class RecordingPlayer : IDisposable
         get { lock (gate) { return source is null ? TimeSpan.Zero : ToTime(HeardFrame()); } }
     }
 
-    /// <summary>Load a recording; loading the one already loaded keeps its position.</summary>
+    /// <summary>
+    /// Load a recording; loading the one already loaded from the same file keeps its position. A
+    /// failed load is tried again, and a new file for the same id (wav compressed to m4a) reloads.
+    /// </summary>
+    /// <remarks>
+    /// The file is opened outside the lock: probing it may run <c>ffprobe</c>, and the player's
+    /// other members are read from the UI thread meanwhile.
+    /// </remarks>
     public void Load(Guid id, string path)
     {
+        long attempt;
         lock (gate)
         {
-            if (LoadedId == id) { return; }
+            if (LoadedId == id && loadedPath == path) { return; }
             UnloadLocked();
+            attempt = generation;
+        }
+
+        IPcmSource? opened = null;
+        string? failure = null;
+        try
+        {
+            opened = openSource(path);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException
+            or InvalidDataException or NotSupportedException or Win32Exception or InvalidOperationException)
+        {
+            failure = error.Message;
+            DiagnosticLog.Emit("recording.play.load", ("ok", false), ("error", error.GetType().Name));
+        }
+
+        lock (gate)
+        {
+            if (attempt != generation)
+            {
+                // Another load or an unload came in while this one was opening the file.
+                opened?.Dispose();
+                return;
+            }
+
+            if (opened is null)
+            {
+                LoadError = failure;
+                return;
+            }
+
+            source = opened;
             LoadedId = id;
-            try
-            {
-                source = openSource(path);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException
-                or InvalidDataException or NotSupportedException or Win32Exception or InvalidOperationException)
-            {
-                LoadError = error.Message;
-                DiagnosticLog.Emit("recording.play.load", ("ok", false), ("error", error.GetType().Name));
-            }
+            loadedPath = path;
         }
     }
 
@@ -207,8 +244,10 @@ public sealed class RecordingPlayer : IDisposable
         source?.Dispose();
         source = null;
         LoadedId = null;
+        loadedPath = null;
         LoadError = null;
         currentFrame = 0;
+        generation++;
     }
 
     private void StopSession()
@@ -281,7 +320,7 @@ public sealed class RecordingPlayer : IDisposable
             running.Sink.Dispose();
         }
 
-        bool ended = false;
+        Guid? ended = null;
         lock (gate)
         {
             // Pause, seek and loading another recording also end a stream; only the one still
@@ -290,11 +329,12 @@ public sealed class RecordingPlayer : IDisposable
             {
                 session = null;
                 currentFrame = reachedEnd ? source?.Frames ?? 0 : running.StartFrame + Interlocked.Read(ref running.Written);
-                ended = reachedEnd;
+                if (reachedEnd) { ended = LoadedId; }
             }
         }
 
-        if (ended) { Ended?.Invoke(this, EventArgs.Empty); }
+        // Outside the lock, so a handler may call back in; the id is the one captured with the end.
+        if (ended is Guid id) { Ended?.Invoke(this, id); }
     }
 
     private sealed class Session(long startFrame, int rate, IPcmReader reader, IPcmSink sink, long startedAt)
@@ -483,6 +523,8 @@ internal sealed class FfmpegPcmSource(string path, long frames) : IPcmSource
 {
     private const int Rate = 16_000;
 
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
+
     public int SampleRate => Rate;
 
     public long Frames { get; } = frames;
@@ -498,8 +540,24 @@ internal sealed class FfmpegPcmSource(string path, long frames) : IPcmSource
         ]);
         using Process probe = Process.Start(start) ?? throw new NotSupportedException("ffprobe did not start");
         probe.BeginErrorReadLine();
-        string output = probe.StandardOutput.ReadToEnd();
+        Task<string> reading = probe.StandardOutput.ReadToEndAsync();
+        if (!probe.WaitForExit(ProbeTimeout))
+        {
+            try
+            {
+                probe.Kill(entireProcessTree: true);
+            }
+            catch (Exception error) when (error is InvalidOperationException or Win32Exception)
+            {
+                // Already gone.
+            }
+
+            throw new IOException("ffprobe did not answer in time");
+        }
+
+        // Without a timeout this also waits for the redirected streams to drain.
         probe.WaitForExit();
+        string output = reading.GetAwaiter().GetResult();
         if (probe.ExitCode != 0
             || !double.TryParse(output.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double seconds)
             || !(seconds > 0))
@@ -569,9 +627,9 @@ internal sealed class FfmpegPcmSource(string path, long frames) : IPcmSource
             {
                 if (!process.HasExited) { process.Kill(); }
             }
-            catch (InvalidOperationException)
+            catch (Exception error) when (error is InvalidOperationException or Win32Exception)
             {
-                // Already gone.
+                // Already gone - or going: this runs in the worker's finally and must not throw.
             }
 
             process.Dispose();

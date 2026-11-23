@@ -168,6 +168,12 @@ public sealed class DictationLogFile : IDisposable
 
         public int? PreparationMilliseconds { get; init; }
 
+        /// <summary>
+        /// Key-up → the pasted text first read by anyone. The difference from
+        /// <see cref="PasteMilliseconds"/> is how long the target took to read the paste.
+        /// </summary>
+        public int? ReadMilliseconds { get; init; }
+
         public int? ReadableMilliseconds { get; init; }
 
         public required int StreamedSegments { get; init; }
@@ -177,8 +183,7 @@ public sealed class DictationLogFile : IDisposable
         /// journal always did.
         /// </summary>
         /// <remarks>
-        /// Upstream also records the total engine time, lost audio, the first read of the paste,
-        /// disk reads and engine idle time; this port measures none of them yet.
+        /// Upstream also records the total engine time, lost audio, disk reads and engine idle time; this port measures none of them yet.
         /// </remarks>
         public static Recognition? From(DictationSpeedReport report)
         {
@@ -195,6 +200,7 @@ public sealed class DictationLogFile : IDisposable
                 PreparationMilliseconds = Optional(phases.EnginePreparation),
                 MicrophoneStartupMilliseconds = Optional(report.MicrophoneStartup),
                 PasteMilliseconds = Optional(report.ToPasteDispatched),
+                ReadMilliseconds = Optional(report.ToFirstRead),
             };
 
             static int? Optional(TimeSpan? span) => span is { } value ? Milliseconds(value.TotalSeconds) : null;
@@ -209,6 +215,9 @@ public sealed class DictationLogFile : IDisposable
         public int? ErrorCode { get; init; }
 
         public required DiagnosticEvent Event { get; init; }
+
+        /// <summary>Which kind of paste did not land: a case name, never the message.</summary>
+        public DictationFailureReason? FailureReason { get; init; }
 
         public DictationFallbackReason? FallbackReason { get; init; }
 
@@ -286,6 +295,7 @@ public sealed class DictationLogFile : IDisposable
         DictationFailureStage? stage = null,
         bool? timedOut = null,
         DictationFallbackReason? fallbackReason = null,
+        DictationFailureReason? failureReason = null,
         DateTimeOffset? at = null)
     {
         DateTimeOffset time = at ?? now();
@@ -307,6 +317,7 @@ public sealed class DictationLogFile : IDisposable
                     Stage = stage,
                     TimedOut = timedOut,
                     FallbackReason = fallbackReason,
+                    FailureReason = failureReason,
                 };
                 byte[] data = [.. JsonSerializer.SerializeToUtf8Bytes(entry, Options), (byte)'\n'];
                 var file = new FileInfo(Path.Combine(directory, $"events-{Day(time)}.jsonl"));
@@ -489,7 +500,8 @@ public sealed class DictationLogFile : IDisposable
             || entry.Build != SafeVersion(entry.Build)
             || !Enum.IsDefined(entry.Event)
             || (entry.Stage is { } stage && !Enum.IsDefined(stage))
-            || (entry.FallbackReason is { } reason && !Enum.IsDefined(reason)))
+            || (entry.FallbackReason is { } reason && !Enum.IsDefined(reason))
+            || (entry.FailureReason is { } failure && !Enum.IsDefined(failure)))
         {
             return null;
         }

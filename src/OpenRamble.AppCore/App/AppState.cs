@@ -78,6 +78,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private bool isRecoveryOperationActive;
     private DictationNotice? noticeAfterSession;
     private bool disposed;
+    private readonly TimeSpan waitingTapLimit;
 
     /// <summary>The loudest sample of the running take, for <see cref="MicrophoneLevelHint"/>.</summary>
     private float takePeak;
@@ -95,6 +96,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         inputDevices = environment.InputDevices;
         inserter = environment.Inserter;
         overlay = environment.Overlay;
+        waitingTapLimit = environment.WaitingTapLimit ?? DefaultWaitingTapLimit;
         permissionPollInterval = environment.PermissionPollInterval;
         modelDownloader = environment.ModelDownloader;
         microphoneConsent = environment.MicrophoneConsent;
@@ -331,6 +333,23 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
             built.OnNotice = notice =>
             {
                 EmitNotice("dictation.notice", notice, DiagnosticLog.Session);
+                // The reason is a case name from an allowlist, never the message: which kind of
+                // paste failed is what a report has to answer.
+                if (notice.Kind == DictationNoticeKind.Failure)
+                {
+                    journal.Record(DiagnosticEvent.DictationFailed, failureReason: notice.Reason);
+                }
+                else if (notice.Kind == DictationNoticeKind.Warning)
+                {
+                    journal.Record(DiagnosticEvent.DictationWarning, failureReason: notice.Reason);
+                }
+
+                // Before the notice reaches the panel: words that wait are not a passing notice.
+                if (notice.RecoverableText is string waiting && notice.WordsDidNotLand)
+                {
+                    WordsWait(waiting, notice.InsertionFailure);
+                }
+
                 LastNotice = notice;
                 if (notice.RecoverableText is string text)
                 {
@@ -548,8 +567,11 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         hotkeyMonitor.SetHotkey(Hotkey);
         hotkeyMonitor.OnPress = BeginHoldToDictate;
         hotkeyMonitor.OnRelease = EndHoldToDictate;
+        WireWaitingPanel();
         hotkeyMonitor.OnDoubleTap = () =>
         {
+            // Over waiting words a second tap is a tap like any other.
+            if (KeyDownOverWaitingWords()) { return; }
             switch (DictationStateValue)
             {
                 case DictationState.Preparing:
@@ -606,16 +628,31 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // The hold turned out to be a shortcut over the chosen key: the recording ends quietly -
         // no insertion, no message, no error sound. The person pressed a shortcut, they did not
         // dictate.
-        hotkeyMonitor.OnAbortShortcut = () => controller?.Cancel();
-        // Escape cancels only a dictation in progress. The rest of the time it is an ordinary
-        // key and is not intercepted.
-        hotkeyMonitor.OnEscape = CancelCurrentDictation;
+        hotkeyMonitor.OnAbortShortcut = () =>
+        {
+            ShortcutOverWaitingWords();
+            controller?.Cancel();
+        };
+        // Escape cancels only a dictation in progress, or sends waiting words to History. The
+        // rest of the time it is an ordinary key and is not intercepted.
+        hotkeyMonitor.OnEscape = () =>
+        {
+            if (ReleaseWaitingWords()) { return; }
+            CancelCurrentDictation();
+        };
     }
 
     /// <summary>
     /// The dictation key went down. The only place a hold-to-dictate gesture may start from.
     /// </summary>
     private void BeginHoldToDictate()
+    {
+        // Over waiting words the press is first a question: tap or hold.
+        if (KeyDownOverWaitingWords()) { return; }
+        BeginHoldToDictateNow();
+    }
+
+    private void BeginHoldToDictateNow()
     {
         // The on-screen button has no raw key edge to ride; it wakes the engine here.
         RewarmEngineIfCold(RewarmTrigger.KeyDown);
@@ -670,6 +707,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     /// <summary>The dictation key came back up.</summary>
     private void EndHoldToDictate()
     {
+        if (KeyUpOverWaitingWords()) { return; }
         DiagnosticLog.Emit(
             "dictation.stop",
             ("session", DiagnosticLog.Session),
@@ -1172,6 +1210,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // this object, its controller and its capture alive for the rest of the process.
         hotkeyMonitor.OnPress = null;
         hotkeyMonitor.OnRelease = null;
+        UnwireWaitingPanel();
         hotkeyMonitor.OnDoubleTap = null;
         hotkeyMonitor.OnSingleTapWhileHandsFree = null;
         hotkeyMonitor.OnAbortShortcut = null;

@@ -183,7 +183,7 @@ public sealed class FakeInserter : ITextInserting
     public TargetApplication? FrontmostApplication() => Frontmost;
 }
 
-public sealed class FakeOverlay : IOverlayPresenting, IEngineWaitPresenting
+public class FakeOverlay : IOverlayPresenting, IEngineWaitPresenting
 {
     private readonly object gate = new();
     private readonly List<DictationState> presented = [];
@@ -221,6 +221,46 @@ public sealed class FakeOverlay : IOverlayPresenting, IEngineWaitPresenting
     {
         lock (gate) { notices.Add(notice); }
         return Task.CompletedTask;
+    }
+}
+
+/// <summary>A panel that shows waiting words: what it was told, in order.</summary>
+public sealed class FakeWaitingOverlay : FakeOverlay, IWaitingWordsPresenting
+{
+    private readonly object waitingGate = new();
+    private readonly List<WaitingWords?> waitings = [];
+    private readonly List<TakeOutcome> outcomes = [];
+    private readonly List<bool> keyDowns = [];
+
+    public Action? OnWaitingAction { get; set; }
+
+    public Action? OnWaitingLater { get; set; }
+
+    public IReadOnlyList<WaitingWords?> Waitings { get { lock (waitingGate) { return [.. waitings]; } } }
+
+    public IReadOnlyList<TakeOutcome> Outcomes { get { lock (waitingGate) { return [.. outcomes]; } } }
+
+    public IReadOnlyList<bool> KeyDowns { get { lock (waitingGate) { return [.. keyDowns]; } } }
+
+    public DictationHotkey? Key { get; private set; }
+
+    public void SetWaiting(WaitingWords? waiting, DictationHotkey key)
+    {
+        lock (waitingGate)
+        {
+            waitings.Add(waiting);
+            Key = key;
+        }
+    }
+
+    public void ShowOutcome(TakeOutcome outcome)
+    {
+        lock (waitingGate) { outcomes.Add(outcome); }
+    }
+
+    public void SetKeyDown(bool down)
+    {
+        lock (waitingGate) { keyDowns.Add(down); }
     }
 }
 
@@ -797,7 +837,7 @@ public sealed class AppHarness : IDisposable
     /// <summary>Where a state built here keeps its local journal.</summary>
     public string MakeStateLogDirectory() => DictationLogFile.DirectoryUnder(Paths);
 
-    public FakeOverlay Overlay { get; } = new();
+    public FakeOverlay Overlay { get; set; } = new();
 
     public FakeCapture Capture { get; } = new();
 
@@ -853,6 +893,9 @@ public sealed class AppHarness : IDisposable
     public TimeSpan? EngineWarmupRetryDelay { get; set; }
 
     public TimeSpan? PrepareDeadline { get; set; }
+
+    /// <summary>How long a press over waiting words stays a tap; <c>null</c> - the app's 600 ms.</summary>
+    public TimeSpan? WaitingTapLimit { get; set; }
 
     public bool LayoutHasAltGraph { get; set; }
 
@@ -914,6 +957,7 @@ public sealed class AppHarness : IDisposable
             IdleUnloadDelayOverride = IdleUnloadDelayOverride,
             EngineWarmupRetryDelay = EngineWarmupRetryDelay,
             PrepareDeadline = PrepareDeadline,
+            WaitingTapLimit = WaitingTapLimit,
             ModelDownloader = Downloader,
             MicrophoneConsent = MicrophoneConsent,
             SystemEvents = SystemEvents,

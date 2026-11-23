@@ -296,6 +296,8 @@ public sealed partial class AppState
             if (!Set(ref hotkey, value)) { return; }
             UpdateSettings(current => current with { Hotkey = value.ToString() });
             hotkeyMonitor.SetHotkey(value);
+            // The panel names the key, also when nothing waits, so the one shown later is this one.
+            WaitingPanel?.SetWaiting(WaitingWordsValue, value);
             Raise(nameof(HotkeyWarning));
         }
     }

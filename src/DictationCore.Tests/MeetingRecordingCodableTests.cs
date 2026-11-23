@@ -102,6 +102,27 @@ public sealed class MeetingRecordingCodableTests
         Assert.True(fromLater.IsImported);
     }
 
+    /// <summary>Swift's <c>decodeIfPresent</c> reads an explicit <c>null</c> as absent: the default.</summary>
+    [Fact]
+    public void AnExplicitNullReadsAsTheDefault()
+    {
+        MeetingRecordingMetadata decoded = Decode<MeetingRecordingMetadata>(
+            """{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","startedAt":"2025-09-03T11:46:40Z","channelLayout":null,"systemAudio":null,"pauses":null,"gaps":null}""");
+        Assert.Equal([MeetingChannel.Microphone, MeetingChannel.System], decoded.ChannelLayout);
+        Assert.NotNull(decoded.SystemAudio);
+        Assert.False(decoded.IsMeeting);
+        Assert.Empty(decoded.Pauses);
+        Assert.Empty(decoded.Gaps);
+
+        MeetingTranscript transcript = Decode<MeetingTranscript>("""{"utterances":null,"decodedFrames":null}""");
+        Assert.Empty(transcript.Utterances);
+        Assert.Empty(transcript.DecodedFrames);
+
+        MeetingTranscript withNullText = Decode<MeetingTranscript>(
+            """{"utterances":[{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","channel":"microphone","start":0,"end":1,"text":null}]}""");
+        Assert.Equal(string.Empty, withNullText.Utterances[0].Text);
+    }
+
     [Fact]
     public void AnUnknownFieldFromALaterVersionIsIgnored()
     {

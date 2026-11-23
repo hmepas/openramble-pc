@@ -267,6 +267,11 @@ public sealed class MeetingStore
     /// The WAV header of an unfinished recording still says zero bytes; the audio after it is
     /// intact. A directory whose file is still held by a live process - a second instance - is
     /// left alone.
+    /// <para>
+    /// Call it only at launch, before any writer starts: a directory with no <c>audio.wav</c> is
+    /// deleted without a liveness check, and a recording this process has just begun - its
+    /// directory created, its file not yet - would go with it.
+    /// </para>
     /// </remarks>
     public IReadOnlyList<MeetingRecordingMetadata> RecoverIncomplete(DateTimeOffset? now = null)
     {

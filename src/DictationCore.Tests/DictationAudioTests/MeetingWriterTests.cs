@@ -133,4 +133,34 @@ public sealed class MeetingWriterTests : IDisposable
         var writer = new MeetingWriter(directory);
         Assert.ThrowsAny<MeetingWriter.Failure>(() => writer.Append(Constant(0, 10), Constant(0, 10)));
     }
+
+    [Fact]
+    public void TestAFailedPeaksOpenDoesNotLeaveTheWavOpen()
+    {
+        Directory.CreateDirectory(Path.Combine(directory, MeetingWriter.PeaksFileName));
+        var writer = new MeetingWriter(directory);
+
+        Assert.Throws<MeetingWriter.Failure.WriteFailed>(writer.Open);
+
+        Assert.False(File.Exists(writer.AudioPath));
+    }
+
+    [Fact]
+    public void TestAFailedPeaksCloseStillSealsAndClosesTheWav()
+    {
+        var writer = new MeetingWriter(directory);
+        writer.Open();
+        writer.Append(Constant(0.5f, 800), Constant(-0.5f, 800));
+        // The peak file loses its descriptor, so closing it fails.
+        var peaks = (PeakFile)typeof(MeetingWriter)
+            .GetField("peaks", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(writer)!;
+        peaks.Abandon();
+
+        Assert.Throws<MeetingWriter.Failure.WriteFailed>(writer.Finish);
+
+        byte[] bytes = File.ReadAllBytes(writer.AudioPath);
+        Assert.Equal(800u * 4, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(40, 4)));
+        using var exclusive = new FileStream(writer.AudioPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    }
 }

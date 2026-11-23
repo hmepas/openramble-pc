@@ -99,10 +99,20 @@ public sealed class MeetingWriter
         try
         {
             wav.Open();
+        }
+        catch (WAVWriter.Failure error)
+        {
+            throw new Failure.WriteFailed(error.Message);
+        }
+
+        try
+        {
             peaks.Open();
         }
-        catch (Exception error) when (error is WAVWriter.Failure or PeakFile.Failure)
+        catch (PeakFile.Failure error)
         {
+            // The WAV is open by now; nobody would ever close it.
+            wav.Discard();
             throw new Failure.WriteFailed(error.Message);
         }
     }
@@ -159,14 +169,26 @@ public sealed class MeetingWriter
         {
             try
             {
-                if (bucketFilled > 0)
+                // The audio is what matters: a failed waveform must not leave it unsealed and open.
+                try
                 {
-                    peaks.Append([bucketMicrophone, bucketSystem]);
-                    ResetBucket();
+                    if (bucketFilled > 0)
+                    {
+                        peaks.Append([bucketMicrophone, bucketSystem]);
+                        ResetBucket();
+                    }
                 }
-
-                peaks.Close();
-                wav.Close();
+                finally
+                {
+                    try
+                    {
+                        peaks.Close();
+                    }
+                    finally
+                    {
+                        wav.Close();
+                    }
+                }
             }
             catch (Exception error) when (error is WAVWriter.Failure or PeakFile.Failure)
             {

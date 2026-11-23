@@ -3,6 +3,7 @@ using System.Globalization;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Shapes;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
@@ -10,6 +11,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using DictationCore;
+using DictationCore.Audio;
 using OpenRamble.AppCore;
 
 namespace OpenRamble.App.Linux;
@@ -55,7 +57,10 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     private readonly Dictionary<Guid, TextBlock> statusLines = [];
 
     /// <summary>What the list was last built from, so a property change that touched none of it is free.</summary>
-    private (IReadOnlyList<HistoryEntry> History, IReadOnlyList<MeetingRecordingMetadata> Recordings, LibraryScope Scope, string Query)? rendered;
+    private (IReadOnlyList<HistoryEntry> History, IReadOnlyList<MeetingRecordingMetadata> Recordings, LibraryScope Scope, string Query, Guid? Live)? rendered;
+
+    /// <summary>The pinned live row's state and time, rewritten in place once a second.</summary>
+    private (ListBoxItem Row, Ellipse Dot, TextBlock State, TextBlock Time)? liveRow;
 
     /// <summary>The ids selected, kept across rebuilds of the list.</summary>
     private HashSet<Guid> selection = [];
@@ -81,6 +86,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         SearchBox.TextChanged += (_, _) => RenderList();
         ItemList.SelectionChanged += OnListSelectionChanged;
         ItemList.KeyDown += OnListKeyDown;
+        MicOnlyToggle.IsCheckedChanged += (_, _) => RenderRecordBar();
 
         AddHandler(DragDrop.DragEnterEvent, OnDragEnter);
         AddHandler(DragDrop.DragOverEvent, OnDragOver);
@@ -99,12 +105,15 @@ public sealed partial class LibraryWindow : Window, IDictationSink
 
         state.ReloadRecordings();
         RenderList();
-        // What is happening now before what merely came last: the file whose words are arriving.
-        Guid? first = state.ImportActivity.Transcribing is { } transcribing && listed.Any(item => item.Id == transcribing)
-            ? transcribing
-            : listed.FirstOrDefault()?.Id;
+        // What is happening now before what merely came last: a recording running, then the file
+        // whose words are arriving.
+        Guid? first = state.LiveRecordingId
+            ?? (state.ImportActivity.Transcribing is { } transcribing && listed.Any(item => item.Id == transcribing)
+                ? transcribing
+                : listed.FirstOrDefault()?.Id);
         if (first is { } id) { Select([id]); }
         RenderToolbar();
+        RenderRecordBar();
     }
 
     /// <summary>Dictation over the Library goes into the search box when it has the caret.</summary>
@@ -209,6 +218,22 @@ public sealed partial class LibraryWindow : Window, IDictationSink
                 case nameof(AppState.DictationStateValue):
                     RenderStatusLines();
                     break;
+                case nameof(AppState.LiveLevels):
+                    // Ten times a second: the meters and nothing else.
+                    RenderMeters();
+                    return;
+                case nameof(AppState.LiveDuration):
+                case nameof(AppState.RecordingState):
+                case nameof(AppState.LiveCaptureHealth):
+                case nameof(AppState.LiveMicrophoneHealth):
+                    RenderRecordBar();
+                    break;
+                case nameof(AppState.LiveRecordingId):
+                    // A recording that starts is what the person is looking at now.
+                    RenderList();
+                    RenderRecordBar();
+                    if (state.LiveRecordingId is { } live) { Select([live]); }
+                    break;
                 default:
                     RenderList();
                     break;
@@ -235,20 +260,27 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         IReadOnlyList<HistoryEntry> history = state.History;
         IReadOnlyList<MeetingRecordingMetadata> recordings = state.Recordings;
         string query = SearchBox.Text ?? string.Empty;
-        var inputs = (history, recordings, Scope, query);
+        MeetingRecordingMetadata? live = state.LiveRecording;
+        var inputs = (history, recordings, Scope, query, Live: live?.Id);
         if (!force && rendered is { } last
             && ReferenceEquals(last.History, history)
             && ReferenceEquals(last.Recordings, recordings)
             && last.Scope == inputs.Scope
-            && last.Query == query)
+            && last.Query == query
+            && last.Live == inputs.Live)
         {
             return;
         }
 
         rendered = inputs;
         IReadOnlyList<LibraryDay> days = state.LibraryDays(Scope, query);
+        // The recording in progress is pinned above everything, whatever the scope or search
+        // (upstream RecordingsList.swift).
+        LibraryItem? pinned = live is null ? null : new LibraryItem.Recording(new LibraryRecording(live));
         if (onlyIfMatchesChanged
-            && days.SelectMany(day => day.Items).Select(item => item.Id).SequenceEqual(listed.Select(item => item.Id)))
+            && (pinned is null ? [] : new[] { pinned.Id })
+                .Concat(days.SelectMany(day => day.Items).Select(item => item.Id))
+                .SequenceEqual(listed.Select(item => item.Id)))
         {
             RenderStatusLines();
             return;
@@ -262,6 +294,13 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             var rows = new List<ListBoxItem>();
             listed = [];
             statusLines.Clear();
+            liveRow = null;
+            if (pinned is not null)
+            {
+                listed.Add(pinned);
+                rows.Add(LiveRow(pinned));
+            }
+
             foreach (LibraryDay day in days)
             {
                 rows.Add(DayRow(day.Title(today)));
@@ -402,17 +441,58 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         rename.Click += (_, _) => Rename(recording.Id);
         var trash = new MenuItem { Header = "Move to Trash" };
         trash.Click += (_, _) => _ = DeleteItems([item]);
+        var menu = new List<Control> { rename };
+        if (recording is LibraryRecording { Metadata: { } exported })
+        {
+            var exportTranscript = new MenuItem { Header = "Export Transcript…" };
+            exportTranscript.Click += (_, _) => _ = RecordingExport.Transcript(this, state, exported);
+            var exportAudio = new MenuItem { Header = "Export Audio…" };
+            exportAudio.Click += (_, _) => _ = RecordingExport.Audio(this, state, exported);
+            menu.AddRange([new Separator(), exportTranscript, exportAudio]);
+        }
+
+        menu.AddRange([new Separator(), trash]);
 
         var row = new ListBoxItem
         {
             Content = stack,
             Tag = item,
-            ContextMenu = new ContextMenu { ItemsSource = new Control[] { rename, new Separator(), trash } },
+            ContextMenu = new ContextMenu { ItemsSource = menu },
         };
         ToolTip.SetTip(row, TimeZoneInfo.ConvertTime(recording.StartedAt, TimeZoneInfo.Local).ToString("F", CultureInfo.CurrentCulture));
         AutomationProperties.SetName(row, recording.Title ?? RecordingsPlaceholder.DefaultTitle(recording.StartedAt));
         AutomationProperties.SetHelpText(row, kind);
         return row;
+    }
+
+    /// <summary>The recording in progress: a red dot, Recording or Paused, and how long so far.</summary>
+    private ListBoxItem LiveRow(LibraryItem item)
+    {
+        var dot = new Ellipse { Width = 8, Height = 8, VerticalAlignment = VerticalAlignment.Center };
+        var label = new TextBlock { FontWeight = FontWeight.Medium, VerticalAlignment = VerticalAlignment.Center };
+        var time = new TextBlock { Classes = { "secondary" }, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+        label.Margin = new Thickness(8, 0, 0, 0);
+        grid.Children.Add(dot);
+        Grid.SetColumn(label, 1);
+        grid.Children.Add(label);
+        Grid.SetColumn(time, 2);
+        grid.Children.Add(time);
+        var row = new ListBoxItem { Content = grid, Tag = item, Padding = new Thickness(10, 10) };
+        liveRow = (row, dot, label, time);
+        RenderLiveRow();
+        return row;
+    }
+
+    private void RenderLiveRow()
+    {
+        if (liveRow is not { } live) { return; }
+        bool paused = state.RecordingState == MeetingRecordingState.Paused;
+        live.Dot.Fill = paused ? Brushes.Gray : StatusBrushes.Recording;
+        live.State.Text = paused ? "Paused" : "Recording";
+        live.Time.Text = RecordingTime.Clock(state.LiveDuration);
+        AutomationProperties.SetName(live.Row, paused ? "Recording, paused" : "Recording");
+        AutomationProperties.SetHelpText(live.Row, RecordingTime.Spoken(state.LiveDuration));
     }
 
     /// <summary>Import progress rewrites only the status lines; the start time comes back when it is done.</summary>
@@ -496,6 +576,88 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         Detail.Content = CreateDetail(primary);
     }
 
+    // MARK: - Record bar
+
+    private bool IsLive(Guid id) => state.LiveRecordingId == id;
+
+    private void RenderRecordBar()
+    {
+        RecordBar.IsVisible = state.CanRecord;
+        MeetingRecordingState recording = state.RecordingState;
+        bool live = recording is MeetingRecordingState.Recording or MeetingRecordingState.Paused;
+        bool paused = recording == MeetingRecordingState.Paused;
+        string clock = RecordingTime.Clock(state.LiveDuration);
+
+        LiveStatusPanel.IsVisible = recording != MeetingRecordingState.Idle;
+        LiveDot.IsVisible = live;
+        LiveDot.Fill = paused ? Brushes.Gray : StatusBrushes.Recording;
+        LiveStatus.Text = recording switch
+        {
+            MeetingRecordingState.Starting => "Starting…",
+            MeetingRecordingState.Recording => "Recording — " + clock,
+            MeetingRecordingState.Paused => "Paused — " + clock,
+            MeetingRecordingState.Stopping => "Saving…",
+            _ => string.Empty,
+        };
+        LiveMeters.IsVisible = live;
+        OthersMeterPanel.IsVisible = state.LiveRecording?.IsMeeting == true;
+
+        PauseButton.IsVisible = live;
+        PauseButton.Content = paused ? "Resume" : "Pause";
+        string pauseTip = paused ? "Resume recording" : "Pause recording";
+        ToolTip.SetTip(PauseButton, pauseTip);
+        AutomationProperties.SetName(PauseButton, pauseTip);
+
+        // Record, then Stop in the same place; nothing to press while it starts or saves.
+        RecordButton.IsVisible = recording is MeetingRecordingState.Idle || live;
+        RecordDot.IsVisible = !live;
+        RecordDot.Fill = StatusBrushes.Recording;
+        RecordLabel.Text = live ? "Stop" : "Record";
+        bool microphoneOnly = !state.SupportsSystemAudio || MicOnlyToggle.IsChecked == true;
+        ToolTip.SetTip(RecordButton, live
+            ? "Ends the recording and keeps it"
+            : microphoneOnly ? "Records your voice" : "Records you and the other side");
+        AutomationProperties.SetName(RecordButton, live ? "Stop recording" : "Record");
+        MicOnlyToggle.IsVisible = recording == MeetingRecordingState.Idle && state.SupportsSystemAudio;
+
+        RenderLiveRow();
+        RenderMeters();
+    }
+
+    /// <summary>One meter per side; a side that is not arriving is drawn in the warning colour.</summary>
+    private void RenderMeters()
+    {
+        MeetingCapture.Levels levels = state.LiveLevels;
+        YouMeter.Value = Meter(levels.Microphone);
+        OthersMeter.Value = Meter(levels.System);
+        Degraded(YouMeter, state.LiveMicrophoneHealth.MarksRecordingDegraded);
+        Degraded(OthersMeter, state.LiveCaptureHealth.MarksRecordingDegraded);
+    }
+
+    /// <summary>Peaks are linear; the square root lets ordinary speech reach the middle of the bar.</summary>
+    private static double Meter(float peak) => Math.Sqrt(Math.Clamp(peak, 0f, 1f));
+
+    private static void Degraded(ProgressBar meter, bool degraded)
+    {
+        if (degraded) { meter.Foreground = StatusBrushes.Attention; }
+        else { meter.ClearValue(ForegroundProperty); }
+    }
+
+    private void OnRecord(object? sender, RoutedEventArgs args)
+    {
+        if (state.IsRecording)
+        {
+            _ = state.StopRecording();
+            return;
+        }
+
+        // A voice note is never remembered: the next Record is a meeting again unless ticked.
+        _ = state.StartRecording(includeSystemAudio: MicOnlyToggle.IsChecked != true);
+    }
+
+    private void OnPauseResume(object? sender, RoutedEventArgs args) =>
+        _ = state.RecordingState == MeetingRecordingState.Paused ? state.ResumeRecording() : state.PauseRecording();
+
     // MARK: - Toolbar
 
     private void RenderToolbar()
@@ -506,7 +668,8 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         ImportLabel.IsVisible = activity.Copying == 0;
 
         LibraryItem? primary = Primary;
-        RevealButton.IsEnabled = primary is not null;
+        // The recording in progress has no folder in the Library yet, and cannot be trashed.
+        RevealButton.IsEnabled = primary is not null && !IsLive(primary.Id);
         ToolTip.SetTip(RevealButton, primary is LibraryItem.Dictation ? "Show in folder" : "Open recording's folder");
 
         CopyButton.IsEnabled = primary switch
@@ -520,7 +683,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         AutomationProperties.SetName(CopyButton, copyTip);
 
         TrashButton.IsVisible = selection.Count > 0;
-        TrashButton.IsEnabled = !trashing;
+        TrashButton.IsEnabled = !trashing && !(state.LiveRecordingId is { } live && selection.Contains(live));
         string trashTip = DeleteTitle();
         ToolTip.SetTip(TrashButton, trashTip);
         AutomationProperties.SetName(TrashButton, trashTip);
@@ -591,7 +754,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     private async Task DeleteItems(IReadOnlyCollection<LibraryItem> items)
     {
         Guid[] dictations = [.. items.OfType<LibraryItem.Dictation>().Select(item => item.Id)];
-        Guid[] recordings = [.. items.OfType<LibraryItem.Recording>().Select(item => item.Id)];
+        Guid[] recordings = [.. items.OfType<LibraryItem.Recording>().Select(item => item.Id).Where(id => !IsLive(id))];
         if (dictations.Length > 0) { state.DeleteDictations(dictations); }
         if (recordings.Length == 0 || trashing) { return; }
         RecordingTrashOutcome outcome;
@@ -626,6 +789,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     /// <summary>Renaming happens in the detail pane's title: the recording is selected, then its title opens.</summary>
     private void Rename(Guid id)
     {
+        if (IsLive(id)) { return; }
         Select([id]);
         // A pane made just now is not in the window yet; its title can take the caret once it is.
         Dispatcher.UIThread.Post(

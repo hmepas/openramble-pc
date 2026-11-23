@@ -885,8 +885,8 @@ public sealed partial class LibraryWindow : Window, IDictationSink
 
     private void SetTrashing(bool busy)
     {
-        // The disabled Trash button says it is busy; the pointer stays the system's own.
         trashing = busy;
+        Cursor = busy ? new Cursor(StandardCursorType.Wait) : Cursor.Default;
         RenderToolbar();
     }
 

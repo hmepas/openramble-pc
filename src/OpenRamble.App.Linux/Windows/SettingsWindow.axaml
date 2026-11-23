@@ -105,7 +105,7 @@
                   <!-- The cap goes down while the real key is held: hold it here and the setting
                        answers the hand. Clicking it opens the list of keys. -->
                   <local:KeyCap x:Name="HotkeyCap" CapSize="Large" HorizontalAlignment="Center"
-                                Margin="0,6,0,0"
+                                Cursor="Hand" Margin="0,6,0,0"
                                 ToolTip.Tip="Choose the dictation key" />
                   <ComboBox x:Name="HotkeyPicker" HorizontalAlignment="Center" MinWidth="160"
                             automation:AutomationProperties.Name="Dictation key"

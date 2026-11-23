@@ -197,7 +197,8 @@ public static class CommandLineTool
         var jobs = new List<Job>();
         foreach (string file in files)
         {
-            string stem = Path.GetFileNameWithoutExtension(file);
+            // A dot-file such as ".recording" has no extension to drop, as Foundation's URL sees it.
+            string stem = Path.GetFileNameWithoutExtension(file) is { Length: > 0 } bare ? bare : Path.GetFileName(file);
             string name = $"{stem}.{format.Name}";
             int suffix = 2;
             while (!names.Add(name.Normalize(NormalizationForm.FormC).ToLowerInvariant()))

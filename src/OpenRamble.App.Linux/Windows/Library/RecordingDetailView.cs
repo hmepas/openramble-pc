@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using DictationCore;
 using DictationCore.Audio;
 using OpenRamble.AppCore;
@@ -113,7 +114,7 @@ public sealed class RecordingDetailView : UserControl
     /// <summary>Play was pressed while the audio was still opening: it starts once it is open.</summary>
     private bool playWhenLoaded;
     private string? audioPath;
-    private bool renaming;
+    private readonly TitleRenameSession rename = new();
     private bool attached;
     private bool updatingSlider;
 
@@ -127,10 +128,10 @@ public sealed class RecordingDetailView : UserControl
         Focusable = true;
 
         // Header: title, or its editor while renaming; then what it is.
-        title.DoubleTapped += (_, _) => BeginRename();
         ToolTip.SetTip(title, "Double-click to rename");
         titleEditor.KeyDown += OnEditorKey;
-        titleEditor.LostFocus += (_, _) => CommitRename();
+        titleEditor.GotFocus += (_, _) => rename.EditorFocused();
+        titleEditor.LostFocus += (_, _) => Dispatcher.UIThread.Post(OnEditorLeft, DispatcherPriority.Background);
         AutomationProperties.SetName(titleEditor, "Recording name");
         exportTranscript.Click += (_, _) =>
         {
@@ -142,7 +143,13 @@ public sealed class RecordingDetailView : UserControl
         };
         exportButton.Flyout = new MenuFlyout { Items = { exportTranscript, exportAudio } };
         AutomationProperties.SetName(exportButton, "Export");
-        var naming = new Panel();
+        // The whole title line takes the double-click, not only the glyphs of the title.
+        var naming = new Panel { Background = Brushes.Transparent };
+        naming.DoubleTapped += (_, args) =>
+        {
+            if (args.Source is Visual source && titleEditor.IsVisualAncestorOf(source)) { return; }
+            BeginRename();
+        };
         naming.Children.Add(title);
         naming.Children.Add(titleEditor);
         var titleRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
@@ -233,7 +240,7 @@ public sealed class RecordingDetailView : UserControl
             player.Pause();
             scrub.Cancel();
             playWhenLoaded = false;
-            renaming = false;
+            rename.End();
             follow = new TranscriptFollowState();
             renderedTranscript = null;
             highlighted = null;
@@ -250,13 +257,18 @@ public sealed class RecordingDetailView : UserControl
     /// <summary>Start renaming, as a double-click on the title does (the window's Return and context menu).</summary>
     public void BeginRename()
     {
-        if (recording is null || IsLive) { return; }
-        renaming = true;
+        if (recording is null || IsLive || !rename.Begin()) { return; }
         titleEditor.Text = recording.Title ?? string.Empty;
         titleEditor.Watermark = RecordingsPlaceholder.DefaultTitle(recording.StartedAt);
         RenderHeader();
-        titleEditor.Focus();
-        titleEditor.SelectAll();
+        // The caret moves once the editor is laid out and whatever opened it (a double-click, a
+        // closing menu, the list's Return) has finished with the focus.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!rename.IsOpen) { return; }
+            titleEditor.Focus();
+            titleEditor.SelectAll();
+        }, DispatcherPriority.Background);
     }
 
     /// <summary>Leaving the recording: playback pauses, the view stops listening.</summary>
@@ -394,8 +406,8 @@ public sealed class RecordingDetailView : UserControl
         if (recording is null) { return; }
         bool live = IsLive;
         title.Text = recording.Title ?? RecordingsPlaceholder.DefaultTitle(recording.StartedAt);
-        title.IsVisible = !renaming;
-        titleEditor.IsVisible = renaming;
+        title.IsVisible = !rename.IsOpen;
+        titleEditor.IsVisible = rename.IsOpen;
         DateTimeOffset started = recording.StartedAt.ToLocalTime();
         string length = !live
             ? RecordingTime.Brief(TimeSpan.FromSeconds(recording.Duration))
@@ -707,7 +719,7 @@ public sealed class RecordingDetailView : UserControl
 
     private void OnKey(object? sender, KeyEventArgs args)
     {
-        if (args.Key != Key.Space || renaming || args.Source is TextBox || !IsAudioLoaded) { return; }
+        if (args.Key != Key.Space || rename.IsOpen || args.Source is TextBox || !IsAudioLoaded) { return; }
         player.Toggle();
         UpdatePlayhead();
         args.Handled = true;
@@ -734,19 +746,41 @@ public sealed class RecordingDetailView : UserControl
         }
         else if (args.Key == Key.Escape)
         {
-            renaming = false;
-            RenderHeader();
-            Focus();
+            if (rename.End())
+            {
+                RenderHeader();
+                Focus();
+            }
+
             args.Handled = true;
         }
     }
 
+    /// <summary>
+    /// Settled after the editor lost the caret: gone elsewhere in this window commits; gone to a
+    /// popup, another window or nowhere leaves the rename open.
+    /// </summary>
+    private void OnEditorLeft()
+    {
+        if (titleEditor.IsFocused) { return; }
+        IInputElement? now = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
+        bool elsewhereInWindow = now is Visual visual
+            && visual.GetVisualRoot() == this.GetVisualRoot()
+            && !titleEditor.IsVisualAncestorOf(visual);
+        if (rename.FocusLeft(elsewhereInWindow)) { Save(); }
+    }
+
     private void CommitRename()
     {
-        if (!renaming || recording is null) { return; }
-        renaming = false;
+        if (!rename.End()) { return; }
+        Save();
+        Focus();
+    }
+
+    private void Save()
+    {
+        if (recording is null) { return; }
         state.RenameRecording(recording.Id, titleEditor.Text);
         RenderHeader();
-        Focus();
     }
 }

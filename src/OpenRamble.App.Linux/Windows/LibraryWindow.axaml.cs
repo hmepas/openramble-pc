@@ -272,6 +272,8 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             return;
         }
 
+        // A new search or scope starts the list from its top; only the rest may keep the selection in view.
+        bool refiltered = rendered is { } previous && (previous.Query != query || previous.Scope != inputs.Scope);
         rendered = inputs;
         IReadOnlyList<LibraryDay> days = state.LibraryDays(Scope, query);
         // The recording in progress is pinned above everything, whatever the scope or search
@@ -321,7 +323,8 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             var available = listed.Select(item => item.Id).ToHashSet();
             selection.IntersectWith(available);
             if (selection.Count == 0 && listed.Count > 0) { selection = [listed[0].Id]; }
-            ApplySelectionToList(scroll: !onlyIfMatchesChanged);
+            ApplySelectionToList(scroll: !onlyIfMatchesChanged && !refiltered);
+            if (refiltered) { ItemList.Scroll?.Offset = default; }
         }
         finally
         {
@@ -791,7 +794,8 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     {
         if (IsLive(id)) { return; }
         Select([id]);
-        // A pane made just now is not in the window yet; its title can take the caret once it is.
+        // A pane made just now is not in the window yet; its title opens once it is (and takes the
+        // caret after that, once the menu or key that asked has let go of the focus).
         Dispatcher.UIThread.Post(
             () => (Detail.Content as RecordingDetailView)?.BeginRename(),
             DispatcherPriority.Loaded);

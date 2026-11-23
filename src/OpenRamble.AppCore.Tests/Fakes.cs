@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using DictationCore;
+using DictationCore.Audio;
 using LocalASR;
 using OpenRamble.AppCore.Audio;
 
@@ -906,6 +907,12 @@ public sealed class AppHarness : IDisposable
 
     internal FakeCompressor RecordingCompressor { get; } = new(succeeds: true);
 
+    public FakeMeetingCapture MeetingCapture { get; } = new();
+
+    internal FakeAnnouncer Announcer { get; } = new();
+
+    public bool SupportsSystemAudio { get; set; } = true;
+
     /// <summary>
     /// The engine used for warm-up. Routine checks do not need it: without it the warm-up counts
     /// as passed. It is set where the warm-up itself is under test.
@@ -1008,6 +1015,9 @@ public sealed class AppHarness : IDisposable
             ImportRecognizer = ImportEngine,
             RecordingTrasher = RecordingTrasher,
             RecordingCompressor = RecordingCompressor,
+            MakeMeetingCapture = MeetingCapture.Factory,
+            SupportsSystemAudio = SupportsSystemAudio,
+            Announcer = Announcer,
             LayoutHasAltGraph = () => LayoutHasAltGraph,
             HotkeySourceSwallowsKey = _ => HotkeySourceSwallowsKey,
             KeydFoldsRightModifiers = () => KeydFoldsRightModifiers,
@@ -1092,4 +1102,131 @@ public sealed class AppHarness : IDisposable
         {
         }
     }
+}
+
+/// <summary>
+/// The recorder without a device (upstream FakeMeetingCapture). Start writes a real two-channel
+/// WAV of <see cref="Frames"/> frames so the transcription queue has something to read; the
+/// callbacks the app passed are kept so a test can hand out segments or failures.
+/// </summary>
+public sealed class FakeMeetingCapture : IMeetingCapturing
+{
+    private readonly Lock gate = new();
+    private MeetingWriter? writer;
+    private int startCount;
+    private int stopCount;
+    private int pauseCount;
+    private int resumeCount;
+    private int recoverCount;
+    private int healthReadCount;
+    private long frames = 32_000;
+    private MeetingCapture.ChannelHealth microphoneHealth = MeetingCapture.ChannelHealth.None;
+    private MeetingCapture.ChannelHealth systemHealth = MeetingCapture.ChannelHealth.None;
+
+    public string Directory { get; private set; } = string.Empty;
+
+    public bool IncludesSystemAudio { get; private set; }
+
+    public Action<MeetingSegmentRef>? OnSegment { get; private set; }
+
+    public Action<MeetingCapture.Failure>? OnFailure { get; private set; }
+
+    public MeetingCapture.Failure? StartError { get; set; }
+
+    public MeetingEndReason EndReason { get; set; } = MeetingEndReason.StoppedByUser;
+
+    public int StartCount { get { lock (gate) { return startCount; } } }
+
+    public int StopCount { get { lock (gate) { return stopCount; } } }
+
+    public int PauseCount { get { lock (gate) { return pauseCount; } } }
+
+    public int ResumeCount { get { lock (gate) { return resumeCount; } } }
+
+    public int RecoverCount { get { lock (gate) { return recoverCount; } } }
+
+    public int HealthReadCount { get { lock (gate) { return healthReadCount; } } }
+
+    public long Frames
+    {
+        get { lock (gate) { return frames; } }
+        set { lock (gate) { frames = value; } }
+    }
+
+    public MeetingCapture.ChannelHealth MicrophoneHealth
+    {
+        get { lock (gate) { return microphoneHealth; } }
+        set { lock (gate) { microphoneHealth = value; } }
+    }
+
+    public MeetingCapture.ChannelHealth SystemHealth
+    {
+        get { lock (gate) { return systemHealth; } }
+        set { lock (gate) { systemHealth = value; } }
+    }
+
+    public MeetingCaptureFactory Factory => (directory, _, includeSystemAudio, _, onSegment, onFailure) =>
+    {
+        Directory = directory;
+        IncludesSystemAudio = includeSystemAudio;
+        OnSegment = onSegment;
+        OnFailure = onFailure;
+        return this;
+    };
+
+    public long FrameCount => Frames;
+
+    public MeetingCapture.Levels CurrentLevels => MeetingCapture.Levels.Silent;
+
+    public MeetingCapture.ChannelHealth Health(MeetingChannel channel)
+    {
+        lock (gate)
+        {
+            healthReadCount++;
+            return channel == MeetingChannel.Microphone ? microphoneHealth : systemHealth;
+        }
+    }
+
+    public void Start()
+    {
+        lock (gate)
+        {
+            if (StartError is { } error) { throw new MeetingCaptureException(error); }
+            startCount++;
+            System.IO.Directory.CreateDirectory(Directory);
+            writer = new MeetingWriter(Directory);
+            writer.Open();
+            int count = (int)frames;
+            writer.Append(Enumerable.Repeat(0.2f, count).ToArray(), new float[count]);
+        }
+    }
+
+    public void Pause() { lock (gate) { pauseCount++; } }
+
+    public void Resume() { lock (gate) { resumeCount++; } }
+
+    public MeetingCapture.Summary Stop()
+    {
+        lock (gate)
+        {
+            stopCount++;
+            writer?.Finish();
+            writer = null;
+            return new MeetingCapture.Summary(
+                frames,
+                (double)frames / MeetingWriter.SampleRate,
+                "Fake Microphone",
+                microphoneHealth.EverDeliveredBuffers,
+                microphoneHealth.EverDeliveredAudio,
+                new SystemAudioSummary(
+                    wasRequested: IncludesSystemAudio,
+                    everDeliveredBuffers: systemHealth.EverDeliveredBuffers,
+                    everDeliveredAudio: systemHealth.EverDeliveredAudio),
+                [],
+                [],
+                EndReason);
+        }
+    }
+
+    public void RecoverMicrophone() { lock (gate) { recoverCount++; } }
 }

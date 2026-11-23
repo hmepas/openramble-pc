@@ -328,6 +328,18 @@ public sealed class ModelStore
 
         SweepStaleStaging();
 
+        return Inspect(maintenance: true);
+    }
+
+    /// <summary>
+    /// Read-only inspection for other processes (including the command-line tool). Never
+    /// recovers a promotion, sweeps staging, removes files or rewrites markers: another process
+    /// may currently be installing the model.
+    /// </summary>
+    public ModelState InspectInstalledState() => Inspect(maintenance: false);
+
+    private ModelState Inspect(bool maintenance)
+    {
         if (!File.Exists(layout.ReadyMarker))
         {
             if (Directory.Exists(layout.InstalledDirectory))
@@ -377,10 +389,11 @@ public sealed class ModelStore
 
         try
         {
-            IReadOnlyList<ModelReadyMarker.InstalledFile> metadata = ValidateInstalledFiles(verifiedMarker);
-            if (marker.InstalledFiles is null
-                || !marker.InstalledFiles.SequenceEqual(metadata)
-                || !marker.Matches(manifest))
+            IReadOnlyList<ModelReadyMarker.InstalledFile> metadata = ValidateInstalledFiles(verifiedMarker, maintenance);
+            if (maintenance
+                && (marker.InstalledFiles is null
+                    || !marker.InstalledFiles.SequenceEqual(metadata)
+                    || !marker.Matches(manifest)))
             {
                 WriteReadyMarker(metadata);
             }
@@ -416,7 +429,7 @@ public sealed class ModelStore
     /// Check the exact inventory and the sizes. If the metadata changed, or if the marker is
     /// of the old format, SHA-256 is confirmed before Ready.
     /// </summary>
-    private IReadOnlyList<ModelReadyMarker.InstalledFile> ValidateInstalledFiles(ModelReadyMarker marker)
+    private IReadOnlyList<ModelReadyMarker.InstalledFile> ValidateInstalledFiles(ModelReadyMarker marker, bool maintenance)
     {
         var expectedPaths = manifest.Files.Select(file => file.Path).ToHashSet(StringComparer.Ordinal);
         string engine = layout.EngineDirectory;
@@ -458,7 +471,7 @@ public sealed class ModelStore
             // transferring hundreds of megabytes because of an open window.
             if (Path.GetFileName(entry) == ".DS_Store")
             {
-                File.Delete(entry);
+                if (maintenance) { File.Delete(entry); }
                 continue;
             }
 

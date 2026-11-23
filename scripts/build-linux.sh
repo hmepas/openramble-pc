@@ -32,6 +32,14 @@ for library in libtranscribe.so libggml.so.0 libggml-base.so.0 libggml-cpu-x64.s
     test -f "$OUT/$library" || { echo "missing native library: $OUT/$library" >&2; exit 1; }
 done
 
+# The `openramble` command-line tool is the app's own executable handed file arguments (see
+# src/OpenRamble.App.Linux/Program.cs). A publish without it would leave Settings offering an
+# install that links to nothing useful; make sure it answers without a display or a model.
+test -f "$OUT/OpenRamble.Cli.dll" || { echo "missing command-line tool: $OUT/OpenRamble.Cli.dll" >&2; exit 1; }
+"$OUT/OpenRamble.App.Linux" --help >/dev/null \
+    || { echo "command-line tool does not run: $OUT/OpenRamble.App.Linux --help" >&2; exit 1; }
+
 echo
 echo "Build ready: $OUT"
 echo "Run $OUT/OpenRamble.App.Linux (requirements: see the Linux section of README.md)."
+echo "Command line: $OUT/OpenRamble.App.Linux audio.m4a (or install it as openramble from Settings)."

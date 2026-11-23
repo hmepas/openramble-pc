@@ -1,3 +1,5 @@
+using LocalASR;
+
 namespace OpenRamble.AppCore;
 
 /// <summary>
@@ -95,6 +97,13 @@ public sealed class AppPaths
 
     /// <summary>WAVs saved only after a technical error or a killed process.</summary>
     public string AudioRecovery() => Ensure(Path.Combine(Support(), "RecoveredAudio"));
+
+    /// <summary>
+    /// The lock held while someone dictates. Under the standard root it is the file the
+    /// command-line tool probes to step aside; under a test root it is the test's own, never the
+    /// installed app's.
+    /// </summary>
+    public string DictationPriorityLock() => Path.Combine(Support(), DictationPriority.FileName);
 
     private static string Ensure(string directory)
     {

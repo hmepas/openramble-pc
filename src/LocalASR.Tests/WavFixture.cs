@@ -60,6 +60,42 @@ internal static class WavFixture
         return path;
     }
 
+    /// <summary>Float32 PCM with each channel's own samples, all of the same length.</summary>
+    public static string WriteChannels(string directory, int sampleRate, float[][] channels, string name = "take")
+    {
+        string path = Path.Combine(directory, $"{name}-{Guid.NewGuid():D}.wav");
+        int frames = channels[0].Length;
+        int blockAlign = channels.Length * 4;
+        int dataBytes = frames * blockAlign;
+        byte[] data = new byte[44 + dataBytes];
+        Span<byte> header = data.AsSpan(0, 44);
+        Encoding.ASCII.GetBytes("RIFF").CopyTo(header[..4]);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(4, 4), (uint)(36 + dataBytes));
+        Encoding.ASCII.GetBytes("WAVE").CopyTo(header.Slice(8, 4));
+        Encoding.ASCII.GetBytes("fmt ").CopyTo(header.Slice(12, 4));
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(16, 4), 16);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(20, 2), 3);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(22, 2), (ushort)channels.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(24, 4), (uint)sampleRate);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(28, 4), (uint)(sampleRate * blockAlign));
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(32, 2), (ushort)blockAlign);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(34, 2), 32);
+        Encoding.ASCII.GetBytes("data").CopyTo(header.Slice(36, 4));
+        BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(40, 4), (uint)dataBytes);
+        for (int frame = 0; frame < frames; frame++)
+        {
+            for (int channel = 0; channel < channels.Length; channel++)
+            {
+                BinaryPrimitives.WriteSingleLittleEndian(
+                    data.AsSpan(44 + (frame * blockAlign) + (channel * 4), 4),
+                    channels[channel][frame]);
+            }
+        }
+
+        File.WriteAllBytes(path, data);
+        return path;
+    }
+
     /// <summary>
     /// The given samples as a Float32 16 kHz mono WAV, for tests that need a file to hold
     /// exactly the audio they planned - the Swift tests fill an <c>AVAudioPCMBuffer</c>.

@@ -127,6 +127,82 @@ public class AudioFileReaderTests : IDisposable
         AssertRoughly(samples.Length, 48_000, 800, "three seconds must not lose their tail");
     }
 
+    // MARK: - Bounded reads
+
+    [Fact]
+    public void BoundedStereoReadsPreserveTheResampledTail()
+    {
+        string path = WavFixture.WriteFloat32(directory, seconds: 4.013, sampleRate: 48_000, channels: 2);
+        float[] whole = reader.Samples(path);
+        var pieces = new List<float>();
+        using (AudioFileStream stream = AudioFileStream.Open(path))
+        {
+            while (true)
+            {
+                float[] piece = stream.Read(997);
+                if (piece.Length == 0) { break; }
+                Assert.True(piece.Length <= 997);
+                pieces.AddRange(piece);
+            }
+        }
+
+        Assert.Equal(whole.Length, pieces.Count);
+        Assert.Equal(4.013, pieces.Count / 16_000.0, 0.002);
+        Assert.True(pieces.TakeLast(100).Max(Math.Abs) > 0.1f, "the resampler's final samples are kept");
+        Assert.True(pieces.Zip(whole, (a, b) => Math.Abs(a - b)).Max() < 0.0001f);
+    }
+
+    // MARK: - Channels
+
+    [Fact]
+    public void RightOnlyStereoSpeechSurvivesMonoConversion()
+    {
+        float[] right = Enumerable.Range(0, 48_000).Select(index => MathF.Sin(index * 0.03f) * 0.4f).ToArray();
+        string path = WavFixture.WriteChannels(directory, 48_000, [new float[48_000], right]);
+
+        float[] samples = reader.Samples(path);
+
+        Assert.Equal(16_000, samples.Length);
+        // Meeting files can carry the other speaker only on the right.
+        Assert.True(samples.Max(Math.Abs) > 0.1f, "the other speaker must not be discarded");
+    }
+
+    // MARK: - Compressed files (ffmpeg)
+
+    [FfmpegFact]
+    public void CompressedStereoDecodesThroughFfmpegWithBothChannels()
+    {
+        float[] right = Enumerable.Range(0, 48_000 * 3).Select(index => MathF.Sin(index * 0.03f) * 0.4f).ToArray();
+        string wav = WavFixture.WriteChannels(directory, 48_000, [new float[right.Length], right]);
+        string compressed = Path.Combine(directory, "right only.m4a");
+        FfmpegFactAttribute.Convert(wav, compressed);
+
+        var samples = new List<float>();
+        using (AudioFileStream stream = AudioFileStream.Open(compressed))
+        {
+            while (stream.Read() is { Length: > 0 } piece) { samples.AddRange(piece); }
+        }
+
+        // AAC adds priming and padding; the length is the same within a few frames.
+        Assert.Equal(3.0, samples.Count / 16_000.0, 0.1);
+        Assert.True(samples.Max(Math.Abs) > 0.1f, "the other speaker must not be discarded");
+    }
+
+    [Fact]
+    public void AFileThatIsNotAudioIsReportedNotGuessed()
+    {
+        // Not RIFF, so it goes to ffmpeg - which finds nothing, or is not installed. Either way
+        // an honest error, never silence.
+        string path = Path.Combine(directory, "notes.m4a");
+        File.WriteAllText(path, "not audio");
+
+        Assert.Throws<AudioFileReader.Failure.Unreadable>(() =>
+        {
+            using AudioFileStream stream = AudioFileStream.Open(path);
+            while (stream.Read().Length > 0) { }
+        });
+    }
+
     // MARK: - Broken inputs
 
     [Fact]

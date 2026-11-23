@@ -237,6 +237,64 @@ public class ModelStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task InspectionDoesNotTouchAnotherProcessesInstallation()
+    {
+        ModelManifest manifest = MakeManifest();
+        (ModelStore gui, ModelInstallLayout layout) = MakeStore(manifest, WorkingDownloader());
+        await gui.Install();
+        string staging = Path.Combine(layout.ModelDirectory, ".staging-active", "partial");
+        Directory.CreateDirectory(Path.GetDirectoryName(staging)!);
+        File.WriteAllBytes(staging, FileA);
+        CopyDirectory(layout.InstalledDirectory, layout.BackupDirectory);
+        string finderFile = Path.Combine(layout.EngineDirectory, ".DS_Store");
+        File.WriteAllBytes(finderFile, FileB);
+        byte[] marker = File.ReadAllBytes(layout.ReadyMarker);
+
+        var cli = new ModelStore(manifest, layout, WorkingDownloader());
+        ModelState state = cli.InspectInstalledState();
+
+        Assert.True(state.IsReady, $"expected a ready state, got {state}");
+        Assert.True(File.Exists(staging));
+        Assert.True(Directory.Exists(layout.BackupDirectory));
+        Assert.True(File.Exists(finderFile));
+        Assert.Equal(marker, File.ReadAllBytes(layout.ReadyMarker));
+    }
+
+    [Fact]
+    public async Task InspectionDoesNotPromoteBackupDuringAnotherProcessesUpdate()
+    {
+        ModelManifest manifest = MakeManifest();
+        (ModelStore gui, ModelInstallLayout layout) = MakeStore(manifest, WorkingDownloader());
+        await gui.Install();
+        Directory.Move(layout.InstalledDirectory, layout.BackupDirectory);
+        Directory.CreateDirectory(layout.EngineDirectory);
+        string partial = Path.Combine(layout.EngineDirectory, "partial");
+        File.WriteAllBytes(partial, FileA);
+
+        var cli = new ModelStore(manifest, layout, WorkingDownloader());
+        ModelState state = cli.InspectInstalledState();
+
+        Assert.True(state.RequiresRepair, $"expected repair, got {state}");
+        Assert.True(Directory.Exists(layout.BackupDirectory));
+        Assert.True(File.Exists(partial));
+        Assert.False(File.Exists(layout.ReadyMarker));
+    }
+
+    private static void CopyDirectory(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (string file in Directory.GetFiles(from))
+        {
+            File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
+        }
+
+        foreach (string directory in Directory.GetDirectories(from))
+        {
+            CopyDirectory(directory, Path.Combine(to, Path.GetFileName(directory)));
+        }
+    }
+
+    [Fact]
     public async Task CorruptedFileLeavesNothingInstalled()
     {
         // The sum of the second file in the manifest will certainly not add up.

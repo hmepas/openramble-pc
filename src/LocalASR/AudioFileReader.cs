@@ -107,46 +107,32 @@ public sealed class AudioFileReader
     /// </param>
     public float[] Samples(string path, TimeSpan? maximumDuration = null)
     {
-        FileStream handle;
-        try
+        using Cursor cursor = Cursor.Open(path, maximumDuration);
+        float[] samples = new float[cursor.ExpectedSamples];
+        int written = 0;
+        while (true)
         {
-            handle = new FileStream(path, FileMode.Open, FileAccess.Read);
+            if (written == samples.Length)
+            {
+                // The estimate is an upper bound; this only guards it.
+                Array.Resize(ref samples, samples.Length + Cursor.ChunkFrames);
+            }
+
+            int read = cursor.Read(samples.AsSpan(written));
+            if (read == 0)
+            {
+                break;
+            }
+
+            written += read;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+
+        if (written == 0)
         {
-            throw new Failure.Unreadable(error.Message);
+            throw new Failure.EmptyFile();
         }
 
-        using (handle)
-        {
-            Format format = ReadHeader(handle);
-            long frames = format.DataByteCount / format.BlockAlign;
-            if (frames <= 0)
-            {
-                throw new Failure.EmptyFile();
-            }
-
-            if (format.SampleRate <= 0)
-            {
-                throw new Failure.ConversionFailed("the source sample rate is invalid");
-            }
-
-            var duration = TimeSpan.FromSeconds((double)frames / format.SampleRate);
-            if (maximumDuration is { } maximum && duration > maximum)
-            {
-                throw new Failure.DurationExceeded(duration, maximum);
-            }
-
-            // If the file is already in the required format, no conversion is needed.
-            if (format.SampleRate == TargetSampleRate
-                && format.Channels == 1
-                && format.IsFloat32)
-            {
-                return ReadDirect(handle, format, frames);
-            }
-
-            return ReadConverted(handle, format, frames);
-        }
+        return written == samples.Length ? samples : samples[..written];
     }
 
     /// <summary>What the <c>fmt </c> chunk said, plus where the samples live.</summary>
@@ -275,73 +261,159 @@ public sealed class AudioFileReader
         return true;
     }
 
-    /// <summary>Already mono 16 kHz Float32: hand the samples over as they lie.</summary>
-    private static float[] ReadDirect(FileStream handle, Format format, long frames)
-    {
-        handle.Position = format.DataOffset;
-        float[] samples = new float[frames];
-        byte[] buffer = new byte[4 * 16_384];
-        int written = 0;
-        while (written < samples.Length)
-        {
-            int wanted = Math.Min(buffer.Length, (samples.Length - written) * 4);
-            int read = handle.Read(buffer, 0, wanted);
-            if (read <= 0)
-            {
-                break;
-            }
-
-            for (int offset = 0; offset + 4 <= read; offset += 4)
-            {
-                samples[written++] = BinaryPrimitives.ReadSingleLittleEndian(buffer.AsSpan(offset, 4));
-            }
-        }
-
-        if (written == 0)
-        {
-            throw new Failure.EmptyFile();
-        }
-
-        return written == samples.Length ? samples : samples[..written];
-    }
-
     /// <summary>
-    /// Channel mixdown plus resampling, in chunks - an hour-long take must not be held twice
-    /// in memory at once.
+    /// A WAV file read a block at a time, in 16 kHz mono.
+    ///
+    /// Channel mixdown plus resampling, in chunks - an hour-long take must not be held twice in
+    /// memory at once, and an imported file must not be held whole at all. The mixdown and the
+    /// resampler keep their state across reads, so reading in blocks of any size gives exactly
+    /// the samples one whole read gives, the resampler's final samples included.
     ///
     /// The resampling is linear interpolation over the mixed-down mono signal. Speech at
     /// 8-48 kHz is the whole input space here and the engine's own front end is a mel
     /// filterbank, so the difference from AVAudioConverter's polyphase filter is inaudible
-    /// where it matters and the sample count is identical.
+    /// where it matters and the sample count is identical. The mixdown averages the channels: a
+    /// meeting file can carry the other speaker only on the right.
     /// </summary>
-    private static float[] ReadConverted(FileStream handle, Format format, long frames)
+    /// <remarks>
+    /// The Swift original's <c>Cursor</c> wraps <c>AVAudioFile</c> plus <c>AVAudioConverter</c>;
+    /// here it is the hand-made WAV reading this type always did, cut into blocks.
+    /// </remarks>
+    internal sealed class Cursor : IDisposable
     {
-        handle.Position = format.DataOffset;
+        public const int ChunkFrames = 16_384;
 
-        double ratio = TargetSampleRate / format.SampleRate;
-        var output = new List<float>((int)Math.Min(int.MaxValue, (long)(frames * ratio) + 1024));
+        private readonly FileStream handle;
+        private readonly Format format;
 
-        // The converter walks output positions: output n sits at source position n * step.
-        double step = format.SampleRate / TargetSampleRate;
-        long producedOutputs = 0;
-        long consumedSource = 0;
-        var pending = new List<float>();
+        /// <summary>Already mono 16 kHz Float32: the samples are handed over as they lie.</summary>
+        private readonly bool direct;
 
-        const int ChunkFrames = 16_384;
-        int bytesPerSample = format.BitsPerSample / 8;
-        byte[] buffer = new byte[ChunkFrames * format.BlockAlign];
-        long remainingBytes = format.DataByteCount;
+        /// <summary>The converter walks output positions: output n sits at source position n * step.</summary>
+        private readonly double step;
 
-        while (remainingBytes > 0)
+        private readonly byte[] buffer;
+        private readonly List<float> pending = [];
+        private long remainingBytes;
+        private long producedOutputs;
+        private long consumedSource;
+        private bool sourceEnded;
+
+        private Cursor(FileStream handle, Format format, long frames)
         {
-            int wanted = (int)Math.Min(buffer.Length, remainingBytes);
-            int read = handle.Read(buffer, 0, wanted);
-            if (read <= 0)
+            this.handle = handle;
+            this.format = format;
+            direct = format.SampleRate == TargetSampleRate && format.Channels == 1 && format.IsFloat32;
+            step = format.SampleRate / TargetSampleRate;
+            buffer = new byte[ChunkFrames * format.BlockAlign];
+            remainingBytes = format.DataByteCount;
+            ExpectedSamples = direct ? frames : (long)Math.Ceiling(frames / step) + 1;
+            handle.Position = format.DataOffset;
+        }
+
+        /// <summary>At least as many samples as the whole file reads into.</summary>
+        public long ExpectedSamples { get; }
+
+        public static Cursor Open(string path, TimeSpan? maximumDuration = null)
+        {
+            FileStream handle;
+            try
             {
-                break;
+                handle = new FileStream(path, FileMode.Open, FileAccess.Read);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                throw new Failure.Unreadable(error.Message);
             }
 
-            remainingBytes -= read;
+            try
+            {
+                Format format = ReadHeader(handle);
+                long frames = format.DataByteCount / format.BlockAlign;
+                if (frames <= 0)
+                {
+                    throw new Failure.EmptyFile();
+                }
+
+                if (format.SampleRate <= 0)
+                {
+                    throw new Failure.ConversionFailed("the source sample rate is invalid");
+                }
+
+                var duration = TimeSpan.FromSeconds((double)frames / format.SampleRate);
+                if (maximumDuration is { } maximum && duration > maximum)
+                {
+                    throw new Failure.DurationExceeded(duration, maximum);
+                }
+
+                return new Cursor(handle, format, frames);
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>Up to <c>destination.Length</c> samples; 0 only at the end.</summary>
+        public int Read(Span<float> destination)
+        {
+            if (destination.IsEmpty)
+            {
+                return 0;
+            }
+
+            if (direct)
+            {
+                return ReadDirect(destination);
+            }
+
+            int count = 0;
+            while (true)
+            {
+                count += Emit(destination[count..]);
+                if (count == destination.Length || sourceEnded)
+                {
+                    return count;
+                }
+
+                ReadSource();
+            }
+        }
+
+        public void Dispose() => handle.Dispose();
+
+        private int ReadDirect(Span<float> destination)
+        {
+            int wanted = (int)Math.Min(Math.Min((long)destination.Length * 4, buffer.Length), remainingBytes);
+            if (wanted <= 0)
+            {
+                return 0;
+            }
+
+            int read = handle.ReadAtLeast(buffer.AsSpan(0, wanted), wanted, throwOnEndOfStream: false);
+            // A short read is the end of the file: a recorder killed mid-take.
+            remainingBytes = read < wanted ? 0 : remainingBytes - read;
+            int samples = read / 4;
+            for (int index = 0; index < samples; index++)
+            {
+                destination[index] = BinaryPrimitives.ReadSingleLittleEndian(buffer.AsSpan(index * 4, 4));
+            }
+
+            return samples;
+        }
+
+        /// <summary>One block of source frames, mixed down into <see cref="pending"/>.</summary>
+        private void ReadSource()
+        {
+            int wanted = (int)Math.Min(buffer.Length, remainingBytes);
+            int read = wanted > 0
+                ? handle.ReadAtLeast(buffer.AsSpan(0, wanted), wanted, throwOnEndOfStream: false)
+                : 0;
+            remainingBytes = read < wanted || read == 0 ? 0 : remainingBytes - read;
+            sourceEnded = remainingBytes == 0;
+
+            int bytesPerSample = format.BitsPerSample / 8;
             int wholeFrames = read / format.BlockAlign;
             for (int frame = 0; frame < wholeFrames; frame++)
             {
@@ -356,65 +428,53 @@ public sealed class AudioFileReader
 
                 pending.Add((float)(sum / format.Channels));
             }
-
-            Emit(output, pending, ref producedOutputs, ref consumedSource, step, atEnd: false);
         }
 
-        Emit(output, pending, ref producedOutputs, ref consumedSource, step, atEnd: true);
-
-        if (output.Count == 0)
+        /// <summary>
+        /// Turn whatever source samples are buffered into output samples, at most as many as
+        /// <paramref name="destination"/> holds.
+        ///
+        /// Interpolation needs the sample after the one it lands on, so until the source has
+        /// ended the last source sample stays in the buffer for the next block. That is what
+        /// keeps a long recording from losing a sample at every 16 384-frame seam, and the file
+        /// from losing its final samples.
+        /// </summary>
+        private int Emit(Span<float> destination)
         {
-            throw new Failure.EmptyFile();
-        }
-
-        return [.. output];
-    }
-
-    /// <summary>
-    /// Turn whatever source samples are buffered into output samples.
-    ///
-    /// Interpolation needs the sample after the one it lands on, so at a chunk boundary the
-    /// last source sample stays in the buffer until the next chunk arrives. That is what
-    /// keeps a long recording from losing a sample at every 16 384-frame seam.
-    /// </summary>
-    private static void Emit(
-        List<float> output,
-        List<float> pending,
-        ref long producedOutputs,
-        ref long consumedSource,
-        double step,
-        bool atEnd)
-    {
-        long available = consumedSource + pending.Count;
-        while (true)
-        {
-            double position = producedOutputs * step;
-            long index = (long)Math.Floor(position);
-            if (index >= available)
+            long available = consumedSource + pending.Count;
+            int count = 0;
+            while (count < destination.Length)
             {
-                break;
+                double position = producedOutputs * step;
+                long index = (long)Math.Floor(position);
+                if (index >= available)
+                {
+                    break;
+                }
+
+                bool hasNext = index + 1 < available;
+                if (!hasNext && !sourceEnded)
+                {
+                    break;
+                }
+
+                float current = pending[(int)(index - consumedSource)];
+                float next = hasNext ? pending[(int)(index + 1 - consumedSource)] : current;
+                double fraction = position - index;
+                destination[count++] = (float)(current + ((next - current) * fraction));
+                producedOutputs++;
             }
 
-            bool hasNext = index + 1 < available;
-            if (!hasNext && !atEnd)
+            // Everything before the sample the next output needs will never be read again.
+            long keepFrom = Math.Min((long)Math.Floor(producedOutputs * step), available);
+            int drop = (int)(keepFrom - consumedSource);
+            if (drop > 0)
             {
-                break;
+                pending.RemoveRange(0, Math.Min(drop, pending.Count));
+                consumedSource += drop;
             }
 
-            float current = pending[(int)(index - consumedSource)];
-            float next = hasNext ? pending[(int)(index + 1 - consumedSource)] : current;
-            double fraction = position - index;
-            output.Add((float)(current + ((next - current) * fraction)));
-            producedOutputs++;
-        }
-
-        // Everything before the sample the next output needs will never be read again.
-        long keepFrom = Math.Min((long)Math.Floor(producedOutputs * step), available);
-        int drop = (int)(keepFrom - consumedSource);
-        if (drop > 0)
-        {
-            pending.RemoveRange(0, Math.Min(drop, pending.Count));
-            consumedSource += drop;
+            return count;
         }
     }
 

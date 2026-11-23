@@ -6,9 +6,10 @@ namespace LocalASR;
 internal sealed record FileAudioChunk(float[] Samples, int StartFrame, int EndFrame);
 
 /// <summary>
-/// A long recording in the pieces the Linux server would send its engine
+/// A recording or an imported file in the pieces the Linux server would send its engine
 /// (<c>apps/cli/src/plan.rs</c> upstream): silence left out, every piece at most
-/// <c>seconds</c> long, no overlap.
+/// <c>seconds</c> long, no overlap. A plan needs the whole file's loudness, so a file is read
+/// twice, never held whole.
 ///
 /// The rule replaced a pause policy with a fixed speech level and 2 s of shared context at each
 /// seam. Imported files have no known gain, so that level read quiet speech as a pause and cut
@@ -17,15 +18,22 @@ internal sealed record FileAudioChunk(float[] Samples, int StartFrame, int EndFr
 /// English or Russian words and half as many on the mixed files.
 /// </summary>
 /// <remarks>
-/// <b>Deviation from the Swift original:</b> only the sample-backed form is ported. Upstream
-/// also streams a file twice (once for the loudness, once for the pieces) so a long file is
-/// never held whole. This port's <see cref="AudioFileReader"/> reads a file into one buffer, and
-/// the file path hands that buffer here. What is bounded is what reaches the engine, not the
-/// memory a file takes while it is read - the same caveat upstream's own 0.31.2 validation
-/// states for its file-backed dictation path. The Swift actor is a plain class: the samples are
-/// already in memory, so nothing here waits.
+/// <para>
+/// Two forms, as upstream has: samples already in memory (a long dictation, recognized in
+/// <see cref="LocalTranscriber"/>), and a file (<see cref="Read"/>), streamed through
+/// <see cref="AudioFileStream"/>. The Swift actor is a plain class that blocks: the file form's
+/// calls read a disk or a decoder's pipe, and their caller runs them on a thread of their own.
+/// </para>
+/// <para>
+/// <b>Deviation from the Swift original:</b> upstream knows a file's length from its header
+/// before reading it, and reads a file of thirty seconds or less once, whole. A decoder's pipe
+/// has no header, so the first pass learns the length: it keeps the samples while they are
+/// thirty seconds or fewer - a short file is then not read again - and drops them past that.
+/// The second pass also drops the silence between pieces as it is read, rather than holding it
+/// until the next piece is complete, so a long pause is never held either.
+/// </para>
 /// </remarks>
-internal sealed class FileAudioChunks
+internal sealed class FileAudioChunks : IDisposable
 {
     /// <summary>
     /// The server's piece length. Pieces this short also never reach any long-form segmentation
@@ -33,11 +41,22 @@ internal sealed class FileAudioChunks
     /// </summary>
     public const int DefaultSeconds = FilePiecePlanner.DefaultSeconds;
 
-    private readonly float[] samples;
+    private const int WholeSamples = (int)(FilePiecePlanner.WholeSeconds * FilePiecePlanner.SampleRate);
+
+    /// <summary>The whole recording when it is in memory, or when a file turned out short.</summary>
+    private readonly float[]? samples;
+
+    /// <summary>The file a second pass reads its pieces from; <c>null</c> for samples in memory.</summary>
+    private readonly string? path;
+
     private readonly bool whole;
     private readonly int seconds;
     private Queue<PieceRange>? pieces;
     private bool ended;
+    private AudioFileStream? stream;
+    private readonly List<float> pending = [];
+    private int pendingStart;
+    private bool streamEnded;
 
     public FileAudioChunks(float[] samples, int seconds = DefaultSeconds)
     {
@@ -47,30 +66,116 @@ internal sealed class FileAudioChunks
         this.seconds = seconds;
     }
 
+    private FileAudioChunks(string path, int total, float[]? head, IReadOnlyList<PieceRange> plan, int seconds)
+    {
+        this.path = path;
+        samples = head;
+        Duration = (double)total / FilePiecePlanner.SampleRate;
+        whole = head is not null;
+        pieces = new Queue<PieceRange>(plan);
+        this.seconds = seconds;
+    }
+
+    /// <summary>
+    /// The first pass over a file: its loudness and its length, then the cuts. Blocks; see the
+    /// type remarks.
+    /// </summary>
+    /// <exception cref="AudioFileReader.Failure">The file cannot be read, or holds no audio.</exception>
+    public static FileAudioChunks Read(string path, int seconds = DefaultSeconds, CancellationToken cancellationToken = default)
+    {
+        var envelope = new LoudnessEnvelope();
+        var head = new List<float>();
+        int total = 0;
+        using (AudioFileStream stream = AudioFileStream.Open(path))
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                float[] part = stream.Read();
+                if (part.Length == 0) { break; }
+                foreach (float sample in part) { envelope.Push(sample); }
+                total = checked(total + part.Length);
+                if (total <= WholeSamples) { head.AddRange(part); }
+                else if (head.Count > 0) { head = []; }
+            }
+        }
+
+        if (total == 0) { throw new AudioFileReader.Failure.EmptyFile(); }
+
+        return total <= WholeSamples
+            ? new FileAudioChunks(path, total, [.. head], [], seconds)
+            : new FileAudioChunks(path, total, null, PiecePlan.Pieces(envelope.Finish(), total, seconds), seconds);
+    }
+
     /// <summary>The whole recording, in seconds.</summary>
     public double Duration { get; }
 
-    /// <summary>The next piece, or <c>null</c> once every piece has been handed out.</summary>
-    public FileAudioChunk? Next()
+    /// <summary>
+    /// The next piece, or <c>null</c> once every piece has been handed out. For a file it reads
+    /// the file; see the type remarks.
+    /// </summary>
+    public FileAudioChunk? Next(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (whole)
         {
             if (ended) { return null; }
             ended = true;
-            return new FileAudioChunk(samples, 0, samples.Length);
+            return new FileAudioChunk(samples!, 0, samples!.Length);
         }
 
         pieces ??= new Queue<PieceRange>(Plan());
-        if (!pieces.TryDequeue(out PieceRange piece)) { return null; }
-        return new FileAudioChunk(samples[piece.Start..piece.End], piece.Start, piece.End);
+        if (!pieces.TryDequeue(out PieceRange piece))
+        {
+            stream?.Dispose();
+            stream = null;
+            return null;
+        }
+
+        if (path is null)
+        {
+            return new FileAudioChunk(samples![piece.Start..piece.End], piece.Start, piece.End);
+        }
+
+        // The second pass: a fresh stream, read up to the end of this piece. Gaps between pieces
+        // are the silence the plan leaves out, dropped as they arrive.
+        stream ??= AudioFileStream.Open(path);
+        SkipTo(piece.Start);
+        while (pendingStart + pending.Count < piece.End && !streamEnded)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            float[] part = stream.Read(FilePiecePlanner.SampleRate);
+            if (part.Length == 0) { streamEnded = true; }
+            else { pending.AddRange(part); }
+            SkipTo(piece.Start);
+        }
+
+        int take = Math.Min(pending.Count, piece.End - pendingStart);
+        float[] chunk = [.. pending.GetRange(0, take)];
+        pending.RemoveRange(0, take);
+        pendingStart += take;
+        return new FileAudioChunk(chunk, piece.Start, piece.Start + take);
     }
 
-    /// <summary>The loudness of the whole recording, then the cuts.</summary>
+    public void Dispose()
+    {
+        stream?.Dispose();
+        stream = null;
+    }
+
+    private void SkipTo(int start)
+    {
+        int skip = Math.Min(pending.Count, Math.Max(0, start - pendingStart));
+        pending.RemoveRange(0, skip);
+        pendingStart += skip;
+    }
+
+    /// <summary>The loudness of the whole recording in memory, then the cuts.</summary>
     private IReadOnlyList<PieceRange> Plan()
     {
         var envelope = new LoudnessEnvelope();
-        foreach (float sample in samples) { envelope.Push(sample); }
-        return PiecePlan.Pieces(envelope.Finish(), samples.Length, seconds);
+        foreach (float sample in samples!) { envelope.Push(sample); }
+        return PiecePlan.Pieces(envelope.Finish(), samples!.Length, seconds);
     }
 }
 

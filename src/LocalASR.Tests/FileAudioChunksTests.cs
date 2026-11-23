@@ -2,12 +2,6 @@ using DictationCore;
 
 namespace LocalASR.Tests;
 
-/// <remarks>
-/// The Swift tests open a recording with <c>FileAudioChunks(url:)</c>, which streams the file.
-/// This port has only the sample-backed form (see <see cref="FileAudioChunks"/>), so the "file"
-/// here is written, read back through <see cref="AudioFileReader"/> - the path a recording takes
-/// into <c>LocalTranscriber</c> - and then planned.
-/// </remarks>
 public sealed class FileAudioChunksTests : IDisposable
 {
     private readonly string directory;
@@ -226,11 +220,11 @@ public sealed class FileAudioChunksTests : IDisposable
         }
     }
 
-    /// <summary>Write the recording, read it back the way a take is read, and plan it.</summary>
+    /// <summary>Write the recording and open it the way a file is transcribed: streamed, twice.</summary>
     private FileAudioChunks Recording(double seconds, Func<int, float> sample)
     {
         float[] samples = Enumerable.Range(0, (int)(seconds * 16_000)).Select(sample).ToArray();
         string path = WavFixture.WriteSamples(directory, samples, "chunks");
-        return new FileAudioChunks(new AudioFileReader().Samples(path));
+        return FileAudioChunks.Read(path);
     }
 }

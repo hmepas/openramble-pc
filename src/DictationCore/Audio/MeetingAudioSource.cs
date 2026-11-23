@@ -12,7 +12,17 @@ namespace DictationCore.Audio;
 /// converted to nanoseconds). <c>null</c> when the source had no valid timestamp for this block.
 /// </param>
 /// <param name="Samples">16 kHz mono samples.</param>
-public sealed record MeetingAudioBlock(ulong? HostNanoseconds, float[] Samples);
+public sealed record MeetingAudioBlock(ulong? HostNanoseconds, float[] Samples)
+{
+    /// <summary>
+    /// The host clock every source stamps its blocks with, in nanoseconds: the monotonic
+    /// <see cref="System.Diagnostics.Stopwatch"/> timestamp. The capture anchors its timeline on
+    /// the same reading, so a source and the capture always agree on "now".
+    /// </summary>
+    public static ulong HostNanosecondsNow() =>
+        (ulong)((Int128)System.Diagnostics.Stopwatch.GetTimestamp() * 1_000_000_000
+            / System.Diagnostics.Stopwatch.Frequency);
+}
 
 /// <summary>
 /// Receives the same aligned PCM that has just been appended to the meeting WAV.
@@ -45,6 +55,15 @@ public abstract record MeetingSourceFailure
 }
 
 /// <summary>
+/// What <see cref="IMeetingAudioSource.Start"/> throws: the Swift original throws the
+/// <see cref="MeetingSourceFailure"/> value itself, which C# cannot do with a record.
+/// </summary>
+public sealed class MeetingSourceException(MeetingSourceFailure failure) : Exception(failure.ToString())
+{
+    public MeetingSourceFailure Failure { get; } = failure;
+}
+
+/// <summary>
 /// A microphone, a system-audio monitor, or a test script - anything that can deliver timed
 /// 16 kHz mono blocks.
 ///
@@ -58,7 +77,10 @@ public interface IMeetingAudioSource
     /// <summary>A short name for the device, for <c>meta.json</c>. Not user content.</summary>
     string? DeviceName { get; }
 
-    /// <summary>Begin delivering blocks. Throws rather than delivering nothing.</summary>
+    /// <summary>
+    /// Begin delivering blocks. Throws <see cref="MeetingSourceException"/> rather than
+    /// delivering nothing.
+    /// </summary>
     void Start(Action<MeetingAudioBlock> onBlock, Action<MeetingSourceFailure> onFailure);
 
     /// <summary>Stop delivering. Safe to call twice; safe to <see cref="Start"/> again after.</summary>

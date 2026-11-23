@@ -36,6 +36,12 @@ public sealed class ShortcutRecorderButton : Button
     private bool isRecording;
     private string? problem;
 
+    /// <summary>
+    /// Avalonia looks a control's theme up by its own type; a subclass with no theme of its own
+    /// gets no template and draws nothing at all. It is a Button, so it wears the Button theme.
+    /// </summary>
+    protected override Type StyleKeyOverride => typeof(Button);
+
     public ShortcutRecorderButton()
     {
         MinWidth = 120;

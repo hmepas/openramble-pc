@@ -20,7 +20,8 @@
           Background="#F21C1C1E"
           BorderBrush="#33FFFFFF"
           BorderThickness="1">
-    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+    <Panel>
+    <StackPanel x:Name="LinePanel" Orientation="Horizontal" VerticalAlignment="Center">
       <Ellipse x:Name="ToneDot" Width="10" Height="10" Margin="0,0,12,0" VerticalAlignment="Center" />
       <StackPanel VerticalAlignment="Center">
         <TextBlock x:Name="TitleText"
@@ -44,5 +45,56 @@
               VerticalAlignment="Center"
               IsVisible="False" />
     </StackPanel>
+    <!-- Words that could not land: the words first, in full, then why, then the one thing to do.
+         The words are what the person is afraid of losing, so they are set as written text. -->
+    <StackPanel x:Name="WaitingPanel" Spacing="10" MaxWidth="480" IsVisible="False">
+      <ScrollViewer x:Name="WordsScroll"
+                    MaxHeight="260"
+                    HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
+        <TextBlock x:Name="WordsText"
+                   FontFamily="Georgia, Noto Serif, DejaVu Serif, Liberation Serif, serif"
+                   FontSize="18"
+                   LineHeight="25"
+                   Foreground="#FFF5F5F7"
+                   TextWrapping="Wrap"
+                   automation:AutomationProperties.Name="Your words" />
+      </ScrollViewer>
+      <TextBlock x:Name="NoteText"
+                 FontSize="12"
+                 Foreground="#B3F5F5F7"
+                 TextWrapping="Wrap"
+                 IsVisible="False" />
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Ellipse x:Name="ReasonDot" Width="8" Height="8" VerticalAlignment="Center" />
+        <TextBlock x:Name="ReasonText"
+                   FontSize="13"
+                   Foreground="#B3F5F5F7"
+                   TextWrapping="Wrap"
+                   MaxWidth="450" />
+      </StackPanel>
+      <DockPanel LastChildFill="False">
+        <!-- Not focusable: a click is the action, and focus has nowhere useful to go. -->
+        <Button x:Name="ActionButton" DockPanel.Dock="Left" Focusable="False" Padding="8,4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Border x:Name="KeyCap"
+                    CornerRadius="4"
+                    Padding="6,1"
+                    BorderThickness="1"
+                    BorderBrush="#66FFFFFF">
+              <TextBlock x:Name="KeyCapText" FontSize="12" Foreground="#FFF5F5F7" />
+            </Border>
+            <TextBlock x:Name="ActionVerbText" FontSize="13" VerticalAlignment="Center" />
+          </StackPanel>
+        </Button>
+        <Button x:Name="LaterButton"
+                DockPanel.Dock="Right"
+                Focusable="False"
+                Padding="10,4"
+                Content="Later"
+                automation:AutomationProperties.HelpText="Keeps the words in History" />
+      </DockPanel>
+    </StackPanel>
+    </Panel>
   </Border>
 </Window>

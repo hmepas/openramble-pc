@@ -181,6 +181,13 @@ public sealed class FakeInserter : ITextInserting
     public Task PressReturn() => Task.CompletedTask;
 
     public TargetApplication? FrontmostApplication() => Frontmost;
+
+    private int readWaitEnds;
+
+    /// <summary>How many times a press asked an open paste to stop waiting for its read.</summary>
+    public int ReadWaitEnds => Volatile.Read(ref readWaitEnds);
+
+    public void EndTheReadWait() => Interlocked.Increment(ref readWaitEnds);
 }
 
 public class FakeOverlay : IOverlayPresenting, IEngineWaitPresenting

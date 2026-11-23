@@ -156,6 +156,52 @@ public sealed class AppStateWaitingWordsTests : IDisposable
         Assert.Equal(["Ping test"], state.RecentDictations.Select(entry => entry.Text));
     }
 
+    /// <summary>
+    /// History could not keep the take: the panel says the words are nowhere else, and Later does
+    /// not claim they are in History.
+    /// </summary>
+    [Fact]
+    public async Task WordsHistoryCouldNotKeepAreSaidToBeNowhereElse()
+    {
+        AppState state = await ReadyState();
+        string historyDirectory = Path.Combine(harness.Paths.Support(), "History");
+        if (Directory.Exists(historyDirectory)) { Directory.Delete(historyDirectory, recursive: true); }
+        File.WriteAllText(historyDirectory, "not a directory");
+        harness.Inserter.SetError(new TextInsertionError.PasteNotRead());
+        await Dictate(state);
+
+        await TestWait.For("History's failure reached the waiting words", () => state.WaitingWordsValue?.IsKeptNowhereElse == true);
+        Assert.True(panel.Waitings[^1]!.IsKeptNowhereElse);
+
+        panel.OnWaitingLater!();
+
+        Assert.Equal(new TakeOutcome.Kept(InHistory: false, Chord: null), panel.Outcomes[^1]);
+    }
+
+    /// <summary>
+    /// A press while the tapped paste waits to be read ends that wait, as a press does over a
+    /// take's own paste, and does not open the microphone.
+    /// </summary>
+    [Fact]
+    public async Task APressWhileTheRetryWaitsEndsTheReadWait()
+    {
+        AppState state = await StateWithWaitingWords(new TextInsertionError.PasteNotRead());
+        harness.Inserter.SetError(null);
+        harness.Inserter.HoldInsertions();
+        int endsBefore = harness.Inserter.ReadWaitEnds;
+
+        panel.OnWaitingAction!();
+        harness.Monitor.OnPress!();
+        harness.Monitor.OnRelease!();
+
+        Assert.Equal(endsBefore + 1, harness.Inserter.ReadWaitEnds);
+        Assert.Equal(1, harness.Capture.StartCount);
+
+        harness.Inserter.ReleaseInsertions();
+        await TestWait.For("the retried paste landed", () => state.WaitingWordsValue is null);
+        Assert.IsType<TakeOutcome.Pasted>(panel.Outcomes[^1]);
+    }
+
     /// <summary>The journal says which kind of paste did not land, and none of its words.</summary>
     [Fact]
     public async Task TheJournalNamesThePasteFailureWithoutWords()

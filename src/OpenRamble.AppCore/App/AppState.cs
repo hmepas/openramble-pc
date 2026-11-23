@@ -438,7 +438,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                 LastDictationValue = new LastDictation(provenance.FinalText, provenance);
             // The last moment the take still exists: whoever keeps a history has to take its
             // copy now; the kernel deletes the original right after.
-            built.OnTakeFinished = Archive;
+            built.OnTakeFinished = (text, audio, target) =>
+            {
+                bool kept = Archive(text, audio, target);
+                if (!kept) { WordsKeptNowhereElse(); }
+                return kept;
+            };
             // Named for the one notice that needs it: a take that heard only silence. The
             // microphone chosen in Settings, when it is plugged in; the system default has no
             // name this app can read, and the notice then says what it always said.

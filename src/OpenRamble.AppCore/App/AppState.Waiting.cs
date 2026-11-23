@@ -105,6 +105,36 @@ public sealed partial class AppState
     }
 
     /// <summary>
+    /// History could not keep the take whose words wait: the panel is the only place they are, and
+    /// it says so. History is written after the paste failed, so this comes after
+    /// <see cref="WordsWait"/>; a new take releases the words first, so any that wait are this take's.
+    /// </summary>
+    private void WordsKeptNowhereElse()
+    {
+        WaitingWords marked;
+        lock (gate)
+        {
+            WaitingWords? current = wait switch
+            {
+                Wait.Words w => w.Value,
+                Wait.KeyUndecided k => k.Value,
+                Wait.Retrying r => r.Value,
+                _ => null,
+            };
+            if (current is null || current.IsKeptNowhereElse) { return; }
+            marked = current with { IsKeptNowhereElse = true };
+            wait = wait switch
+            {
+                Wait.Words => new Wait.Words(marked),
+                Wait.KeyUndecided k => new Wait.KeyUndecided(marked, k.Press),
+                _ => new Wait.Retrying(marked),
+            };
+        }
+
+        WaitingPanel?.SetWaiting(marked, Hotkey);
+    }
+
+    /// <summary>
     /// The dictation key went down. <c>true</c> when the waiting words took the press, so it must
     /// not start a take.
     /// </summary>
@@ -115,6 +145,7 @@ public sealed partial class AppState
             long press;
             bool releaseAndDictate = false;
             bool tapFirst = false;
+            bool retrying = false;
             lock (gate)
             {
                 switch (wait)
@@ -122,9 +153,13 @@ public sealed partial class AppState
                     case Wait.Nothing:
                         return false;
 
+                    // The paste is in flight; its answer decides what the next press means. The
+                    // person pressing again means nothing appeared: the paste stops waiting to be
+                    // read, as a press does over a take's own paste.
                     case Wait.Retrying:
-                        // The paste is in flight; its answer decides what the next press means.
-                        return true;
+                        retrying = true;
+                        press = 0;
+                        break;
 
                     // Copied words have nothing left to press: the key dictates again.
                     case Wait.Words { Value.IsCopied: true }:
@@ -148,6 +183,12 @@ public sealed partial class AppState
                     default:
                         throw new InvalidOperationException("unknown waiting state");
                 }
+            }
+
+            if (retrying)
+            {
+                inserter.EndTheReadWait();
+                return true;
             }
 
             if (releaseAndDictate)
@@ -299,9 +340,16 @@ public sealed partial class AppState
     /// <returns><c>false</c> when nothing waited or the words cannot leave yet.</returns>
     private bool ReleaseWaitingWords(bool showOutcome = true)
     {
+        WaitingWords released;
         lock (gate)
         {
-            if (wait is not (Wait.Words or Wait.KeyUndecided)) { return false; }
+            switch (wait)
+            {
+                case Wait.Words w: released = w.Value; break;
+                case Wait.KeyUndecided k: released = k.Value; break;
+                default: return false;
+            }
+
             wait = Wait.None;
         }
 
@@ -309,7 +357,10 @@ public sealed partial class AppState
         {
             if (showOutcome)
             {
-                panel.ShowOutcome(new TakeOutcome.Kept(InHistory: true, LastTakeShortcut?.DisplayString(shortcutKeymap)));
+                // History never had the words: the outcome does not claim it does.
+                panel.ShowOutcome(new TakeOutcome.Kept(
+                    InHistory: !released.IsKeptNowhereElse,
+                    LastTakeShortcut?.DisplayString(shortcutKeymap)));
             }
             else
             {

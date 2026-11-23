@@ -296,16 +296,22 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         HistoryEntry entry = item.Entry;
         bool hasWords = entry.Text.Length > 0;
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto") };
-        grid.Children.Add(new TextBlock
+        var words = new TextBlock
         {
             Text = hasWords ? FirstWords(entry.Text) : "Nothing recognized",
             FontFamily = new FontFamily(SerifFamily),
             FontSize = 14,
             FontStyle = hasWords ? FontStyle.Normal : FontStyle.Italic,
-            Foreground = hasWords ? null : Brushes.Gray,
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center,
-        });
+        };
+        // Only the wordless row is grey. Assigning null instead would not mean "inherit": it would
+        // set no brush at all, and the words would be drawn invisible.
+        if (!hasWords)
+        {
+            words.Foreground = Brushes.Gray;
+        }
+        grid.Children.Add(words);
         var time = new TextBlock
         {
             Classes = { "secondary" },

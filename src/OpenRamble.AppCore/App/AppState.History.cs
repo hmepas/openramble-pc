@@ -63,7 +63,23 @@ public sealed partial class AppState
             "history.record.failed");
         if (recorded is null) { return false; }
         History = recorded;
+        LinkNewestTake(text, recorded);
         return true;
+    }
+
+    /// <summary>
+    /// Tie the menu's newest take to the History entry just kept for it, so deleting the entry
+    /// takes the take off the menu. The take joined the menu first - at insertion, or at failure -
+    /// and History keeps it at the end of the take, so the newest of each is the same take when
+    /// their words agree.
+    /// </summary>
+    private void LinkNewestTake(string text, IReadOnlyList<HistoryEntry> recorded)
+    {
+        string words = text.Trim();
+        if (recorded.Count == 0 || recorded[0].Text != words) { return; }
+        IReadOnlyList<RecentDictation> takes = RecentDictations;
+        if (takes.Count == 0 || takes[0].HistoryId is not null || takes[0].Text != words) { return; }
+        RecentDictations = [takes[0] with { HistoryId = recorded[0].Id }, .. takes.Skip(1)];
     }
 
     /// <summary>The take's audio, if it is still on disk.</summary>
@@ -186,7 +202,11 @@ public sealed partial class AppState
     public void DeleteHistoryEntry(HistoryEntry entry)
     {
         if (historyStore is null) { return; }
-        History = TryHistory(() => historyStore.Delete(entry)) ?? History;
+        IReadOnlyList<HistoryEntry>? remaining = TryHistory(() => historyStore.Delete(entry));
+        if (remaining is null) { return; }
+        History = remaining;
+        // Deleted means gone from every place this app shows the words, the menu included.
+        RecentDictations = [.. RecentDictations.Where(take => take.HistoryId != entry.Id)];
     }
 
     public void ClearHistory()

@@ -97,14 +97,14 @@ public sealed partial class SettingsWindow : Window
             () => state.Hotkey = SettingsDefaults.Hotkey));
 
         copyRecorder = new ShortcutRecorder(keymap);
-        copyRecorder.ShortcutChanged += shortcut => state.CopyShortcut = shortcut;
+        copyRecorder.ShortcutChanged += shortcut => state.LastTakeShortcut = shortcut;
         copyRecorder.Changed += RenderCopyProblem;
         ShortcutRows.Children.Add(Row(
-            "Copy last dictation",
+            "Paste last take",
             copyRecorder,
-            "Press this shortcut to put the last dictation back on the clipboard",
+            "Press this shortcut to paste your newest dictation into the app in front",
             out copyRevert,
-            () => state.CopyShortcut = state.DefaultLastTakeShortcut));
+            () => state.LastTakeShortcut = state.DefaultLastTakeShortcut));
 
         // MARK: - Behavior
 
@@ -273,8 +273,8 @@ public sealed partial class SettingsWindow : Window
             HotkeyWarning.Foreground = StatusBrushes.Attention;
             HotkeyWarning.Visibility = state.HotkeyWarning is null ? Visibility.Collapsed : Visibility.Visible;
 
-            if (copyRecorder.Shortcut != state.CopyShortcut) { copyRecorder.Shortcut = state.CopyShortcut; }
-            ShowRevert(copyRevert, state.CopyShortcut != state.DefaultLastTakeShortcut);
+            if (copyRecorder.Shortcut != state.LastTakeShortcut) { copyRecorder.Shortcut = state.LastTakeShortcut; }
+            ShowRevert(copyRevert, state.LastTakeShortcut != state.DefaultLastTakeShortcut);
 
             launchToggle.IsChecked = state.LaunchAtLogin;
             ShowRevert(launchRevert, state.LaunchAtLogin != SettingsDefaults.LaunchAtLogin);

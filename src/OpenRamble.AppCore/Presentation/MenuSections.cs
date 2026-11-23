@@ -14,8 +14,17 @@ public enum MenuRow
     SetupHints,
     FinishSetup,
     InsertLastDictation,
-    RecentDictations,
-    CopyLast,
+    /// <summary>
+    /// The newest takes of this session, each as its own words; a click pastes it into the app
+    /// in front. Expands to up to <see cref="MenuSections.TakeLimit"/> rows, the last take first.
+    /// </summary>
+    Takes,
+
+    /// <summary>
+    /// The same takes in a submenu, where a click copies. Upstream reads a held Option key off
+    /// the click; a tray menu here is drawn by the panel and never sees a modifier.
+    /// </summary>
+    CopyTakes,
     Settings,
     Quit,
 }
@@ -35,15 +44,21 @@ public enum MenuRow
 /// transcription recordings heal quietly (kept on disk briefly, pruned by age) instead of
 /// demanding menu decisions - the strange "Transcribe/Delete Saved Recording" pair is gone by
 /// design; do not re-add it.</description></item>
+/// <item><description>The newest takes lead the idle menu, the last one first, because the
+/// menu is the backstop for words that could not land. Three at most: a menu is not a
+/// history.</description></item>
 /// </list>
 /// </summary>
 public static class MenuSections
 {
+    /// <summary>How many takes the menu offers.</summary>
+    public const int TakeLimit = 3;
+
     public static IReadOnlyList<IReadOnlyList<MenuRow>> Sections(
         DictationState state,
         bool isDictationReady,
         bool hasRecoveredText,
-        bool hasRecents)
+        bool hasTakes)
     {
         var sections = new List<IReadOnlyList<MenuRow>> { new[] { MenuRow.StatusLine } };
 
@@ -69,13 +84,9 @@ public static class MenuSections
                     sections.Add([MenuRow.InsertLastDictation]);
                 }
 
-                if (hasRecents)
+                if (hasTakes)
                 {
-                    // Copy Last gets its own row rather than a label inside the submenu: the
-                    // menu shows a shortcut beside Settings and Quit, and the copy key was the
-                    // one binding with nowhere to be seen while it lived a level down next to a
-                    // dictation rather than next to its own action.
-                    sections.Add([MenuRow.RecentDictations, MenuRow.CopyLast]);
+                    sections.Add([MenuRow.Takes, MenuRow.CopyTakes]);
                 }
 
                 break;

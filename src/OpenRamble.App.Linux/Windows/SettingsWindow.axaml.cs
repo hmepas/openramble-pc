@@ -16,8 +16,9 @@ using OpenRamble.AppCore.Audio;
 namespace OpenRamble.App.Linux;
 
 /// <summary>
-/// The settings window: five panes - General, Recognition, Dictation History, Dictionary,
-/// About - the same five the macOS window shows behind its sidebar.
+/// The settings window: four pages - General, Setup, Dictionary, About - behind a segmented
+/// switcher at the top, as upstream's window (0.37+). The dictation history is listed in the
+/// Library; its limit and Delete All stay under General.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -102,6 +103,19 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         RecordingShortcutRecorder.Keymap = LinuxShortcutKeymap.Instance;
         VersionText.Text = Version();
 
+        foreach (RadioButton tab in new[] { GeneralTab, SetupTab, DictionaryTab, AboutTab })
+        {
+            tab.IsCheckedChanged += (_, _) => ShowPage();
+        }
+        GeneralTab.IsChecked = true;
+        ShowPage();
+
+        // The cap is the key's face; pressing it opens the same list the picker under it holds.
+        HotkeyCap.PointerPressed += (_, _) => HotkeyPicker.IsDropDownOpen = true;
+        ModelRow.ActionClick += (_, _) => { if (modelAction is { } action) { Perform(action); } };
+        UpgradeRow.ActionClick += (_, _) => { if (upgradeAction is { } action) { Perform(action); } };
+        MicrophoneRow.ActionClick += OnPermissionAction;
+
         HotkeyPicker.SelectionChanged += (_, _) => Pick(HotkeyPicker, DictationHotkeyInfo.AllCases, hotkey => state.Hotkey = hotkey);
         PlacementPicker.SelectionChanged += (_, _) => Pick(PlacementPicker, DictationOverlayPlacements.AllCases, placement => state.OverlayPlacement = placement);
         ThemePicker.SelectionChanged += (_, _) => Pick(ThemePicker, AppAppearances.AllCases, appearance => state.Appearance = appearance);
@@ -165,6 +179,15 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         apply(cases[picker.SelectedIndex]);
     }
 
+    /// <summary>One page at a time: the one whose segment is selected.</summary>
+    private void ShowPage()
+    {
+        GeneralPage.IsVisible = GeneralTab.IsChecked == true;
+        SetupPage.IsVisible = SetupTab.IsChecked == true;
+        DictionaryPage.IsVisible = DictionaryTab.IsChecked == true;
+        AboutPage.IsVisible = AboutTab.IsChecked == true;
+    }
+
     private void OnStateChanged(object? sender, PropertyChangedEventArgs args) =>
         Dispatcher.UIThread.Post(Render);
 
@@ -209,9 +232,13 @@ public sealed partial class SettingsWindow : Window, IDictationSink
     {
         HotkeyPicker.SelectedIndex = DictationHotkeyInfo.AllCases.ToList().IndexOf(state.Hotkey);
         Changed(RevertHotkey, state.Hotkey != SettingsDefaults.Hotkey);
+        HotkeyCap.Text = state.Hotkey.Title;
+        // The raw key edge, the same one the first-launch try-out shows: the cap answers the hand.
+        HotkeyCap.IsPressed = state.IsHotkeyHeld;
         HotkeyWarning.Text = state.HotkeyWarning ?? string.Empty;
         HotkeyWarning.Foreground = StatusBrushes.Attention;
         HotkeyWarning.IsVisible = state.HotkeyWarning is not null;
+        HotkeyHint.IsVisible = state.HotkeyWarning is null;
 
         LastTakeShortcutRecorder.Shortcut = state.LastTakeShortcut;
         Changed(RevertLastTakeShortcut, state.LastTakeShortcut != state.DefaultLastTakeShortcut);
@@ -396,14 +423,28 @@ public sealed partial class SettingsWindow : Window, IDictationSink
                 : "Dictation cannot start without it. OpenRamble opens the microphone only while you hold the dictation key.",
             state.MicrophoneRemedy);
 
-        PermissionTitle.Text = $"{permission.Title} — {permission.AccessibilityValue}";
-        PermissionDetail.Text = permission.Detail;
-        PermissionButton.Content = permission.ActionTitle ?? string.Empty;
-        PermissionButton.IsVisible = permission.ActionTitle is not null;
-        AutomationProperties.SetName(PermissionButton, permission.ActionAccessibilityLabel ?? string.Empty);
+        MicrophoneRow.Title = permission.Title;
+        MicrophoneRow.Detail = permission.Detail;
+        MicrophoneRow.Glyph = permission.Granted
+            ? StateGlyphKind.Pasted
+            : state.MicrophoneState == MicrophoneConsentState.Denied ? StateGlyphKind.Silent : StateGlyphKind.Attention;
+        MicrophoneRow.ActionText = permission.ActionTitle;
+        MicrophoneRow.IsPrimaryAction = true;
+        AutomationProperties.SetName(MicrophoneRow, $"{permission.Title} — {permission.AccessibilityValue}");
+        AutomationProperties.SetName(MicrophoneRow.ActionButton, permission.ActionAccessibilityLabel ?? string.Empty);
+
+        // Whether the key reaches OpenRamble at all: the input device, a compositor keybind or
+        // the control socket. A hook that never installed has no symptom of its own.
+        string? failure = state.HotkeyTrackingFailure;
+        KeyTrackingRow.Glyph = failure is null ? StateGlyphKind.Pasted : StateGlyphKind.Attention;
+        KeyTrackingRow.Detail = failure ?? $"OpenRamble notices {state.Hotkey.Title} and types the finished text at your cursor.";
     }
 
     // MARK: - Recognition
+
+    private ModelStatus.Action? modelAction;
+
+    private ModelStatus.Action? upgradeAction;
 
     private void RenderModel()
     {
@@ -416,54 +457,45 @@ public sealed partial class SettingsWindow : Window, IDictationSink
                 : state.RemainingDownloadMegabytes,
             state.IsEngineReady,
             state.IsPreparingEngine);
-        RenderCard(status, ModelTitle, ModelDetail, ModelProgress, ModelProgressLabel, ModelActions);
+        modelAction = RenderRow(status, ModelRow);
 
         // The newer model is offered beside the one that keeps dictating, never instead of it.
-        UpgradeCard.IsVisible = state.UpgradeState is not null;
-        if (state.UpgradeState is { } upgrade)
-        {
-            RenderCard(
-                ModelStatus.Upgrade(upgrade, state.RemainingDownloadMegabytes),
-                UpgradeTitle,
-                UpgradeDetail,
-                UpgradeProgress,
-                UpgradeProgressLabel,
-                UpgradeActions);
-        }
+        UpgradeRow.IsVisible = state.UpgradeState is not null;
+        UpgradeDivider.IsVisible = state.UpgradeState is not null;
+        upgradeAction = state.UpgradeState is { } upgrade
+            ? RenderRow(ModelStatus.Upgrade(upgrade, state.RemainingDownloadMegabytes), UpgradeRow)
+            : null;
     }
 
-    private void RenderCard(
-        ModelStatus status,
-        TextBlock title,
-        TextBlock detail,
-        ProgressBar progress,
-        TextBlock progressLabel,
-        StackPanel actions)
+    /// <summary>
+    /// A model card as one setup row. Every status carries at most one action; the step
+    /// forward (download, retry, repair) is ink, cancelling or deleting stays quiet.
+    /// </summary>
+    private static ModelStatus.Action? RenderRow(ModelStatus status, SetupRow row)
     {
-        title.Text = status.Title;
-        detail.Text = status.Detail ?? string.Empty;
-        detail.IsVisible = status.Detail is not null;
-
-        progress.IsVisible = status.Progress is not null;
-        progress.Value = status.Progress ?? 0;
-        progressLabel.Text = status.ProgressLabel ?? string.Empty;
-        progressLabel.IsVisible = status.ProgressLabel is not null;
-
-        actions.Children.Clear();
-        foreach (ModelStatus.Action action in status.Actions)
+        ModelStatus.Action? action = status.Actions.Count > 0 ? status.Actions[0] : null;
+        row.Title = status.Title;
+        row.Detail = (status.Detail, status.ProgressLabel) switch
         {
-            var button = new Button
-            {
-                Content = status.TitleFor(action),
-                Padding = new Thickness(12, 4, 12, 4),
-                Margin = new Thickness(0, 0, 8, 0),
-            };
-            ToolTip.SetTip(button, status.HintFor(action));
-            AutomationProperties.SetHelpText(button, status.HintFor(action));
-            ModelStatus.Action captured = action;
-            button.Click += (_, _) => Perform(captured);
-            actions.Children.Add(button);
-        }
+            (null, null) => null,
+            ({ } detail, null) => detail,
+            (null, { } label) => label,
+            ({ } detail, { } label) => detail + "\n" + label,
+        };
+        row.Progress = status.Progress;
+        row.Glyph = status.ToneValue switch
+        {
+            ModelStatus.Tone.Success => StateGlyphKind.Pasted,
+            ModelStatus.Tone.Failure => StateGlyphKind.Attention,
+            _ => action == ModelStatus.Action.Install ? StateGlyphKind.Silent : StateGlyphKind.Working,
+        };
+        row.ActionText = action is { } shown ? status.TitleFor(shown) : null;
+        row.IsPrimaryAction = action is ModelStatus.Action.Install or ModelStatus.Action.Retry or ModelStatus.Action.Repair;
+        string? hint = action is { } hinted ? status.HintFor(hinted) : null;
+        ToolTip.SetTip(row.ActionButton, hint);
+        AutomationProperties.SetHelpText(row.ActionButton, hint);
+        AutomationProperties.SetName(row, status.Announcement);
+        return action;
     }
 
     private void Perform(ModelStatus.Action action)

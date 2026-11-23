@@ -68,7 +68,7 @@ public static class ControlSocketClient
         {
             errors.WriteLine(
                 $"usage: OpenRamble.App.Linux {Verb} <command>\n"
-                + "commands: hotkey press | hotkey release | hotkey toggle | status");
+                + "commands: hotkey press | hotkey release | hotkey toggle | status | library");
             return Misused;
         }
 

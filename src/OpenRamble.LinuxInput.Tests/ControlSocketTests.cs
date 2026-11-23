@@ -46,6 +46,18 @@ public sealed class ControlSocketTests
     }
 
     [Fact]
+    public void LibraryOpensTheWindowWhereThereIsOne()
+    {
+        int opened = 0;
+        using var server = new ControlSocketServer(new FakeHotkeyControl(), () => "Idle", openLibrary: () => opened++);
+        using var bare = new ControlSocketServer(new FakeHotkeyControl(), () => "Idle");
+
+        Assert.Equal("ok library", server.Execute("library"));
+        Assert.Equal(1, opened);
+        Assert.Equal("error no library here", bare.Execute("library"));
+    }
+
+    [Fact]
     public void ToggleAsksTheKeyWhereItIsAndPutsItTheOtherWay()
     {
         var hotkey = new FakeHotkeyControl();

@@ -144,6 +144,7 @@ One command per line, one reply line back:
 | `hotkey release` | `ok up` | it comes up — dictation stops and the text is inserted |
 | `hotkey toggle` | `ok down` / `ok up` | whichever edge the key was not already at |
 | `status` | `ok state=Idle key=RightCtrl down=false` | is it running, and is the key stuck down |
+| `library` | `ok library` | opens the Library window (`OpenRamble.App.Linux ctl library`) |
 
 The edges go into the same gesture machine the keyboard feeds, so hold
 semantics, the overlay, insertion and the diagnostic log are identical; the

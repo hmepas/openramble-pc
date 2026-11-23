@@ -42,6 +42,11 @@ namespace OpenRamble.LinuxInput;
 /// - enough to tell a running app from a dead socket, and a wedged hold from an idle one.</description>
 /// </item>
 /// <item>
+/// <term><c>library</c></term>
+/// <description><c>ok library</c> - the Library window opens, or comes forward if it is open, as
+/// the tray menu's "Library…" does.</description>
+/// </item>
+/// <item>
 /// <term>anything else</term>
 /// <description><c>error unknown command</c>, and the connection stays open.</description>
 /// </item>

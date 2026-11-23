@@ -262,7 +262,10 @@ public sealed partial class App : Application
         // ControlSocket for the protocol and EvdevKeyboardMonitor.IsHotkeyDown for what happens
         // when both sources move the key. Failing to listen is not fatal and is not shown: the
         // keyboard is the product, this is the alternative, and it says so in the log.
-        control = new ControlSocketServer(monitor, () => state?.DictationStateValue.ToString() ?? "starting");
+        control = new ControlSocketServer(
+            monitor,
+            () => state?.DictationStateValue.ToString() ?? "starting",
+            openLibrary: () => Dispatcher.UIThread.Post(ShowLibrary));
         control.Start();
 
         RefreshTray();

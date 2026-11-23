@@ -64,7 +64,8 @@ public interface IHotkeyControl
 /// <b>No authentication, and none is possible.</b> The directory is 0700 and the socket 0600, so
 /// the boundary is the file system's: anything that can reach the socket is already running as
 /// this user and could send the key events itself. What the socket adds over that is nothing, and
-/// what it must therefore never grow is a command that does more than the hotkey does.
+/// what it must therefore never grow is a command that does more than the hotkey does - or than
+/// the tray menu does: <c>library</c> opens a window, as its menu row would.
 /// </para>
 /// </remarks>
 public sealed class ControlSocketServer : IDisposable
@@ -94,6 +95,7 @@ public sealed class ControlSocketServer : IDisposable
     private readonly Lock gate = new();
     private readonly IHotkeyControl hotkey;
     private readonly Func<string> describeState;
+    private readonly Action? openLibrary;
     private Socket? listener;
     private CancellationTokenSource? stopping;
     private bool disposed;
@@ -105,10 +107,16 @@ public sealed class ControlSocketServer : IDisposable
     /// same way <see cref="LinuxTextInserter"/> takes the held modifiers as one.
     /// </param>
     /// <param name="socketPath">Where to listen. Defaults to <see cref="ControlSocket.DefaultPath"/>.</param>
-    public ControlSocketServer(IHotkeyControl hotkey, Func<string> describeState, string? socketPath = null)
+    /// <param name="openLibrary">
+    /// What <c>library</c> does: bring the Library window up. Called with the gate held, so it
+    /// must only hand the work to the UI thread. <c>null</c> - the command is refused.
+    /// </param>
+    public ControlSocketServer(
+        IHotkeyControl hotkey, Func<string> describeState, string? socketPath = null, Action? openLibrary = null)
     {
         this.hotkey = hotkey;
         this.describeState = describeState;
+        this.openLibrary = openLibrary;
         SocketPath = socketPath ?? ControlSocket.DefaultPath;
     }
 
@@ -263,6 +271,11 @@ public sealed class ControlSocketServer : IDisposable
                     DiagnosticLog.Emit("ctl.command", ("command", command), ("ok", true));
                     return $"{ControlSocket.Ok} state={Describe()} key={hotkey.Hotkey} "
                         + $"down={(hotkey.IsHotkeyDown ? "true" : "false")}";
+                case "library":
+                    DiagnosticLog.Emit("ctl.command", ("command", command), ("ok", openLibrary is not null));
+                    if (openLibrary is null) { return $"{ControlSocket.Error} no library here"; }
+                    openLibrary();
+                    return $"{ControlSocket.Ok} library";
 
                 default:
                     DiagnosticLog.Emit("ctl.command", ("command", "unknown"), ("ok", false));

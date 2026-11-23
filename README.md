@@ -145,6 +145,7 @@ One command per line, one reply line back:
 | `hotkey toggle` | `ok down` / `ok up` | whichever edge the key was not already at |
 | `status` | `ok state=Idle key=RightCtrl down=false` | is it running, and is the key stuck down |
 | `library` | `ok library` | opens the Library window (`OpenRamble.App.Linux ctl library`) |
+| `settings [general\|setup\|dictionary\|about]` | `ok settings [page]` | opens Settings, on that page if named (`OpenRamble.App.Linux ctl settings setup`) |
 
 The edges go into the same gesture machine the keyboard feeds, so hold
 semantics, the overlay, insertion and the diagnostic log are identical; the

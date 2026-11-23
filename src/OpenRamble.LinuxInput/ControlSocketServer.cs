@@ -65,7 +65,7 @@ public interface IHotkeyControl
 /// the boundary is the file system's: anything that can reach the socket is already running as
 /// this user and could send the key events itself. What the socket adds over that is nothing, and
 /// what it must therefore never grow is a command that does more than the hotkey does - or than
-/// the tray menu does: <c>library</c> opens a window, as its menu row would.
+/// the tray menu does: <c>library</c> and <c>settings</c> open a window, as their menu rows would.
 /// </para>
 /// </remarks>
 public sealed class ControlSocketServer : IDisposable
@@ -96,6 +96,7 @@ public sealed class ControlSocketServer : IDisposable
     private readonly IHotkeyControl hotkey;
     private readonly Func<string> describeState;
     private readonly Action? openLibrary;
+    private readonly Action<string?>? openSettings;
     private Socket? listener;
     private CancellationTokenSource? stopping;
     private bool disposed;
@@ -111,14 +112,27 @@ public sealed class ControlSocketServer : IDisposable
     /// What <c>library</c> does: bring the Library window up. Called with the gate held, so it
     /// must only hand the work to the UI thread. <c>null</c> - the command is refused.
     /// </param>
+    /// <param name="openSettings">
+    /// What <c>settings</c> does: bring Settings up, on the named page (one of
+    /// <see cref="SettingsPages"/>) or on whichever it shows when <c>null</c>. Same threading rule
+    /// as <paramref name="openLibrary"/>; <c>null</c> - the command is refused.
+    /// </param>
     public ControlSocketServer(
-        IHotkeyControl hotkey, Func<string> describeState, string? socketPath = null, Action? openLibrary = null)
+        IHotkeyControl hotkey,
+        Func<string> describeState,
+        string? socketPath = null,
+        Action? openLibrary = null,
+        Action<string?>? openSettings = null)
     {
         this.hotkey = hotkey;
         this.describeState = describeState;
         this.openLibrary = openLibrary;
+        this.openSettings = openSettings;
         SocketPath = socketPath ?? ControlSocket.DefaultPath;
     }
+
+    /// <summary>The pages <c>settings &lt;page&gt;</c> accepts.</summary>
+    public static IReadOnlyList<string> SettingsPages { get; } = ["general", "setup", "dictionary", "about"];
 
     /// <summary>The path being listened on, or that would be.</summary>
     public string SocketPath { get; }
@@ -276,6 +290,10 @@ public sealed class ControlSocketServer : IDisposable
                     if (openLibrary is null) { return $"{ControlSocket.Error} no library here"; }
                     openLibrary();
                     return $"{ControlSocket.Ok} library";
+                case "settings":
+                    return Settings(null);
+                case var _ when command.StartsWith("settings ", StringComparison.Ordinal):
+                    return Settings(command["settings ".Length..].Trim());
 
                 default:
                     DiagnosticLog.Emit("ctl.command", ("command", "unknown"), ("ok", false));
@@ -284,6 +302,17 @@ public sealed class ControlSocketServer : IDisposable
                         : $"{ControlSocket.Error} unknown command";
             }
         }
+    }
+
+    /// <summary>Open Settings, on a page if one is named. The gate is held.</summary>
+    private string Settings(string? page)
+    {
+        bool known = page is null || SettingsPages.Contains(page);
+        DiagnosticLog.Emit("ctl.command", ("command", "settings"), ("ok", known && openSettings is not null));
+        if (openSettings is null) { return $"{ControlSocket.Error} no settings here"; }
+        if (!known) { return $"{ControlSocket.Error} unknown page; one of {string.Join('|', SettingsPages)}"; }
+        openSettings(page);
+        return page is null ? $"{ControlSocket.Ok} settings" : $"{ControlSocket.Ok} settings {page}";
     }
 
     /// <summary>Move the key, and say where it ended up. The gate is held.</summary>

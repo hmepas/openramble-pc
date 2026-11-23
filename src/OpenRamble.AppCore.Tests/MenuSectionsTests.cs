@@ -162,4 +162,24 @@ public sealed class MenuSectionsTests
 
         Assert.True(everything.IsSubsetOf(allowed));
     }
+
+    /// <summary>
+    /// Where there is a Library, its row leads the closing section: Library…, Settings…, and Quit
+    /// last - upstream's order. Without one the section is unchanged.
+    /// </summary>
+    [Fact]
+    public void LibrarySettingsAndQuitCloseTheMenuInThatOrder()
+    {
+        foreach (DictationState state in Enum.GetValues<DictationState>())
+        {
+            IReadOnlyList<IReadOnlyList<MenuRow>> sections = MenuSections.Sections(
+                state, isDictationReady: false, hasRecoveredText: true, hasTakes: true,
+                MeetingRecordingState.Recording, canRecord: true, supportsSystemAudio: true, hasLibrary: true);
+
+            Assert.Equal([MenuRow.Library, MenuRow.Settings, MenuRow.Quit], sections[^1]);
+            Assert.Single(sections.SelectMany(section => section), row => row == MenuRow.Library);
+        }
+
+        Assert.DoesNotContain(MenuRow.Library, Sections(takes: true).SelectMany(section => section));
+    }
 }

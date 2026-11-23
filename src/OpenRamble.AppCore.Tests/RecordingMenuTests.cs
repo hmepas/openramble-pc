@@ -30,7 +30,7 @@ public sealed class RecordingMenuTests
             Sections());
     }
 
-    /// <summary>Without system audio "Record" already is a voice note; a second row would repeat it.</summary>
+    /// <summary>Without system audio "Start Recording" already is a voice note; a second row would repeat it.</summary>
     [Fact]
     public void WithoutSystemAudioThereIsOneRecordRow()
     {
@@ -92,9 +92,9 @@ public sealed class RecordingMenuTests
     [Fact]
     public void TheStartAndStopRowsCarryTheShortcut()
     {
-        Assert.Equal("Record   Ctrl+Alt+R", MenuSections.RecordingTitle(MenuRow.StartRecording, MeetingRecordingState.Idle, TimeSpan.Zero, "Ctrl+Alt+R"));
+        Assert.Equal("Start Recording   Ctrl+Alt+R", MenuSections.RecordingTitle(MenuRow.StartRecording, MeetingRecordingState.Idle, TimeSpan.Zero, "Ctrl+Alt+R"));
         Assert.Equal("Stop Recording   Ctrl+Alt+R", MenuSections.RecordingTitle(MenuRow.StopRecording, MeetingRecordingState.Recording, TimeSpan.Zero, "Ctrl+Alt+R"));
-        Assert.Equal("Record", MenuSections.RecordingTitle(MenuRow.StartRecording, MeetingRecordingState.Idle, TimeSpan.Zero));
+        Assert.Equal("Start Recording", MenuSections.RecordingTitle(MenuRow.StartRecording, MeetingRecordingState.Idle, TimeSpan.Zero));
         Assert.Equal("Record Voice Note", MenuSections.RecordingTitle(MenuRow.StartVoiceNote, MeetingRecordingState.Idle, TimeSpan.Zero, "Ctrl+Alt+R"));
     }
 

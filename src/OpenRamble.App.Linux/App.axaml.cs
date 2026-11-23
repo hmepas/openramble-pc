@@ -288,7 +288,8 @@ public sealed partial class App : Application
         control = new ControlSocketServer(
             monitor,
             () => state?.DictationStateValue.ToString() ?? "starting",
-            openLibrary: () => Dispatcher.UIThread.Post(ShowLibrary));
+            openLibrary: () => Dispatcher.UIThread.Post(ShowLibrary),
+            openSettings: page => Dispatcher.UIThread.Post(() => ShowSettings(page)));
         control.Start();
 
         // The pill that says a recording is running; it shows and hides itself with the state.
@@ -542,7 +543,8 @@ public sealed partial class App : Application
             state.MenuTakes.Count > 0,
             state.RecordingState,
             state.CanRecord,
-            state.SupportsSystemAudio);
+            state.SupportsSystemAudio,
+            hasLibrary: true);
 
         foreach (IReadOnlyList<MenuRow> section in sections)
         {
@@ -555,9 +557,6 @@ public sealed partial class App : Application
                 }
                 else
                 {
-                    // The Library sits beside Settings, as upstream's "Library…" does. Added here
-                    // rather than as a MenuRow: the Windows shell has no Library yet.
-                    if (row == MenuRow.Settings) { menu.Items.Add(Item("Library…", ShowLibrary)); }
                     menu.Items.Add(Row(row));
                 }
             }
@@ -589,7 +588,7 @@ public sealed partial class App : Application
                     current.IsEngineReady,
                     current.HasEngineBeenReady) ?? "Setup needed",
                 null),
-            MenuRow.FinishSetup => Item("Finish Setup…", ShowOnboarding),
+            MenuRow.FinishSetup => Item("Finish Setting Up…", ShowOnboarding),
             MenuRow.InsertLastDictation => Item("Insert Last Dictation", current.RetryRecoveredText),
             MenuRow.CopyTakes => Nested(
                 "Copy",
@@ -601,6 +600,7 @@ public sealed partial class App : Application
             MenuRow.PauseRecording => Item(RecordingTitle(row), () => _ = current.PauseRecording()),
             MenuRow.ResumeRecording => Item(RecordingTitle(row), () => _ = current.ResumeRecording()),
             MenuRow.StopRecording => Item(RecordingTitle(row), () => _ = current.StopRecording()),
+            MenuRow.Library => Item("Library…", ShowLibrary),
             MenuRow.Settings => Item("Settings…", ShowSettings),
             MenuRow.Quit => Item("Quit OpenRamble", () => lifetime?.Shutdown()),
             _ => Item(string.Empty, null),
@@ -668,7 +668,10 @@ public sealed partial class App : Application
         return null;
     }
 
-    private void ShowSettings()
+    private void ShowSettings() => ShowSettings(null);
+
+    /// <summary>One Settings window, brought forward - on <paramref name="page"/> if one is named.</summary>
+    private void ShowSettings(string? page)
     {
         if (state is null) { return; }
         if (settings is null)
@@ -676,6 +679,8 @@ public sealed partial class App : Application
             settings = new SettingsWindow(state);
             settings.Closed += (_, _) => settings = null;
         }
+
+        if (page is not null) { settings.SelectPage(page); }
 
         settings.Show();
         settings.Activate();

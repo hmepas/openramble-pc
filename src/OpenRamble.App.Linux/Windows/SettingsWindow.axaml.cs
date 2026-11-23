@@ -179,6 +179,23 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         apply(cases[picker.SelectedIndex]);
     }
 
+    /// <summary>
+    /// Select a page by its control-socket name (<c>general</c>, <c>setup</c>, <c>dictionary</c>,
+    /// <c>about</c>); an unknown name leaves the page as it is.
+    /// </summary>
+    public void SelectPage(string page)
+    {
+        RadioButton? tab = page switch
+        {
+            "general" => GeneralTab,
+            "setup" => SetupTab,
+            "dictionary" => DictionaryTab,
+            "about" => AboutTab,
+            _ => null,
+        };
+        if (tab is not null) { tab.IsChecked = true; }
+    }
+
     /// <summary>One page at a time: the one whose segment is selected.</summary>
     private void ShowPage()
     {

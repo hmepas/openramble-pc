@@ -37,6 +37,9 @@ public enum MenuRow
     PauseRecording,
     ResumeRecording,
     StopRecording,
+
+    /// <summary>"Library…", beside Settings; only where the shell has a Library.</summary>
+    Library,
     Settings,
     Quit,
 }
@@ -77,7 +80,8 @@ public static class MenuSections
         bool hasTakes,
         MeetingRecordingState recordingState = MeetingRecordingState.Idle,
         bool canRecord = false,
-        bool supportsSystemAudio = false)
+        bool supportsSystemAudio = false,
+        bool hasLibrary = false)
     {
         var sections = new List<IReadOnlyList<MenuRow>>();
         if (state != DictationState.Idle || recordingState == MeetingRecordingState.Idle || hasRecoveredText)
@@ -143,7 +147,9 @@ public static class MenuSections
                 throw new ArgumentOutOfRangeException(nameof(state));
         }
 
-        sections.Add([MenuRow.Settings, MenuRow.Quit]);
+        sections.Add(hasLibrary
+            ? [MenuRow.Library, MenuRow.Settings, MenuRow.Quit]
+            : [MenuRow.Settings, MenuRow.Quit]);
         return sections;
     }
 
@@ -167,7 +173,7 @@ public static class MenuSections
             MeetingRecordingState.Stopping => "Saving recording…",
             _ => RecordingLine(recordingState == MeetingRecordingState.Paused, duration, isDegraded, microphoneMissing),
         },
-        MenuRow.StartRecording => WithShortcut("Record", shortcut),
+        MenuRow.StartRecording => WithShortcut("Start Recording", shortcut),
         MenuRow.StartVoiceNote => "Record Voice Note",
         MenuRow.PauseRecording => "Pause Recording",
         MenuRow.ResumeRecording => "Resume Recording",

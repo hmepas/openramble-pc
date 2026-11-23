@@ -58,6 +58,21 @@ public sealed class ControlSocketTests
     }
 
     [Fact]
+    public void SettingsOpensTheWindowOnTheNamedPage()
+    {
+        var opened = new List<string?>();
+        using var server = new ControlSocketServer(new FakeHotkeyControl(), () => "Idle", openSettings: opened.Add);
+        using var bare = new ControlSocketServer(new FakeHotkeyControl(), () => "Idle");
+
+        Assert.Equal("ok settings", server.Execute("settings"));
+        Assert.Equal("ok settings setup", server.Execute("settings setup"));
+        Assert.Equal("ok settings about", server.Execute("  settings   about "));
+        Assert.Equal("error unknown page; one of general|setup|dictionary|about", server.Execute("settings history"));
+        Assert.Equal([null, "setup", "about"], opened);
+        Assert.Equal("error no settings here", bare.Execute("settings"));
+    }
+
+    [Fact]
     public void ToggleAsksTheKeyWhereItIsAndPutsItTheOtherWay()
     {
         var hotkey = new FakeHotkeyControl();

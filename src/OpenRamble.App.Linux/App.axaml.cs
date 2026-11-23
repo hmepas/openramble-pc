@@ -289,6 +289,10 @@ public sealed partial class App : Application
         // The pill that says a recording is running; it shows and hides itself with the state.
         WorkArea.Refresh();
         recordingHud = new RecordingHudWindow(built, () => Dispatcher.UIThread.Post(ShowLibrary));
+        // Both sit centred on the same edge; the dictation panel steps past the pill.
+        RecordingHudWindow hud = recordingHud;
+        panel.EdgeReserve = () => hud.EdgeReserve;
+        hud.EdgeChanged += panel.Replace;
 
         RefreshTray();
 

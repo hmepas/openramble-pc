@@ -39,15 +39,16 @@ public static class RecordingHud
     }
 
     /// <summary>
-    /// The pill's corner: the right end of the edge the dictation panel uses, so the two never
-    /// cover each other and the pill never covers the centred panel.
+    /// The pill's corner: centred on the edge the dictation panel uses. A corner is easy to miss
+    /// on a large screen; the centre is where the eye already goes for the dictation panel, which
+    /// steps past the pill while both are up (see <see cref="OverlayPlacementPolicy.Origin"/>).
     /// </summary>
     public static OverlayPoint Origin(
         DictationOverlayPlacement placement,
         OverlayFrame workArea,
         OverlaySize pillSize) =>
         new(
-            workArea.MaxX - pillSize.Width - OverlayPlacementPolicy.EdgeInset,
+            workArea.MidX - (pillSize.Width / 2),
             placement == DictationOverlayPlacement.Top
                 ? workArea.MinY + OverlayPlacementPolicy.EdgeInset
                 : workArea.MaxY - pillSize.Height - OverlayPlacementPolicy.EdgeInset);

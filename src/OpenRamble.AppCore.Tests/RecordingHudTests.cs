@@ -50,14 +50,19 @@ public sealed class RecordingHudTests
         Assert.Equal("12:34", stopping.Time);
     }
 
-    /// <summary>The right end of the dictation panel's edge, clear of the centred panel.</summary>
+    /// <summary>Centred on the dictation panel's edge; the panel steps past it.</summary>
     [Fact]
-    public void PillSitsAtTheRightEndOfThePanelsEdge()
+    public void PillSitsCentredOnThePanelsEdgeAndThePanelStepsPastIt()
     {
         var work = new OverlayFrame(0, 45, 3840, 2115);
         var pill = new OverlaySize(200, 40);
+        var panel = new OverlaySize(400, 60);
 
-        Assert.Equal(new OverlayPoint(3616, 69), RecordingHud.Origin(DictationOverlayPlacement.Top, work, pill));
-        Assert.Equal(new OverlayPoint(3616, 2096), RecordingHud.Origin(DictationOverlayPlacement.Bottom, work, pill));
+        Assert.Equal(new OverlayPoint(1820, 69), RecordingHud.Origin(DictationOverlayPlacement.Top, work, pill));
+        Assert.Equal(new OverlayPoint(1820, 2096), RecordingHud.Origin(DictationOverlayPlacement.Bottom, work, pill));
+
+        // 40 px pill + 8 px gap reserved at the edge.
+        Assert.Equal(new OverlayPoint(1720, 117), OverlayPlacementPolicy.Origin(DictationOverlayPlacement.Top, work, panel, 48));
+        Assert.Equal(new OverlayPoint(1720, 2028), OverlayPlacementPolicy.Origin(DictationOverlayPlacement.Bottom, work, panel, 48));
     }
 }

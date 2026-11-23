@@ -25,6 +25,19 @@ public sealed partial class RecordingHudWindow : Window
     private readonly AppState state;
     private readonly DispatcherTimer clock;
 
+    /// <summary>Gap between the pill and a dictation panel that steps past it, in device pixels.</summary>
+    private const double PanelGap = 8;
+
+    /// <summary>
+    /// The room the pill takes at the edge, in device pixels, for the dictation panel to step
+    /// past; zero while the pill is hidden.
+    /// </summary>
+    public double EdgeReserve =>
+        IsVisible ? Math.Round(Bounds.Height * (Screens.ScreenFromWindow(this)?.Scaling ?? 1)) + PanelGap : 0;
+
+    /// <summary>The pill appeared, disappeared or changed height: the panel should place again.</summary>
+    public event Action? EdgeChanged;
+
     public RecordingHudWindow(AppState state, Action openLibrary)
     {
         this.state = state;
@@ -37,7 +50,7 @@ public sealed partial class RecordingHudWindow : Window
         };
         PropertyChanged += (_, change) =>
         {
-            if (change.Property == ClientSizeProperty && IsVisible) { Place(); }
+            if (change.Property == ClientSizeProperty && IsVisible) { Place(); EdgeChanged?.Invoke(); }
         };
         // Whole seconds on the clock: twice a second is the most that can show a change.
         clock = new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, (_, _) => Render());
@@ -74,7 +87,7 @@ public sealed partial class RecordingHudWindow : Window
         if (!content.IsVisible)
         {
             clock.Stop();
-            if (IsVisible) { Hide(); }
+            if (IsVisible) { Hide(); EdgeChanged?.Invoke(); }
             return;
         }
 
@@ -91,6 +104,7 @@ public sealed partial class RecordingHudWindow : Window
             Show();
             // After the show: until it is laid out the window has no size to place by.
             Place();
+            EdgeChanged?.Invoke();
         }
     }
 

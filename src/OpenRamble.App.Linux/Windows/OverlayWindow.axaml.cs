@@ -64,6 +64,15 @@ public sealed partial class OverlayWindow : Window,
 
     private DictationOverlayPlacement placement = SettingsDefaults.OverlayPlacement;
 
+    /// <summary>
+    /// Device pixels already taken at the panel's edge (the recording pill while it is up). Read
+    /// at every placement; <see cref="Replace"/> re-reads it when the pill comes or goes.
+    /// </summary>
+    public Func<double> EdgeReserve { get; set; } = () => 0;
+
+    /// <summary>Place again if shown - the room at the edge changed.</summary>
+    public void Replace() { if (IsVisible) { Place(); } }
+
     public OverlayWindow()
     {
         InitializeComponent();
@@ -355,7 +364,8 @@ public sealed partial class OverlayWindow : Window,
         OverlayPoint origin = OverlayPlacementPolicy.Origin(
             placement,
             new OverlayFrame(work.X, work.Y, work.Width, work.Height),
-            size);
+            size,
+            EdgeReserve());
         Position = new PixelPoint((int)Math.Round(origin.X), (int)Math.Round(origin.Y));
     }
 }

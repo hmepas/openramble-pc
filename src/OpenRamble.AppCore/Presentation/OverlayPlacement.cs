@@ -75,13 +75,18 @@ public static class OverlayPlacementPolicy
 {
     public const double EdgeInset = 24;
 
+    /// <param name="edgeReserve">
+    /// Room already taken at the panel's edge - the recording pill while a recording runs - that
+    /// the panel steps past, so the two never cover each other.
+    /// </param>
     public static OverlayPoint Origin(
         DictationOverlayPlacement placement,
         OverlayFrame visibleFrame,
-        OverlaySize panelSize) =>
+        OverlaySize panelSize,
+        double edgeReserve = 0) =>
         new(
             visibleFrame.MidX - (panelSize.Width / 2),
             placement == DictationOverlayPlacement.Top
-                ? visibleFrame.MinY + EdgeInset
-                : visibleFrame.MaxY - panelSize.Height - EdgeInset);
+                ? visibleFrame.MinY + EdgeInset + edgeReserve
+                : visibleFrame.MaxY - panelSize.Height - EdgeInset - edgeReserve);
 }

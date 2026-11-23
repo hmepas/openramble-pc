@@ -12,6 +12,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DictationCore;
 using DictationCore.Audio;
+using OpenRamble.App.Linux.Controls;
 using OpenRamble.AppCore;
 
 namespace OpenRamble.App.Linux;
@@ -39,8 +40,13 @@ namespace OpenRamble.App.Linux;
 /// </remarks>
 public sealed class RecordingDetailView : UserControl
 {
-    private static readonly IBrush CurrentRow = new SolidColorBrush(Color.FromArgb(0x24, 0x3E, 0x63, 0xDD));
-    private static readonly IBrush AttentionWash = new SolidColorBrush(Color.FromArgb(0x1A, 0xF7, 0x6B, 0x15));
+    private static readonly IBrush AttentionWash = new SolidColorBrush(Color.FromArgb(0x1F, 0xF7, 0x6B, 0x15));
+
+    /// <summary>Lucide "share" (ISC): export.</summary>
+    private static readonly Geometry ShareIcon = Geometry.Parse("M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8 M16 6l-4-4-4 4 M12 2v13");
+
+    /// <summary>How far the back and forward buttons skip.</summary>
+    private const double SkipSeconds = 15;
 
     /// <summary>How far behind the live words may be before the line is worth saying (upstream TranscriptStatusPolicy).</summary>
     private const double BacklogVisibleAfter = 3;
@@ -52,8 +58,7 @@ public sealed class RecordingDetailView : UserControl
 
     private readonly TextBlock title = new()
     {
-        FontFamily = DictationDetailView.Serif,
-        FontSize = 24,
+        Classes = { "display24" },
         TextWrapping = TextWrapping.Wrap,
         MaxLines = 2,
         TextTrimming = TextTrimming.CharacterEllipsis,
@@ -61,45 +66,49 @@ public sealed class RecordingDetailView : UserControl
 
     private readonly TextBox titleEditor = new()
     {
-        FontFamily = DictationDetailView.Serif,
+        FontFamily = LibraryLook.Serif,
         FontSize = 24,
         IsVisible = false,
     };
 
-    private readonly TextBlock details = new() { FontSize = 13, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap };
-    private readonly TextBlock note = new() { TextWrapping = TextWrapping.Wrap, Foreground = StatusBrushes.Attention };
-    private readonly StackPanel transcript = new() { MaxWidth = 748, Margin = new Thickness(24, 8) };
+    private readonly TextBlock details = new() { Classes = { "detail" } };
+    private readonly TextBlock note = new() { FontSize = 13, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+    private readonly Border noteStrip = new() { Classes = { "content", "attention" }, Padding = new Thickness(16), Margin = new Thickness(0, 8, 0, 0) };
+    private readonly StackPanel transcript = new() { MaxWidth = 748, Margin = new Thickness(36, 8), HorizontalAlignment = HorizontalAlignment.Left };
     private readonly ScrollViewer scroller = new();
     private readonly Button jumpToLatest = new()
     {
-        Content = "↓ Jump to Latest",
+        Classes = { "plain" },
+        Content = "Jump to Latest",
         HorizontalAlignment = HorizontalAlignment.Center,
         VerticalAlignment = VerticalAlignment.Bottom,
         Margin = new Thickness(0, 0, 0, 8),
         IsVisible = false,
     };
 
-    private readonly TextBlock placeholderTitle = new() { FontSize = 17, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center };
+    private readonly TextBlock placeholderTitle = new() { Classes = { "display24" }, TextAlignment = TextAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
     private readonly TextBlock placeholderDetail = new()
     {
-        Foreground = Brushes.Gray,
+        Classes = { "body" },
         TextWrapping = TextWrapping.Wrap,
         TextAlignment = TextAlignment.Center,
         MaxWidth = 360,
     };
 
-    private readonly StackPanel placeholder = new() { Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBlock importLine = new() { Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
-    private readonly Button retryButton = new() { Content = "Retry", Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-    private readonly DockPanel statusLine = new() { Margin = new Thickness(24, 4) };
-    private readonly StackPanel healthStrip = new() { Spacing = 6, MaxWidth = 560, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 6, 0, 0) };
+    private readonly StackPanel placeholder = new() { Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock importLine = new() { Classes = { "detail" }, VerticalAlignment = VerticalAlignment.Center };
+    private readonly Button retryButton = new() { Classes = { "plain" }, Content = "Retry", Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+    private readonly DockPanel statusLine = new() { Margin = new Thickness(36, 4) };
+    private readonly StackPanel healthStrip = new() { Spacing = 8, MaxWidth = 560, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 8, 0, 0) };
     private readonly MenuItem exportTranscript = new() { Header = "Export Transcript…" };
     private readonly MenuItem exportAudio = new() { Header = "Export Audio…" };
-    private readonly Button exportButton = new() { Content = "Export…", VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(12, 4, 0, 0) };
-    private readonly Grid transportBar = new() { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto"), Margin = new Thickness(24, 8) };
-    private readonly Button playButton = new() { Width = 40, Height = 36, HorizontalContentAlignment = HorizontalAlignment.Center };
-    private readonly TextBlock positionText = new() { MinWidth = 48, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBlock durationText = new() { MinWidth = 48, VerticalAlignment = VerticalAlignment.Center };
+    private readonly Button exportButton = new() { Classes = { "icon" }, Content = new LucideIcon { Data = ShareIcon }, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(12, 0, 0, 0) };
+    private readonly Grid transportBar = new() { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,Auto,*,Auto"), Margin = new Thickness(36, 10) };
+    private readonly Button playButton = new() { Classes = { "icon" }, Width = 40, Height = 40, Content = LibraryLook.Icon("IconPlay", 18) };
+    private readonly Button backButton = LibraryLook.IconButton("IconRotateCcw", "Back 15 seconds");
+    private readonly Button forwardButton = LibraryLook.IconButton("IconRotateCw", "Forward 15 seconds");
+    private readonly TextBlock positionText = new() { Classes = { "clock" }, FontSize = 12, MinWidth = 48, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock durationText = new() { Classes = { "clock" }, FontSize = 12, MinWidth = 48, VerticalAlignment = VerticalAlignment.Center };
     private readonly Slider slider = new() { Minimum = 0, Maximum = 0.01, VerticalAlignment = VerticalAlignment.Center };
     private readonly PeakWaveform waveform = new() { Height = 32, VerticalAlignment = VerticalAlignment.Center };
 
@@ -143,6 +152,7 @@ public sealed class RecordingDetailView : UserControl
         };
         exportButton.Flyout = new MenuFlyout { Items = { exportTranscript, exportAudio } };
         AutomationProperties.SetName(exportButton, "Export");
+        ToolTip.SetTip(exportButton, "Export transcript or audio");
         // The whole title line takes the double-click, not only the glyphs of the title.
         var naming = new Panel { Background = Brushes.Transparent };
         naming.DoubleTapped += (_, args) =>
@@ -156,10 +166,15 @@ public sealed class RecordingDetailView : UserControl
         titleRow.Children.Add(naming);
         Grid.SetColumn(exportButton, 1);
         titleRow.Children.Add(exportButton);
-        var header = new StackPanel { Spacing = 4, Margin = new Thickness(24, 20, 24, 12) };
+        var header = new StackPanel { Spacing = 4, Margin = new Thickness(44, 28, 44, 12) };
         header.Children.Add(titleRow);
         header.Children.Add(details);
-        header.Children.Add(note);
+        LucideIcon alert = LibraryLook.Icon("IconTriangleAlert", 15);
+        alert.Foreground = StatusBrushes.Attention;
+        alert.Margin = new Thickness(0, 0, 10, 0);
+        DockPanel.SetDock(alert, Dock.Left);
+        noteStrip.Child = new DockPanel { Children = { alert, note } };
+        header.Children.Add(noteStrip);
         header.Children.Add(healthStrip);
 
         // The transcript, with its placeholder and the way back to the latest words over it.
@@ -172,6 +187,7 @@ public sealed class RecordingDetailView : UserControl
             scroller.ScrollToEnd();
         };
         placeholderDetail.HorizontalAlignment = HorizontalAlignment.Center;
+        placeholderDetail.TextAlignment = TextAlignment.Center;
         placeholder.Children.Add(placeholderTitle);
         placeholder.Children.Add(placeholderDetail);
         var body = new Panel();
@@ -199,14 +215,21 @@ public sealed class RecordingDetailView : UserControl
         var track = new Panel();
         track.Children.Add(waveform);
         track.Children.Add(slider);
+        backButton.Click += (_, _) => Skip(-SkipSeconds);
+        forwardButton.Click += (_, _) => Skip(SkipSeconds);
         Grid transport = transportBar;
+        transport.Children.Add(backButton);
+        Grid.SetColumn(playButton, 1);
         transport.Children.Add(playButton);
-        Grid.SetColumn(positionText, 1);
+        Grid.SetColumn(forwardButton, 2);
+        transport.Children.Add(forwardButton);
+        positionText.Margin = new Thickness(8, 0, 0, 0);
+        Grid.SetColumn(positionText, 3);
         transport.Children.Add(positionText);
         track.Margin = new Thickness(12, 0);
-        Grid.SetColumn(track, 2);
+        Grid.SetColumn(track, 4);
         transport.Children.Add(track);
-        Grid.SetColumn(durationText, 3);
+        Grid.SetColumn(durationText, 5);
         transport.Children.Add(durationText);
 
         var layout = new DockPanel();
@@ -419,7 +442,7 @@ public sealed class RecordingDetailView : UserControl
             length);
         string? warning = live ? null : RecordingsPlaceholder.EndNote(recording.EndReason) ?? RecordingsPlaceholder.DegradedNote(recording);
         note.Text = warning;
-        note.IsVisible = warning is not null;
+        noteStrip.IsVisible = warning is not null;
 
         exportButton.IsVisible = !live;
         exportTranscript.IsEnabled = state.Transcript(recording.Id).Count > 0;
@@ -456,24 +479,26 @@ public sealed class RecordingDetailView : UserControl
     private static Border HealthCard(string heading, string? detail, bool degraded)
     {
         var text = new StackPanel { Spacing = 2 };
-        text.Children.Add(new TextBlock
-        {
-            Text = (degraded ? "⚠ " : string.Empty) + heading,
-            FontWeight = FontWeight.SemiBold,
-            TextWrapping = TextWrapping.Wrap,
-        });
+        text.Children.Add(new TextBlock { Classes = { "setupTitle" }, Text = heading, TextWrapping = TextWrapping.Wrap });
         if (detail is not null)
         {
-            text.Children.Add(new TextBlock { Text = detail, FontSize = 12, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap });
+            text.Children.Add(new TextBlock { Classes = { "detail" }, Text = detail });
         }
 
+        var glyph = new StateGlyph
+        {
+            Kind = degraded ? StateGlyphKind.Attention : StateGlyphKind.Info,
+            GlyphSize = 15,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 2, 10, 0),
+        };
+        DockPanel.SetDock(glyph, Dock.Left);
         var card = new Border
         {
-            Child = text,
-            BorderBrush = degraded ? StatusBrushes.Attention : StatusBrushes.Neutral,
-            BorderThickness = new Thickness(3, 0, 0, 0),
-            Padding = new Thickness(10, 6),
-            CornerRadius = new CornerRadius(4),
+            Classes = { "content" },
+            Child = new DockPanel { Children = { glyph, text } },
+            Padding = new Thickness(14, 10),
+            CornerRadius = new CornerRadius(14),
         };
         if (degraded) { card.Background = AttentionWash; }
         AutomationProperties.SetName(card, detail is null ? heading : heading + ". " + detail);
@@ -511,7 +536,8 @@ public sealed class RecordingDetailView : UserControl
             : null;
         (string Text, bool Paused)? status = line is null ? TranscriptStatus(current.Id) : null;
         importLine.Text = line ?? status?.Text;
-        importLine.Foreground = status is { Paused: true } ? StatusBrushes.Attention : Brushes.Gray;
+        if (status is { Paused: true }) { importLine.Foreground = StatusBrushes.Attention; }
+        else { importLine.ClearValue(TextBlock.ForegroundProperty); }
         retryButton.IsVisible = status is { Paused: true };
         statusLine.IsVisible = importLine.Text is not null;
 
@@ -565,20 +591,22 @@ public sealed class RecordingDetailView : UserControl
 
     private static Control SpeakerHeading(MeetingChannel channel)
     {
-        var heading = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(6, 12, 6, 4) };
-        heading.Children.Add(new Border
+        var heading = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(8, 16, 8, 4) };
+        var mark = new Border
         {
-            Width = 3,
-            Height = 12,
-            CornerRadius = new CornerRadius(1),
-            Background = channel == MeetingChannel.Microphone ? StatusBrushes.Processing : Brushes.Gray,
+            Width = 6,
+            Height = 6,
+            CornerRadius = new CornerRadius(3),
             VerticalAlignment = VerticalAlignment.Center,
-        });
+        };
+        if (channel == MeetingChannel.Microphone) { mark.Background = StatusBrushes.Processing; }
+        else { ThemeTokens.Bind(mark, Border.BackgroundProperty, ThemeTokens.Label3); }
+        heading.Children.Add(mark);
         heading.Children.Add(new TextBlock
         {
+            Classes = { "small" },
             Text = MeetingTranscriptFormatter.Name(channel),
-            FontWeight = FontWeight.SemiBold,
-            Foreground = Brushes.Gray,
+            FontWeight = FontWeight.Medium,
         });
         return heading;
     }
@@ -587,15 +615,14 @@ public sealed class RecordingDetailView : UserControl
     {
         var stamp = new Button
         {
-            Content = RecordingTime.Clock(TimeSpan.FromSeconds(utterance.Start)),
-            Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            Padding = new Thickness(0, 2),
-            FontSize = 12,
-            Foreground = Brushes.Gray,
+            Classes = { "quiet" },
+            Content = new TextBlock { Classes = { "small", "tnum" }, Text = RecordingTime.Clock(TimeSpan.FromSeconds(utterance.Start)) },
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(6, 0),
+            MinHeight = 22,
             HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Top,
-            Cursor = new Cursor(StandardCursorType.Hand),
+            Margin = new Thickness(0, 3, 0, 0),
         };
         ToolTip.SetTip(stamp, "Play from " + RecordingTime.Clock(TimeSpan.FromSeconds(utterance.Start)));
         AutomationProperties.SetName(stamp, "Play from " + RecordingTime.Spoken(TimeSpan.FromSeconds(utterance.Start)));
@@ -605,21 +632,16 @@ public sealed class RecordingDetailView : UserControl
             ? new TextBlock
             {
                 Text = "Couldn't transcribe this part",
+                FontFamily = LibraryLook.Serif,
                 FontStyle = FontStyle.Italic,
                 Foreground = StatusBrushes.Attention,
-                FontSize = 15,
+                FontSize = 19,
             }
-            : new SelectableTextBlock
-            {
-                Text = utterance.Text,
-                FontSize = 15,
-                LineHeight = 22,
-                TextWrapping = TextWrapping.Wrap,
-            };
+            : Words(utterance.Text);
         string said = utterance.IsFailed ? "Couldn't transcribe this part" : utterance.Text;
         AutomationProperties.SetName(text, speakers ? MeetingTranscriptFormatter.Name(utterance.Channel) + ": " + said : said);
 
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("52,*") };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("56,*") };
         grid.Children.Add(stamp);
         text.Margin = new Thickness(12, 0, 0, 0);
         Grid.SetColumn(text, 1);
@@ -627,9 +649,24 @@ public sealed class RecordingDetailView : UserControl
         return new Border
         {
             Child = grid,
-            Padding = new Thickness(6),
-            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(8, 6),
+            CornerRadius = new CornerRadius(10),
         };
+    }
+
+    /// <summary>A paragraph of what was said: the serif, 19 on 28, selectable.</summary>
+    private static SelectableTextBlock Words(string text)
+    {
+        var words = new SelectableTextBlock
+        {
+            Text = text,
+            FontFamily = LibraryLook.Serif,
+            FontSize = 19,
+            LineHeight = 28,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        ThemeTokens.Bind(words, TextBlock.ForegroundProperty, ThemeTokens.Label);
+        return words;
     }
 
     /// <summary>The playhead, ten times a second while something moves: slider, clocks, waveform, paragraph.</summary>
@@ -652,12 +689,14 @@ public sealed class RecordingDetailView : UserControl
         }
 
         slider.IsEnabled = loaded && duration > 0;
+        backButton.IsEnabled = slider.IsEnabled;
+        forwardButton.IsEnabled = slider.IsEnabled;
         // Enabled while the audio is still opening (ffprobe), so the control is there at once;
         // a press meanwhile plays once it is open.
         bool failed = !loaded && (audioMissing || player.FailedToLoad);
         playButton.IsEnabled = loaded ? duration > 0 : !failed;
         ToolTip.SetTip(playButton, failed ? "Couldn't open this recording's audio" : null);
-        playButton.Content = playing ? "❚❚" : "▶";
+        ((LucideIcon)playButton.Content!).Data = LibraryLook.Geometry(playing ? "IconPause" : "IconPlay");
         AutomationProperties.SetName(playButton, playing ? "Pause" : "Play");
         positionText.Text = RecordingTime.Clock(TimeSpan.FromSeconds(position));
         durationText.Text = RecordingTime.Clock(TimeSpan.FromSeconds(duration));
@@ -673,7 +712,7 @@ public sealed class RecordingDetailView : UserControl
     {
         if (current == highlighted) { return; }
         if (highlighted is { } previous && rows.TryGetValue(previous, out Border? old)) { old.Background = null; }
-        if (current is { } next && rows.TryGetValue(next, out Border? row)) { row.Background = CurrentRow; }
+        if (current is { } next && rows.TryGetValue(next, out Border? row)) { row.Background = ThemeTokens.BrushOf(row, "Fill"); }
         highlighted = current;
     }
 
@@ -684,6 +723,14 @@ public sealed class RecordingDetailView : UserControl
         if (!IsAudioLoaded) { return; }
         player.Seek(TimeSpan.FromSeconds(seconds));
         player.Play();
+        UpdatePlayhead();
+    }
+
+    private void Skip(double seconds)
+    {
+        if (!IsAudioLoaded) { return; }
+        double end = player.Duration.TotalSeconds;
+        player.Seek(TimeSpan.FromSeconds(Math.Clamp(player.Position.TotalSeconds + seconds, 0, end)));
         UpdatePlayhead();
     }
 

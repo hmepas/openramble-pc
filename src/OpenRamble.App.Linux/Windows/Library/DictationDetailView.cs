@@ -7,6 +7,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using OpenRamble.App.Linux.Controls;
 using OpenRamble.AppCore;
 
 namespace OpenRamble.App.Linux;
@@ -22,14 +23,12 @@ namespace OpenRamble.App.Linux;
 /// </remarks>
 public sealed class DictationDetailView : UserControl
 {
-    internal static readonly FontFamily Serif = new("Georgia, Noto Serif, DejaVu Serif, Liberation Serif, serif");
-
     private readonly AppState state;
     private readonly RecordingPlayer player;
-    private readonly TextBlock date = new() { FontSize = 13, Foreground = Brushes.Gray };
+    private readonly TextBlock date = new() { Classes = { "detail" } };
     private readonly SelectableTextBlock words = new()
     {
-        FontFamily = Serif,
+        FontFamily = LibraryLook.Serif,
         FontSize = 26,
         LineHeight = 36,
         TextWrapping = TextWrapping.Wrap,
@@ -37,16 +36,17 @@ public sealed class DictationDetailView : UserControl
 
     private readonly TextBlock nothing = new()
     {
+        Classes = { "words26" },
         Text = "Nothing recognized",
-        FontFamily = Serif,
-        FontSize = 26,
-        Foreground = Brushes.Gray,
     };
 
-    private readonly Button play = new();
-    private readonly Button again = new() { Content = "↻ Recognize again" };
-    private readonly ToggleButton keep = new();
-    private readonly TextBlock gone = new() { Text = "Recording no longer on disk", Foreground = Brushes.Gray, FontSize = 12 };
+    private readonly Button play = new() { Classes = { "quiet" } };
+    private readonly LucideIcon playIcon;
+    private readonly TextBlock playLabel;
+    private readonly Button again = new() { Classes = { "quiet" } };
+    private readonly ToggleButton keep = new() { Classes = { "quiet" } };
+    private readonly LucideIcon keepIcon;
+    private readonly TextBlock gone = new() { Classes = { "detail" }, Text = "Recording no longer on disk" };
     private HistoryEntry? entry;
     private bool attached;
     private bool updating;
@@ -55,6 +55,11 @@ public sealed class DictationDetailView : UserControl
     {
         this.state = state;
         this.player = player;
+        ThemeTokens.Bind(words, TextBlock.ForegroundProperty, ThemeTokens.Label);
+        ThemeTokens.Bind(nothing, TextBlock.ForegroundProperty, ThemeTokens.Label2);
+        play.Content = LibraryLook.Labelled("IconPlay", "Play", out playIcon, out playLabel);
+        again.Content = LibraryLook.Labelled("IconRotateCcw", "Recognize again", out _, out _);
+        keep.Content = LibraryLook.Labelled("IconStar", "Keep", out keepIcon, out _);
 
         play.Click += (_, _) => TogglePlayback();
         again.Click += (_, _) =>
@@ -72,21 +77,21 @@ public sealed class DictationDetailView : UserControl
         var buttons = new DockPanel { LastChildFill = false };
         DockPanel.SetDock(keep, Dock.Right);
         buttons.Children.Add(keep);
-        var left = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var left = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
         left.Children.Add(play);
         left.Children.Add(again);
         left.Children.Add(gone);
         gone.VerticalAlignment = VerticalAlignment.Center;
         buttons.Children.Add(left);
 
-        var column = new StackPanel { Spacing = 28, MaxWidth = 680, HorizontalAlignment = HorizontalAlignment.Left };
+        var column = new StackPanel { Spacing = 24, MaxWidth = 680, HorizontalAlignment = HorizontalAlignment.Left };
         column.Children.Add(date);
         column.Children.Add(words);
         column.Children.Add(nothing);
         column.Children.Add(buttons);
         Content = new ScrollViewer
         {
-            Content = new Border { Padding = new Thickness(32, 40), Child = column },
+            Content = new Border { Padding = new Thickness(44, 36), Child = column },
         };
     }
 
@@ -197,7 +202,8 @@ public sealed class DictationDetailView : UserControl
         play.IsVisible = hasAudio;
         again.IsVisible = hasAudio;
         gone.IsVisible = !hasAudio;
-        play.Content = playing ? "■ Stop" : "▶ Play";
+        playIcon.Data = LibraryLook.Geometry(playing ? "IconSquare" : "IconPlay");
+        playLabel.Text = playing ? "Stop" : "Play";
         AutomationProperties.SetName(play, playing ? "Stop playback" : "Play this recording");
         again.IsEnabled = !state.IsRetranscribing && state.IsEngineReady;
 
@@ -211,9 +217,9 @@ public sealed class DictationDetailView : UserControl
             updating = false;
         }
 
-        keep.Content = current.IsKept ? "★ Keep" : "☆ Keep";
-        if (current.IsKept) { keep.Foreground = StatusBrushes.Attention; }
-        else { keep.ClearValue(ForegroundProperty); }
+        // The star is the only thing that changes colour: a kept one is orange.
+        if (current.IsKept) { keepIcon.Foreground = StatusBrushes.Attention; }
+        else { keepIcon.ClearValue(LucideIcon.ForegroundProperty); }
         ToolTip.SetTip(keep, current.IsKept ? "Stop keeping this one" : "Keep this one");
         AutomationProperties.SetName(keep, current.IsKept ? "Kept. Stop keeping" : "Keep this dictation");
     }

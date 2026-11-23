@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using DictationCore;
 using DictationCore.Audio;
 
@@ -57,7 +56,7 @@ public sealed class PipeWireMeetingSourceTests
     {
         var recorder = new FakeRecorderProcess();
         var blocks = new BlockingCollection<MeetingAudioBlock>();
-        var source = Source(recorder, clock: () => Stopwatch.Frequency); // one second
+        var source = Source(recorder, clock: () => 1_000_000_000UL); // one second
 
         source.Start(blocks.Add, _ => { });
         recorder.Feed(new float[320]); // 20 ms
@@ -100,19 +99,49 @@ public sealed class PipeWireMeetingSourceTests
     }
 
     [Fact]
-    public void AMissingRecorderIsUnavailable()
+    public void AMissingRecorderIsUnavailableAndThrownFromStart()
     {
-        var failures = new List<MeetingSourceFailure>();
         var source = new PipeWireMeetingSource(
             PipeWireMeetingSource.SourceKind.SystemAudio, null, null,
             _ => throw new AudioCaptureError.EngineUnavailable("pw-record was not found on PATH."));
 
-        source.Start(_ => Assert.Fail("no audio expected"), failures.Add);
+        MeetingSourceException error = Assert.Throws<MeetingSourceException>(
+            () => source.Start(_ => Assert.Fail("no audio expected"), _ => Assert.Fail("no failure callback expected")));
         source.Stop();
 
         MeetingSourceFailure.Unavailable unavailable =
-            Assert.IsType<MeetingSourceFailure.Unavailable>(Assert.Single(failures));
+            Assert.IsType<MeetingSourceFailure.Unavailable>(error.Failure);
         Assert.Contains("pw-record", unavailable.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALauncherThatReportsAStartFailureIsThrownAsIs()
+    {
+        var source = new PipeWireMeetingSource(
+            PipeWireMeetingSource.SourceKind.Microphone, null, null,
+            _ => throw new MeetingSourceException(new MeetingSourceFailure.StartFailed("refused")));
+
+        MeetingSourceException error = Assert.Throws<MeetingSourceException>(
+            () => source.Start(_ => { }, _ => Assert.Fail("no failure callback expected")));
+
+        Assert.Equal(new MeetingSourceFailure.StartFailed("refused"), error.Failure);
+    }
+
+    [Fact]
+    public void ARealBlockIsStampedOnTheCapturesHostClock()
+    {
+        var recorder = new FakeRecorderProcess();
+        var blocks = new BlockingCollection<MeetingAudioBlock>();
+        var source = Source(recorder);
+
+        ulong before = MeetingAudioBlock.HostNanosecondsNow();
+        source.Start(blocks.Add, _ => { });
+        recorder.Feed(new float[320]); // 20 ms
+        Assert.True(blocks.TryTake(out MeetingAudioBlock? block, Wait));
+        ulong after = MeetingAudioBlock.HostNanosecondsNow();
+        source.Stop();
+
+        Assert.InRange(block!.HostNanoseconds!.Value, before - 20_000_000UL, after - 20_000_000UL);
     }
 
     [LinuxFact]
@@ -122,11 +151,10 @@ public sealed class PipeWireMeetingSourceTests
         try
         {
             Environment.SetEnvironmentVariable("PATH", "/nonexistent/openramble-has-no-recorder");
-            var failures = new List<MeetingSourceFailure>();
+            MeetingSourceException error = Assert.Throws<MeetingSourceException>(
+                () => PipeWireMeetingSource.SystemAudio().Start(_ => { }, _ => { }));
 
-            PipeWireMeetingSource.SystemAudio().Start(_ => { }, failures.Add);
-
-            Assert.IsType<MeetingSourceFailure.Unavailable>(Assert.Single(failures));
+            Assert.IsType<MeetingSourceFailure.Unavailable>(error.Failure);
         }
         finally
         {
@@ -191,6 +219,6 @@ public sealed class PipeWireMeetingSourceTests
         Assert.Null(source.DeviceName);
     }
 
-    private static PipeWireMeetingSource Source(FakeRecorderProcess recorder, Func<long>? clock = null) =>
+    private static PipeWireMeetingSource Source(FakeRecorderProcess recorder, Func<ulong>? clock = null) =>
         new(PipeWireMeetingSource.SourceKind.SystemAudio, null, null, _ => recorder, clock);
 }

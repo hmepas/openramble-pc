@@ -113,7 +113,9 @@ public sealed class MeetingCapture
     /// <param name="onLevels">Meter updates, about ten a second, from a background thread.</param>
     /// <param name="onSegment">
     /// A stretch of one channel that is on disk and worth a decode. Delivered from a background
-    /// thread, in file order per channel, including the tails at pause and stop.
+    /// thread, in file order per channel, including the tails at pause and stop. Both callbacks run
+    /// with no capture lock held, so they may call <see cref="Pause"/>, <see cref="Stop"/> or
+    /// <see cref="RecoverMicrophone"/>.
     /// </param>
     /// <param name="onFailure">
     /// The recording stopped itself, or one side did. Never called for something the caller asked
@@ -177,6 +179,18 @@ public sealed class MeetingCapture
     /// note's microphone would not open.</exception>
     public void Start()
     {
+        try
+        {
+            StartLocked();
+        }
+        finally
+        {
+            pipeline.DeliverPending();
+        }
+    }
+
+    private void StartLocked()
+    {
         lock (gate)
         {
             if (state != CaptureState.Idle) { throw new MeetingCaptureException(new Failure.NotIdle()); }
@@ -231,6 +245,7 @@ public sealed class MeetingCapture
             pausedAt = DateTimeOffset.UtcNow;
             state = CaptureState.Paused;
         }
+        pipeline.DeliverPending();
     }
 
     public void Resume()
@@ -255,6 +270,13 @@ public sealed class MeetingCapture
     /// first would discard whatever was still in flight.
     /// </summary>
     public Summary Stop()
+    {
+        Summary summary = StopLocked();
+        pipeline.DeliverPending();
+        return summary;
+    }
+
+    private Summary StopLocked()
     {
         lock (gate)
         {
@@ -524,6 +546,13 @@ internal sealed class MeetingPipeline
     private MeetingCapture.Levels publishedLevels = MeetingCapture.Levels.Silent;
     private readonly Dictionary<MeetingChannel, MeetingCapture.ChannelHealth> channelHealth = [];
 
+    // Segments and levels wait here, in the order the queue produced them, and are raised with no
+    // lock held: a consumer may stop, pause or recover the capture from inside a callback. One
+    // thread delivers at a time, so a channel's segments never overtake each other.
+    private readonly Lock outboxGate = new();
+    private readonly Queue<Action> outbox = new();
+    private bool delivering;
+
     internal MeetingPipeline(
         MeetingWriter writer,
         HashSet<MeetingChannel> activeChannels,
@@ -634,6 +663,43 @@ internal sealed class MeetingPipeline
             if (aligner.Drain() is { } emission) { Write(emission); }
             AccumulateLevels(channel, peak, block.Samples.Length);
         }
+        DeliverPending();
+    }
+
+    /// <summary>
+    /// Raise the queued segments and levels. Call with no lock held. Returns at once when another
+    /// thread - or an outer frame of this one, a callback that paused - is already delivering:
+    /// that delivery picks up whatever was queued meanwhile.
+    /// </summary>
+    internal void DeliverPending()
+    {
+        lock (outboxGate)
+        {
+            if (delivering) { return; }
+            delivering = true;
+        }
+        try
+        {
+            while (true)
+            {
+                Action next;
+                lock (outboxGate)
+                {
+                    if (!outbox.TryDequeue(out Action? queued))
+                    {
+                        delivering = false;
+                        return;
+                    }
+                    next = queued;
+                }
+                next();
+            }
+        }
+        catch
+        {
+            lock (outboxGate) { delivering = false; }
+            throw;
+        }
     }
 
     internal void MarkDown(MeetingChannel channel, MeetingGap.GapReason reason)
@@ -704,7 +770,7 @@ internal sealed class MeetingPipeline
             }
             else if (policies[channel].Observe(peak, samples.Length) is { } segment)
             {
-                onSegment(segment);
+                Post(() => onSegment(segment));
             }
         }
         if (writer.FrameCount >= nextDiskCheckFrame)
@@ -723,7 +789,7 @@ internal sealed class MeetingPipeline
         ReleaseMicrophone(keeping: 0);
         foreach (MeetingChannel channel in activeChannels)
         {
-            if (policies[channel].Flush() is { } tail) { onSegment(tail); }
+            if (policies[channel].Flush() is { } tail) { Post(() => onSegment(tail)); }
         }
     }
 
@@ -751,7 +817,7 @@ internal sealed class MeetingPipeline
             if (policies.TryGetValue(MeetingChannel.Microphone, out MeetingSegmentPolicy? policy)
                 && policy.Observe(peak, count) is { } segment)
             {
-                onSegment(segment);
+                Post(() => onSegment(segment));
             }
         }
     }
@@ -804,6 +870,11 @@ internal sealed class MeetingPipeline
         levelSystem = 0;
         levelWindowFrames = 0;
         lock (published) { publishedLevels = levels; }
-        onLevels(levels);
+        Post(() => onLevels(levels));
+    }
+
+    private void Post(Action raise)
+    {
+        lock (outboxGate) { outbox.Enqueue(raise); }
     }
 }

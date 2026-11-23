@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using DictationCore;
 using DictationCore.Audio;
 using OpenRamble.AppCore;
@@ -18,8 +17,9 @@ namespace OpenRamble.LinuxAudio;
 /// recording - the meeting restarts the source and marks the gap.
 /// </para>
 /// <para>
-/// <b>Timestamps.</b> Taken when a read returns, minus the block's own duration, so they mark the
-/// first frame. The pipe adds a few milliseconds of jitter; <see cref="ChannelClock"/> absorbs it.
+/// <b>Timestamps.</b> <see cref="MeetingAudioBlock.HostNanosecondsNow"/> when a read returns,
+/// minus the block's own duration, so they mark the first frame on the clock the capture anchors
+/// on. The pipe adds a few milliseconds of jitter; <see cref="ChannelClock"/> absorbs it.
 /// </para>
 /// </remarks>
 public sealed class PipeWireMeetingSource : IMeetingAudioSource
@@ -41,25 +41,25 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
 
     private readonly Lock gate = new();
     private readonly RecorderProcessLauncher launch;
-    private readonly Func<long> clock;
+    private readonly Func<ulong> clock;
     private string? target;
     private string? deviceName;
     private Run? current;
 
     /// <summary>The same source with the recorder and the clock replaced - the seam tests drive.</summary>
-    /// <param name="clock">Stopwatch ticks, as <see cref="Stopwatch.GetTimestamp"/> returns them.</param>
+    /// <param name="clock">Host nanoseconds, as <see cref="MeetingAudioBlock.HostNanosecondsNow"/> returns them.</param>
     internal PipeWireMeetingSource(
         SourceKind kind,
         string? target,
         string? deviceName,
         RecorderProcessLauncher launch,
-        Func<long>? clock = null)
+        Func<ulong>? clock = null)
     {
         Kind = kind;
         this.target = target;
         this.deviceName = deviceName;
         this.launch = launch;
-        this.clock = clock ?? Stopwatch.GetTimestamp;
+        this.clock = clock ?? MeetingAudioBlock.HostNanosecondsNow;
     }
 
     public SourceKind Kind { get; }
@@ -74,13 +74,37 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
     /// <param name="deviceName">The chosen input's name, for <c>meta.json</c>.</param>
     public static PipeWireMeetingSource Microphone(string? targetNodeName, string? deviceName) =>
         new(SourceKind.Microphone, targetNodeName, deviceName,
-            chosen => PwRecordProcess.Launch(Format, chosen));
+            chosen => LaunchRecorder(chosen, captureSink: false));
 
     /// <summary>The default output's monitor - the other side of the call. Follows the default sink.</summary>
     public static PipeWireMeetingSource SystemAudio() =>
         new(SourceKind.SystemAudio, target: null, deviceName: null,
-            _ => PwRecordProcess.Launch(Format, captureSink: true));
+            _ => LaunchRecorder(target: null, captureSink: true));
 
+    /// <summary>
+    /// <see cref="PwRecordProcess.Launch"/>, with its one error told apart: no tool is
+    /// <see cref="MeetingSourceFailure.Unavailable"/>, a tool that would not start is
+    /// <see cref="MeetingSourceFailure.StartFailed"/>.
+    /// </summary>
+    private static IRecorderProcess LaunchRecorder(string? target, bool captureSink)
+    {
+        try
+        {
+            return PwRecordProcess.Launch(Format, target, captureSink);
+        }
+        catch (AudioCaptureError.EngineUnavailable error)
+        {
+            MeetingSourceFailure failure = ExecutablePath.Find(PwRecordProcess.Executable) is null
+                ? new MeetingSourceFailure.Unavailable(error.Message)
+                : new MeetingSourceFailure.StartFailed(error.Message);
+            throw new MeetingSourceException(failure);
+        }
+    }
+
+    /// <exception cref="MeetingSourceException">
+    /// <see cref="MeetingSourceFailure.Unavailable"/> without <c>pw-record</c>,
+    /// <see cref="MeetingSourceFailure.StartFailed"/> when it would not start.
+    /// </exception>
     public void Start(Action<MeetingAudioBlock> onBlock, Action<MeetingSourceFailure> onFailure)
     {
         ArgumentNullException.ThrowIfNull(onBlock);
@@ -108,11 +132,15 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
         {
             recorder = launch(chosen);
         }
+        catch (MeetingSourceException error)
+        {
+            Emit("meeting.source.unavailable", ("message", error.Message));
+            throw;
+        }
         catch (AudioCaptureError.EngineUnavailable error)
         {
             Emit("meeting.source.unavailable", ("message", error.Message));
-            onFailure(new MeetingSourceFailure.Unavailable(error.Message));
-            return;
+            throw new MeetingSourceException(new MeetingSourceFailure.Unavailable(error.Message));
         }
 
         var run = new Run(recorder);
@@ -157,11 +185,10 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
     /// Host time of a block's first frame, in nanoseconds: the clock at arrival minus the block's
     /// own duration.
     /// </summary>
-    internal static ulong FirstFrameNanoseconds(long ticks, int samples)
+    internal static ulong FirstFrameNanoseconds(ulong now, int samples)
     {
-        UInt128 now = (UInt128)(ulong)Math.Max(ticks, 0) * 1_000_000_000UL / (ulong)Stopwatch.Frequency;
-        UInt128 duration = (UInt128)(ulong)samples * 1_000_000_000UL / (ulong)Format.SampleRate;
-        return now > duration ? (ulong)(now - duration) : 0UL;
+        ulong duration = (ulong)samples * 1_000_000_000UL / (ulong)Format.SampleRate;
+        return now > duration ? now - duration : 0UL;
     }
 
     private void Read(Run run, Action<MeetingAudioBlock> onBlock, Action<MeetingSourceFailure> onFailure)

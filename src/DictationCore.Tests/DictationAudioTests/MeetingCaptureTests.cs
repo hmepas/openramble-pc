@@ -672,4 +672,64 @@ public sealed class MeetingCaptureTests : IDisposable
         _ = capture.Stop();
         Assert.Equal([MeetingChannel.System], segments.Select(s => s.Channel));
     }
+
+    /// <summary>
+    /// Segments are raised with no capture lock held: a consumer that pauses from inside the
+    /// callback - directly, or by handing the pause to another thread and waiting, as a UI
+    /// dispatcher would - neither deadlocks nor re-enters the callback.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TestASegmentHandlerCanPauseTheCapture(bool fromAnotherThread)
+    {
+        var microphone = new ScriptedAudioSource();
+        var segments = new List<MeetingSegmentRef>();
+        int depth = 0;
+        bool reentered = false;
+        MeetingCapture? capture = null;
+        capture = new MeetingCapture(
+            directory,
+            microphone,
+            systemAudio: null,
+            segmentParameters: new MeetingSegmentPolicy.Parameters(
+                speech: new SpeechSegmenter.Parameters(minimumSegment: TimeSpan.FromSeconds(2)),
+                hardCap: TimeSpan.FromSeconds(20)),
+            onSegment: segment =>
+            {
+                reentered |= Interlocked.Increment(ref depth) > 1;
+                bool first;
+                lock (segments) { segments.Add(segment); first = segments.Count == 1; }
+                if (first)
+                {
+                    if (fromAnotherThread)
+                    {
+                        Assert.True(Task.Run(capture!.Pause).Wait(TimeSpan.FromSeconds(5)), "the pause deadlocked");
+                    }
+                    else
+                    {
+                        capture!.Pause();
+                    }
+                }
+                Interlocked.Decrement(ref depth);
+            });
+        capture.Start();
+
+        // Delivered from a source thread, as a real device would.
+        await Task.Run(() =>
+        {
+            for (int i = 0; i < 30; i++) { microphone.Deliver(Constant(0.5f, 1_600)); }
+            for (int i = 0; i < 10; i++) { microphone.Deliver(Constant(0, 1_600)); }
+            for (int i = 0; i < 20; i++) { microphone.Deliver(Constant(0.5f, 1_600)); }
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(MeetingCapture.CaptureState.Paused, capture.State);
+        Assert.False(reentered, "the handler was re-entered");
+        _ = capture.Stop();
+        lock (segments)
+        {
+            Assert.NotEmpty(segments);
+            for (int i = 1; i < segments.Count; i++) { Assert.Equal(segments[i - 1].EndFrame, segments[i].StartFrame); }
+        }
+    }
 }

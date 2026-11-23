@@ -1,0 +1,116 @@
+<!--
+  Design tokens, after upstream design/tokens.json (GlassTokens.swift). Colours are brushes keyed
+  by the token name and differ per theme variant, so reference them with DynamicResource; the
+  geometry, spacing and type tokens are the same in both and StaticResource is fine. Status
+  colours stay in Windows/StatusBrushes.cs (shared with the Windows shell); the tints below are
+  those colours at 12% for tinted content blocks.
+-->
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="using:System">
+
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Light">
+      <SolidColorBrush x:Key="Label" Color="#D9000000" />
+      <SolidColorBrush x:Key="Label2" Color="#80000000" />
+      <SolidColorBrush x:Key="Label3" Color="#47000000" />
+      <SolidColorBrush x:Key="Fill" Color="#1A747480" />
+      <SolidColorBrush x:Key="FillStrong" Color="#29747480" />
+      <SolidColorBrush x:Key="ContentFill" Color="#0B000000" />
+      <SolidColorBrush x:Key="Hairline" Color="#1F000000" />
+      <SolidColorBrush x:Key="Sheen" Color="#B3FFFFFF" />
+      <SolidColorBrush x:Key="GlassSurface" Color="#EBF6F6F8" />
+      <SolidColorBrush x:Key="WindowBackground" Color="#F6F6F8" />
+      <SolidColorBrush x:Key="Accent" Color="#0A84FF" />
+      <SolidColorBrush x:Key="Bad" Color="#D70015" />
+      <SolidColorBrush x:Key="InkBackground" Color="#171717" />
+      <SolidColorBrush x:Key="InkForeground" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="KeyCapFaceTop" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="KeyCapFaceBottom" Color="#F4F4F4" />
+      <SolidColorBrush x:Key="KeyCapSide" Color="#C7C7C7" />
+      <SolidColorBrush x:Key="KeyCapEdge" Color="#1A000000" />
+      <SolidColorBrush x:Key="KeyCapShadow" Color="#29000000" />
+      <!-- Glass edge: the top highlight fading into the hairline a few pixels down. -->
+      <LinearGradientBrush x:Key="GlassBorder" StartPoint="0%,0%" EndPoint="0%,100%">
+        <GradientStop Offset="0" Color="#B3FFFFFF" />
+        <GradientStop Offset="0.12" Color="#1F000000" />
+        <GradientStop Offset="1" Color="#1F000000" />
+      </LinearGradientBrush>
+      <BoxShadows x:Key="GlassShadow">0 8 24 0 #33000000</BoxShadows>
+      <BoxShadows x:Key="SegmentShadow">0 1 3 0 #26000000</BoxShadows>
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Dark">
+      <SolidColorBrush x:Key="Label" Color="#EBFFFFFF" />
+      <SolidColorBrush x:Key="Label2" Color="#8CFFFFFF" />
+      <SolidColorBrush x:Key="Label3" Color="#4DFFFFFF" />
+      <SolidColorBrush x:Key="Fill" Color="#3D767680" />
+      <SolidColorBrush x:Key="FillStrong" Color="#5C767680" />
+      <SolidColorBrush x:Key="ContentFill" Color="#0BFFFFFF" />
+      <SolidColorBrush x:Key="Hairline" Color="#1FFFFFFF" />
+      <SolidColorBrush x:Key="Sheen" Color="#29FFFFFF" />
+      <SolidColorBrush x:Key="GlassSurface" Color="#EB1C1C20" />
+      <SolidColorBrush x:Key="WindowBackground" Color="#1C1C20" />
+      <SolidColorBrush x:Key="Accent" Color="#0A84FF" />
+      <SolidColorBrush x:Key="Bad" Color="#FF453A" />
+      <SolidColorBrush x:Key="InkBackground" Color="#FFFFFF" />
+      <SolidColorBrush x:Key="InkForeground" Color="#000000" />
+      <SolidColorBrush x:Key="KeyCapFaceTop" Color="#4D4D4D" />
+      <SolidColorBrush x:Key="KeyCapFaceBottom" Color="#383838" />
+      <SolidColorBrush x:Key="KeyCapSide" Color="#171717" />
+      <SolidColorBrush x:Key="KeyCapEdge" Color="#33FFFFFF" />
+      <SolidColorBrush x:Key="KeyCapShadow" Color="#80000000" />
+      <LinearGradientBrush x:Key="GlassBorder" StartPoint="0%,0%" EndPoint="0%,100%">
+        <GradientStop Offset="0" Color="#29FFFFFF" />
+        <GradientStop Offset="0.12" Color="#1FFFFFFF" />
+        <GradientStop Offset="1" Color="#1FFFFFFF" />
+      </LinearGradientBrush>
+      <BoxShadows x:Key="GlassShadow">0 8 24 0 #66000000</BoxShadows>
+      <BoxShadows x:Key="SegmentShadow">0 1 3 0 #66000000</BoxShadows>
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+
+  <!-- Status colours (StatusBrushes.cs) at 12%: tinted content blocks. Same in both themes. -->
+  <SolidColorBrush x:Key="RecordingTint" Color="#1FE5484D" />
+  <SolidColorBrush x:Key="ProcessingTint" Color="#1F3E63DD" />
+  <SolidColorBrush x:Key="SuccessTint" Color="#1F30A46C" />
+  <SolidColorBrush x:Key="AttentionTint" Color="#1FF76B15" />
+  <SolidColorBrush x:Key="NeutralTint" Color="#1F8B8D98" />
+
+  <!-- Type. Sans is the app's voice; the serif is the person's words. -->
+  <FontFamily x:Key="SansFont">Inter, Inter Nerd Font Propo, Adwaita Sans, Cantarell, Noto Sans, Open Sans, Liberation Sans, sans-serif</FontFamily>
+  <FontFamily x:Key="SerifFont">avares://OpenRamble.App.Linux/Assets/Fonts#Source Serif 4, Noto Serif, Liberation Serif, FreeSerif, DejaVu Serif, serif</FontFamily>
+  <!-- Fluent's windows and text take their family from this key: the whole app speaks in SansFont. -->
+  <FontFamily x:Key="ContentControlThemeFontFamily">Inter, Inter Nerd Font Propo, Adwaita Sans, Cantarell, Noto Sans, Open Sans, Liberation Sans, sans-serif</FontFamily>
+
+  <!-- Radius. A capsule is height/2; Skia clamps an oversized radius to exactly that. -->
+  <CornerRadius x:Key="RadiusSurface">24</CornerRadius>
+  <CornerRadius x:Key="RadiusControl">10</CornerRadius>
+  <CornerRadius x:Key="RadiusChip">7</CornerRadius>
+  <CornerRadius x:Key="RadiusCapsule">999</CornerRadius>
+  <!-- Fluent's own corner keys, brought in line with the control radius. -->
+  <CornerRadius x:Key="ControlCornerRadius">10</CornerRadius>
+  <CornerRadius x:Key="OverlayCornerRadius">10</CornerRadius>
+
+  <!-- Blocks and pages. -->
+  <sys:Double x:Key="BlockUnit">44</sys:Double>
+  <sys:Double x:Key="BlockGap">8</sys:Double>
+  <sys:Double x:Key="BlockPadding">24</sys:Double>
+  <sys:Double x:Key="RowMinHeight">52</sys:Double>
+  <Thickness x:Key="PageMargin">44,36</Thickness>
+  <sys:Double x:Key="ColumnMaxWidth">620</sys:Double>
+  <sys:Double x:Key="SectionSpacing">40</sys:Double>
+
+  <!-- Spacing. -->
+  <sys:Double x:Key="SpaceTight">6</sys:Double>
+  <sys:Double x:Key="SpaceInline">10</sys:Double>
+  <sys:Double x:Key="SpaceStack">16</sys:Double>
+  <sys:Double x:Key="SpaceSection">24</sys:Double>
+  <sys:Double x:Key="SpacePage">28</sys:Double>
+
+  <!-- Strokes and motion. -->
+  <sys:Double x:Key="StrokeHairline">0.5</sys:Double>
+  <sys:Double x:Key="StrokeEmphasised">0.75</sys:Double>
+  <sys:TimeSpan x:Key="MotionControl">0:0:0.12</sys:TimeSpan>
+  <sys:TimeSpan x:Key="MotionSurface">0:0:0.15</sys:TimeSpan>
+
+</ResourceDictionary>

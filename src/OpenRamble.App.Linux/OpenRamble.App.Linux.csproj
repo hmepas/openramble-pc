@@ -47,6 +47,19 @@
 
   <ItemGroup>
     <!--
+      Source Serif 4 (Adobe, SIL OFL 1.1; licence text beside the fonts), release 4.005R, static
+      Regular, Italic and Semibold: the serif is the person's words throughout the design and the
+      system serif varies by distro (often Times-like). Static faces rather than the variable
+      font, so weights resolve to real faces.
+    -->
+    <AvaloniaResource Include="Assets/Fonts/*.ttf" />
+    <!-- The OFL and ISC notices travel with the binaries that carry the font and the icons. -->
+    <None Include="Assets/Fonts/SourceSerif4-OFL.md" Link="licenses/SourceSerif4-OFL.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Theme/LICENSE-lucide.txt" Link="licenses/lucide-ISC.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
       The pixel arithmetic behind the tray badge, the .ico reader and the autostart entry writer
       are the pieces of logic this assembly invents, and all three are checked without a desktop.
     -->

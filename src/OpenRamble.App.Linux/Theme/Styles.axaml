@@ -1,0 +1,353 @@
+<!--
+  The shared look on top of Fluent: text roles, button kinds, inputs, list rows, blocks and the
+  glass surface. Everything is opt-in by class (Classes="ink", Classes="words14", ...) except the
+  Fluent resource overrides in Tokens.axaml, which reach every control. Colours come from the
+  theme-variant tokens, so they are DynamicResource throughout.
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <Styles.Resources>
+    <!--
+      One template for every button kind: a background border (fill, hairline, shadow), a 1px
+      sheen line along the inside top edge (shown by "plain" only) and a focus ring outside.
+      Pressed shrinks to .97 over 120 ms; disabled is .4 opacity.
+    -->
+    <ControlTheme x:Key="BaseButtonTheme" TargetType="Button">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource Label}" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusCapsule}" />
+      <Setter Property="Padding" Value="14,0" />
+      <Setter Property="MinHeight" Value="30" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="FontWeight" Value="Medium" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusAdorner" Value="{x:Null}" />
+      <Setter Property="RenderTransform" Value="none" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" />
+        </Transitions>
+      </Setter>
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Panel>
+            <Border Name="PART_Focus" Margin="-3" BorderThickness="2" BorderBrush="Transparent"
+                    CornerRadius="{TemplateBinding CornerRadius}" IsHitTestVisible="False" />
+            <Border Name="PART_Background"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="{TemplateBinding CornerRadius}">
+              <ContentPresenter Name="PART_ContentPresenter"
+                                Content="{TemplateBinding Content}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                Padding="{TemplateBinding Padding}"
+                                Foreground="{TemplateBinding Foreground}"
+                                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                RecognizesAccessKey="True" />
+            </Border>
+            <Border Name="PART_Sheen" Height="1" VerticalAlignment="Top" Margin="8,1,8,0"
+                    IsHitTestVisible="False" />
+          </Panel>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pressed">
+        <Setter Property="RenderTransform" Value="scale(0.97)" />
+      </Style>
+      <Style Selector="^:disabled">
+        <Setter Property="Opacity" Value="0.4" />
+      </Style>
+      <Style Selector="^:focus-visible /template/ Border#PART_Focus">
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+      </Style>
+    </ControlTheme>
+
+    <!-- The one next action: dark capsule in light mode, white in dark. -->
+    <ControlTheme x:Key="InkButtonTheme" TargetType="Button" BasedOn="{StaticResource BaseButtonTheme}">
+      <Setter Property="Background" Value="{DynamicResource InkBackground}" />
+      <Setter Property="Foreground" Value="{DynamicResource InkForeground}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="MinHeight" Value="34" />
+    </ControlTheme>
+
+    <!-- Everything else beside it: no chrome until pressed or hovered. -->
+    <ControlTheme x:Key="QuietButtonTheme" TargetType="Button" BasedOn="{StaticResource BaseButtonTheme}">
+      <Style Selector="^:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Fill}" />
+      </Style>
+      <Style Selector="^:pressed">
+        <Setter Property="Background" Value="{DynamicResource FillStrong}" />
+      </Style>
+    </ControlTheme>
+
+    <!-- An ordinary control-row button: filled, hairline, sheen, radius 10, 30 high. -->
+    <ControlTheme x:Key="PlainButtonTheme" TargetType="Button" BasedOn="{StaticResource BaseButtonTheme}">
+      <Setter Property="Background" Value="{DynamicResource Fill}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Hairline}" />
+      <Setter Property="BorderThickness" Value="0.5" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusControl}" />
+      <Setter Property="Padding" Value="12,0" />
+      <Setter Property="Height" Value="30" />
+      <Style Selector="^ /template/ Border#PART_Sheen">
+        <Setter Property="Background" Value="{DynamicResource Sheen}" />
+      </Style>
+      <Style Selector="^:pointerover">
+        <Setter Property="Background" Value="{DynamicResource FillStrong}" />
+      </Style>
+    </ControlTheme>
+
+    <!-- A toolbar icon: 32 circle; content is a LucideIcon (16). -->
+    <ControlTheme x:Key="IconButtonTheme" TargetType="Button" BasedOn="{StaticResource BaseButtonTheme}">
+      <Setter Property="Foreground" Value="{DynamicResource Label2}" />
+      <Setter Property="Width" Value="32" />
+      <Setter Property="Height" Value="32" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="Padding" Value="0" />
+      <Style Selector="^:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Fill}" />
+        <Setter Property="Foreground" Value="{DynamicResource Label}" />
+      </Style>
+      <Style Selector="^:pressed">
+        <Setter Property="Background" Value="{DynamicResource FillStrong}" />
+      </Style>
+    </ControlTheme>
+
+    <!--
+      A segment of the segmented switcher (RadioButton or ToggleButton) inside a
+      Border.segmentTrack: unselected is bare Label2, selected lifts onto glass with a shadow.
+    -->
+    <ControlTheme x:Key="SegmentButtonTheme" TargetType="ToggleButton">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="{DynamicResource Label2}" />
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusCapsule}" />
+      <Setter Property="Padding" Value="12,0" />
+      <Setter Property="Height" Value="28" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="FontWeight" Value="Medium" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="FocusAdorner" Value="{x:Null}" />
+      <Setter Property="RenderTransform" Value="none" />
+      <Setter Property="Transitions">
+        <Transitions>
+          <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" />
+        </Transitions>
+      </Setter>
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Panel>
+            <Border Name="PART_Focus" Margin="-3" BorderThickness="2" BorderBrush="Transparent"
+                    CornerRadius="{TemplateBinding CornerRadius}" IsHitTestVisible="False" />
+            <Border Name="PART_Background"
+                    Background="{TemplateBinding Background}"
+                    CornerRadius="{TemplateBinding CornerRadius}">
+              <ContentPresenter Name="PART_ContentPresenter"
+                                Content="{TemplateBinding Content}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                Padding="{TemplateBinding Padding}"
+                                Foreground="{TemplateBinding Foreground}"
+                                HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+            </Border>
+          </Panel>
+        </ControlTemplate>
+      </Setter>
+      <Style Selector="^:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource Label}" />
+      </Style>
+      <Style Selector="^:pressed">
+        <Setter Property="RenderTransform" Value="scale(0.97)" />
+      </Style>
+      <Style Selector="^:checked">
+        <Setter Property="Background" Value="{DynamicResource GlassSurface}" />
+        <Setter Property="Foreground" Value="{DynamicResource Label}" />
+      </Style>
+      <Style Selector="^:checked /template/ Border#PART_Background">
+        <Setter Property="BoxShadow" Value="{DynamicResource SegmentShadow}" />
+      </Style>
+      <Style Selector="^:disabled">
+        <Setter Property="Opacity" Value="0.4" />
+      </Style>
+      <Style Selector="^:focus-visible /template/ Border#PART_Focus">
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+      </Style>
+    </ControlTheme>
+  </Styles.Resources>
+
+  <!-- Text roles: sans. -->
+  <Style Selector="TextBlock.rowTitle">
+    <Setter Property="FontSize" Value="14" />
+  </Style>
+  <Style Selector="TextBlock.setupTitle">
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="FontWeight" Value="Medium" />
+  </Style>
+  <Style Selector="TextBlock.body, TextBlock.sectionHeader">
+    <Setter Property="FontSize" Value="13" />
+    <Setter Property="Foreground" Value="{DynamicResource Label2}" />
+  </Style>
+  <Style Selector="TextBlock.detail">
+    <Setter Property="FontSize" Value="12" />
+    <Setter Property="Foreground" Value="{DynamicResource Label2}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+  <Style Selector="TextBlock.small">
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="Foreground" Value="{DynamicResource Label2}" />
+  </Style>
+  <Style Selector="TextBlock.clock">
+    <Setter Property="FontSize" Value="14" />
+    <Setter Property="Foreground" Value="{DynamicResource Label2}" />
+    <Setter Property="FontFeatures" Value="+tnum" />
+  </Style>
+  <Style Selector="TextBlock.tnum">
+    <Setter Property="FontFeatures" Value="+tnum" />
+  </Style>
+
+  <!-- Text roles: serif. "words" are what the person said; "display" headlines, never bold. -->
+  <Style Selector="TextBlock.words14, TextBlock.words19, TextBlock.words20, TextBlock.words26, TextBlock.display24, TextBlock.display26, TextBlock.display30, TextBlock.display38">
+    <Setter Property="FontFamily" Value="{StaticResource SerifFont}" />
+    <Setter Property="FontWeight" Value="Regular" />
+    <Setter Property="Foreground" Value="{DynamicResource Label}" />
+    <Setter Property="TextWrapping" Value="Wrap" />
+  </Style>
+  <Style Selector="TextBlock.words14">
+    <Setter Property="FontSize" Value="14" />
+  </Style>
+  <Style Selector="TextBlock.words19">
+    <Setter Property="FontSize" Value="19" />
+    <Setter Property="LineHeight" Value="28" />
+  </Style>
+  <Style Selector="TextBlock.words20">
+    <Setter Property="FontSize" Value="20" />
+  </Style>
+  <Style Selector="TextBlock.words26">
+    <Setter Property="FontSize" Value="26" />
+  </Style>
+  <Style Selector="TextBlock.display24">
+    <Setter Property="FontSize" Value="24" />
+  </Style>
+  <Style Selector="TextBlock.display26">
+    <Setter Property="FontSize" Value="26" />
+  </Style>
+  <Style Selector="TextBlock.display30">
+    <Setter Property="FontSize" Value="30" />
+  </Style>
+  <Style Selector="TextBlock.display38">
+    <Setter Property="FontSize" Value="38" />
+  </Style>
+
+  <!-- Buttons by class. -->
+  <Style Selector="Button.ink">
+    <Setter Property="Theme" Value="{StaticResource InkButtonTheme}" />
+  </Style>
+  <Style Selector="Button.quiet">
+    <Setter Property="Theme" Value="{StaticResource QuietButtonTheme}" />
+  </Style>
+  <Style Selector="Button.plain">
+    <Setter Property="Theme" Value="{StaticResource PlainButtonTheme}" />
+  </Style>
+  <Style Selector="Button.icon">
+    <Setter Property="Theme" Value="{StaticResource IconButtonTheme}" />
+  </Style>
+  <Style Selector="ToggleButton.segment, RadioButton.segment">
+    <Setter Property="Theme" Value="{StaticResource SegmentButtonTheme}" />
+  </Style>
+  <Style Selector="Border.segmentTrack">
+    <Setter Property="Background" Value="{DynamicResource Fill}" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusCapsule}" />
+    <Setter Property="Padding" Value="2" />
+    <Setter Property="HorizontalAlignment" Value="Center" />
+  </Style>
+
+  <!-- Inputs. -->
+  <Style Selector="TextBox.search">
+    <Setter Property="Background" Value="{DynamicResource Fill}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusControl}" />
+    <Setter Property="Padding" Value="10,6" />
+    <Setter Property="MinHeight" Value="30" />
+  </Style>
+  <Style Selector="TextBox.search:pointerover /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{DynamicResource Fill}" />
+  </Style>
+  <Style Selector="TextBox.search:focus /template/ Border#PART_BorderElement">
+    <Setter Property="Background" Value="{DynamicResource Fill}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+    <Setter Property="BorderThickness" Value="1" />
+  </Style>
+  <Style Selector="ProgressBar.thin">
+    <Setter Property="Height" Value="4" />
+    <Setter Property="MinHeight" Value="4" />
+    <Setter Property="CornerRadius" Value="2" />
+    <Setter Property="Background" Value="{DynamicResource Fill}" />
+    <Setter Property="Foreground" Value="{DynamicResource Accent}" />
+  </Style>
+
+  <!-- Surfaces. Glass is for floating windows only; the big windows are opaque. -->
+  <Style Selector="Border.glass, Border.glassCapsule">
+    <Setter Property="Background" Value="{DynamicResource GlassSurface}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource GlassBorder}" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="BoxShadow" Value="{DynamicResource GlassShadow}" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusSurface}" />
+  </Style>
+  <Style Selector="Border.glassCapsule">
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusCapsule}" />
+  </Style>
+  <Style Selector="Border.content">
+    <Setter Property="Background" Value="{DynamicResource ContentFill}" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusSurface}" />
+    <Setter Property="Padding" Value="24" />
+  </Style>
+  <Style Selector="Border.content.attention">
+    <Setter Property="Background" Value="{StaticResource AttentionTint}" />
+  </Style>
+  <Style Selector="Border.page">
+    <Setter Property="MaxWidth" Value="{StaticResource ColumnMaxWidth}" />
+    <Setter Property="Margin" Value="{StaticResource PageMargin}" />
+  </Style>
+  <Style Selector="Border.hairline">
+    <Setter Property="Height" Value="1" />
+    <Setter Property="Background" Value="{DynamicResource Hairline}" />
+  </Style>
+  <Style Selector="Separator.hairline">
+    <Setter Property="Height" Value="1" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="Background" Value="{DynamicResource Hairline}" />
+  </Style>
+
+  <!-- Library list rows: a rounded Fill selection, no accent; day headers are plain labels. -->
+  <Style Selector="ListBoxItem.libraryRow">
+    <Setter Property="Padding" Value="10,6" />
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusControl}" />
+  </Style>
+  <Style Selector="ListBoxItem.libraryRow /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="CornerRadius" Value="{StaticResource RadiusControl}" />
+  </Style>
+  <Style Selector="ListBoxItem.libraryRow:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource ContentFill}" />
+  </Style>
+  <Style Selector="ListBoxItem.libraryRow:selected /template/ ContentPresenter#PART_ContentPresenter, ListBoxItem.libraryRow:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBoxItem.libraryRow:selected:pressed /template/ ContentPresenter#PART_ContentPresenter, ListBoxItem.libraryRow:selected:focus /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Fill}" />
+    <Setter Property="Foreground" Value="{DynamicResource Label}" />
+  </Style>
+  <Style Selector="ListBoxItem.dayHeader">
+    <Setter Property="Padding" Value="10,10,10,2" />
+    <Setter Property="FontSize" Value="11" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="Foreground" Value="{DynamicResource Label2}" />
+    <Setter Property="Focusable" Value="False" />
+    <Setter Property="IsHitTestVisible" Value="False" />
+  </Style>
+  <Style Selector="ListBoxItem.dayHeader /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+
+</Styles>

@@ -57,9 +57,10 @@
 
         <!--
           Upstream RecordBar.swift: Record (you and the other side, or only you), and while it runs
-          the red dot, the time, a meter per side, Pause/Resume and Stop.
+          the red dot, the time, a meter per side, Pause/Resume and Stop. As tall idle as live (the
+          40px Pause/Stop buttons), so pressing Record does not push the list below it down.
         -->
-        <StackPanel x:Name="RecordBar" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+        <StackPanel x:Name="RecordBar" Orientation="Horizontal" Spacing="14" VerticalAlignment="Center" MinHeight="40">
           <StackPanel x:Name="LiveStatusPanel" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
             <c:StateGlyph x:Name="LiveDot" GlyphSize="24" VerticalAlignment="Center" />
             <StackPanel VerticalAlignment="Center">

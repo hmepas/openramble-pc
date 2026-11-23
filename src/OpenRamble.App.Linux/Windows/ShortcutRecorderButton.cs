@@ -159,9 +159,11 @@ public sealed class ShortcutRecorderButton : Button
     private void Render()
     {
         Content = isRecording ? "Press keys…" : shortcut?.DisplayString(Keymap) ?? "Off";
-        Foreground = isRecording
-            ? StatusBrushes.Processing
-            : shortcut is null ? Brushes.Gray : null;
+        // A recorded chord wears the theme's own foreground. Clearing, not assigning null: a null
+        // local value outranks the theme and draws the text in no brush at all.
+        if (isRecording) { Foreground = StatusBrushes.Processing; }
+        else if (shortcut is null) { Foreground = Brushes.Gray; }
+        else { ClearValue(ForegroundProperty); }
         AutomationProperties.SetHelpText(
             this,
             isRecording

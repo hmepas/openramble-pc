@@ -113,7 +113,11 @@
                    automation:AutomationProperties.Name="Library" />
         </DockPanel>
 
-        <GridSplitter Grid.Column="1" Width="1" Background="{DynamicResource Hairline}" ResizeDirection="Columns" />
+        <!-- Fluent gives the splitter a 6px minimum: the grip stays that wide and transparent, and
+             the seam a person sees is the 1px hairline under it. -->
+        <Border Grid.Column="1" Width="1" HorizontalAlignment="Center" Background="{DynamicResource Hairline}"
+                IsHitTestVisible="False" />
+        <GridSplitter Grid.Column="1" Background="Transparent" ResizeDirection="Columns" />
 
         <!-- The seam for the detail panes: the code sets Detail.Content from the selection. -->
         <ContentControl Grid.Column="2" x:Name="Detail" MinWidth="440"

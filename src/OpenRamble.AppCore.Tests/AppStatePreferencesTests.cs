@@ -5,7 +5,7 @@ namespace OpenRamble.AppCore.Tests;
 
 /// <summary>
 /// The settings that arrived with upstream 0.12–0.22, driven through a real <see cref="AppState"/>:
-/// the copy shortcut, the clipboard copy, the trailing space, the microphone picker, the panel
+/// the last-take shortcut, the clipboard copy, the trailing space, the microphone picker, the panel
 /// placement, the theme, the silence rule and the log file.
 /// </summary>
 /// <remarks>
@@ -41,7 +41,7 @@ public sealed class AppStatePreferencesTests : IDisposable
         AppState state = harness.MakeState();
 
         Assert.Equal(SettingsDefaults.Hotkey, state.Hotkey);
-        Assert.Equal(state.DefaultLastTakeShortcut, state.CopyShortcut);
+        Assert.Equal(state.DefaultLastTakeShortcut, state.LastTakeShortcut);
         Assert.Equal(SettingsDefaults.SoundsEnabled, state.SoundsEnabled);
         Assert.Equal(SettingsDefaults.CopiesToClipboard, state.CopiesToClipboard);
         Assert.Equal(SettingsDefaults.AppendsTrailingSpace, state.AppendsTrailingSpace);
@@ -95,7 +95,7 @@ public sealed class AppStatePreferencesTests : IDisposable
 
         Assert.Equal(SettingsDefaults.Appearance, state.Appearance);
         Assert.Equal(SettingsDefaults.OverlayPlacement, state.OverlayPlacement);
-        Assert.Null(state.CopyShortcut);
+        Assert.Null(state.LastTakeShortcut);
     }
 
     // MARK: - The copy shortcut
@@ -105,7 +105,7 @@ public sealed class AppStatePreferencesTests : IDisposable
     public void NobodyGetsASecondShortcutWithoutAskingForOne()
     {
         AppState state = harness.MakeState();
-        Assert.Null(state.CopyShortcut);
+        Assert.Null(state.LastTakeShortcut);
         Assert.False(state.CopiesToClipboard);
         Assert.False(harness.CopyMonitor.IsRunning);
     }
@@ -119,11 +119,11 @@ public sealed class AppStatePreferencesTests : IDisposable
     {
         AppState state = harness.MakeState();
 
-        state.CopyShortcut = CtrlAltC;
+        state.LastTakeShortcut = CtrlAltC;
         Assert.Equal(CtrlAltC, harness.CopyMonitor.Shortcut);
         Assert.True(harness.CopyMonitor.IsRunning);
 
-        state.CopyShortcut = null;
+        state.LastTakeShortcut = null;
         Assert.False(harness.CopyMonitor.IsRunning);
     }
 
@@ -138,17 +138,17 @@ public sealed class AppStatePreferencesTests : IDisposable
 
         AppState state = harness.MakeState();
 
-        Assert.Equal(CtrlAltC, state.CopyShortcut);
+        Assert.Equal(CtrlAltC, state.LastTakeShortcut);
         Assert.Equal(CtrlAltC, harness.CopyMonitor.Shortcut);
         Assert.True(harness.CopyMonitor.IsRunning);
     }
 
-    /// <summary>Pressing it with nothing dictated says so rather than copying silence.</summary>
+    /// <summary>Pressing it with nothing dictated says so rather than pasting silence.</summary>
     [Fact]
     public async Task PressingItWithNothingDictatedSaysSo()
     {
         AppState state = harness.MakeState();
-        state.CopyShortcut = CtrlAltC;
+        state.LastTakeShortcut = CtrlAltC;
 
         harness.CopyMonitor.Press();
 
@@ -158,32 +158,20 @@ public sealed class AppStatePreferencesTests : IDisposable
         Assert.Equal("Nothing dictated yet.", harness.Overlay.Notices[^1].Message);
     }
 
-    /// <summary>The key puts the text that was inserted back on the clipboard, and says so.</summary>
+    /// <summary>The key pastes the last take into the app in front, through the inserter.</summary>
     [Fact]
-    public async Task TheShortcutCopiesTheLastDictation()
+    public async Task TheShortcutPastesTheLastTake()
     {
         AppState state = await ReadyState();
-        state.CopyShortcut = CtrlAltC;
+        state.LastTakeShortcut = CtrlAltC;
         await DictateOnce(state);
 
         harness.CopyMonitor.Press();
 
-        Assert.Equal(["Ping test"], harness.Clipboard.Copied);
-        await TestWait.For(
-            "the copy was confirmed",
-            () => harness.Overlay.Notices.Any(notice => notice.Message.StartsWith("Copied", StringComparison.Ordinal)));
-    }
-
-    /// <summary>The menu row carries the binding, because nothing else on the screen can.</summary>
-    [Fact]
-    public void TheMenuRowShowsTheShortcut()
-    {
-        AppState state = harness.MakeState();
-        Assert.Equal("Copy Last Dictation", state.CopyLastMenuTitle);
-
-        state.CopyShortcut = CtrlAltC;
-
-        Assert.Equal("Copy Last Dictation   Ctrl+Alt+C", state.CopyLastMenuTitle);
+        await TestWait.For("the take was pasted again", () => harness.Inserter.InsertedTexts.Count == 2);
+        await TestWait.For("the paste ended", () => state.DictationStateValue == DictationState.Idle);
+        Assert.Equal("Ping test", harness.Inserter.InsertedTexts[^1]);
+        Assert.Empty(harness.Clipboard.Copied);
     }
 
     /// <summary>
@@ -194,7 +182,7 @@ public sealed class AppStatePreferencesTests : IDisposable
     public void TheWatcherSurvivesSleep()
     {
         AppState state = harness.MakeState();
-        state.CopyShortcut = CtrlAltC;
+        state.LastTakeShortcut = CtrlAltC;
 
         harness.SystemEvents.PostDidWake();
 

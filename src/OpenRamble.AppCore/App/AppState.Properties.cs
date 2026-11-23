@@ -48,10 +48,14 @@ public sealed partial class AppState
     public sealed record LastDictation(string InsertedText, PipelineProvenance Provenance);
 
     /// <summary>
-    /// A short, in-memory list for quick copying from the menu. Nothing is persisted, so quitting
-    /// the app clears the history.
+    /// A short, in-memory list of this session's takes for the menu. Nothing is persisted, so
+    /// quitting the app clears it.
     /// </summary>
-    public sealed record RecentDictation(Guid Id, string Text)
+    /// <param name="HistoryId">
+    /// The History entry kept for the same take, once History took it: deleting that entry takes
+    /// the take off the menu too.
+    /// </param>
+    public sealed record RecentDictation(Guid Id, string Text, Guid? HistoryId = null)
     {
         public RecentDictation(string text)
             : this(Guid.NewGuid(), text)

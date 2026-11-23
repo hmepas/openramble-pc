@@ -125,6 +125,8 @@ public sealed partial class App : Application
             Permissions = microphone,
             HotkeyMonitor = monitor,
             LastTakeShortcutMonitor = chord,
+            // Ctrl+Super+V, upstream's Control-Command-V: 47 is evdev's KEY_V.
+            DefaultLastTakeShortcut = new KeyCombination(47, HotkeyModifiers.Control | HotkeyModifiers.Windows),
             ShortcutKeymap = LinuxShortcutKeymap.Instance,
             InputDevices = new PipeWireInputDevices(),
             // Our own windows are XWayland, where wtype's keymap does not apply; they take the
@@ -481,12 +483,22 @@ public sealed partial class App : Application
             state.DictationStateValue,
             state.IsDictationReady,
             state.RecoveredText is not null,
-            state.RecentDictations.Count > 0);
+            state.MenuTakes.Count > 0);
 
         foreach (IReadOnlyList<MenuRow> section in sections)
         {
             if (menu.Items.Count > 0) { menu.Items.Add(new NativeMenuItemSeparator()); }
-            foreach (MenuRow row in section) { menu.Items.Add(Row(row)); }
+            foreach (MenuRow row in section)
+            {
+                if (row == MenuRow.Takes)
+                {
+                    foreach (NativeMenuItem take in TakeRows()) { menu.Items.Add(take); }
+                }
+                else
+                {
+                    menu.Items.Add(Row(row));
+                }
+            }
         }
 
         return menu;
@@ -517,15 +529,39 @@ public sealed partial class App : Application
                 null),
             MenuRow.FinishSetup => Item("Finish Setup…", ShowOnboarding),
             MenuRow.InsertLastDictation => Item("Insert Last Dictation", current.RetryRecoveredText),
-            MenuRow.RecentDictations => Nested(
-                "Recent Dictations",
-                current.RecentDictations.Select(entry =>
-                    Item(entry.MenuTitle, () => current.CopyRecentDictation(entry)))),
-            MenuRow.CopyLast => Item(current.CopyLastMenuTitle, current.CopyLastDictation),
+            MenuRow.CopyTakes => Nested(
+                "Copy",
+                current.MenuTakes.Select(take =>
+                    Item(current.TakeMenuTitle(take, isLastTake: false), () => current.CopyRecentDictation(take)))),
             MenuRow.Settings => Item("Settings…", ShowSettings),
             MenuRow.Quit => Item("Quit OpenRamble", () => lifetime?.Shutdown()),
             _ => Item(string.Empty, null),
         };
+    }
+
+    /// <summary>
+    /// The menu's takes, the last one first; a click pastes one into the app in front.
+    /// </summary>
+    /// <remarks>
+    /// The paste waits for the menu to be gone. The menu is drawn by the panel, not by us, and
+    /// while it is open the panel's popup may hold the keyboard; a Ctrl+V sent then would land in
+    /// the popup, or nowhere. Upstream needs none of this: a macOS menu runs its action after it
+    /// has closed, with the app in front never having lost focus.
+    /// </remarks>
+    private IEnumerable<NativeMenuItem> TakeRows()
+    {
+        AppState current = state!;
+        return current.MenuTakes.Select((take, index) => Item(
+            current.TakeMenuTitle(take, isLastTake: index == 0),
+            () => _ = PasteAfterMenuCloses(current, take)));
+    }
+
+    private static readonly TimeSpan MenuCloseAllowance = TimeSpan.FromMilliseconds(300);
+
+    private static async Task PasteAfterMenuCloses(AppState current, AppState.RecentDictation take)
+    {
+        await Task.Delay(MenuCloseAllowance).ConfigureAwait(false);
+        current.PasteTake(take);
     }
 
     /// <summary>A row. No action means the row is present but disabled - a readout, not a button.</summary>

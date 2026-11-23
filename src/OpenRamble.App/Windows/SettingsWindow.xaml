@@ -21,14 +21,14 @@
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="16,8,16,16">
                     <TextBlock Text="Shortcut" Style="{StaticResource SectionHeader}" Margin="0,4,0,4" />
-                    <!-- Dictation key, Copy last dictation: built in code, see ShortcutRows. -->
+                    <!-- Dictation key, Paste last take: built in code, see ShortcutRows. -->
                     <StackPanel x:Name="ShortcutRows" />
                     <TextBlock x:Name="HotkeyWarning" TextWrapping="Wrap" Margin="0,4,0,0"
                                Visibility="Collapsed" />
                     <TextBlock x:Name="CopyShortcutProblem" TextWrapping="Wrap" Margin="0,4,0,0"
                                Visibility="Collapsed" />
                     <TextBlock Style="{StaticResource Footer}"
-                               Text="Hold to talk, or double-press for hands-free dictation. Press once more to finish. The copy shortcut is off until you choose one - a shortcut nobody asked for collides with something you already use." />
+                               Text="Hold to talk, or double-press for hands-free dictation. Press once more to finish. The paste shortcut puts your newest dictation into the app in front; clear it to give the keys back to another app." />
 
                     <TextBlock Text="Behavior" Style="{StaticResource SectionHeader}" />
                     <StackPanel x:Name="BehaviorRows" />

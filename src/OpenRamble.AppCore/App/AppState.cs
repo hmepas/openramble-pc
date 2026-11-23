@@ -563,7 +563,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
 
     private void WireHotkey()
     {
-        if (lastTakeShortcutMonitor is not null) { lastTakeShortcutMonitor.OnPress = CopyLastDictation; }
+        if (lastTakeShortcutMonitor is not null) { lastTakeShortcutMonitor.OnPress = PasteLastTake; }
         hotkeyMonitor.SetHotkey(Hotkey);
         hotkeyMonitor.OnPress = BeginHoldToDictate;
         hotkeyMonitor.OnRelease = EndHoldToDictate;

@@ -11,8 +11,8 @@ namespace OpenRamble.AppCore.Tests;
 /// <list type="bullet">
 /// <item><description>"Transcribe/Delete Saved Recording" are gone. Failed-transcription
 /// recordings are kept quietly on disk and pruned by age; no menu decisions.</description></item>
-/// <item><description>"Copy/Delete Saved Text" are gone. Failed-insert words join Recent
-/// Dictations at failure time (copyable there), and the one recovery row is "Insert Last
+/// <item><description>"Copy/Delete Saved Text" are gone. Failed-insert words join the menu's
+/// takes at failure time (pasteable and copyable there), and the one recovery row is "Insert Last
 /// Dictation". Do not re-add delete items.</description></item>
 /// </list>
 /// </summary>
@@ -22,8 +22,8 @@ public sealed class MenuSectionsTests
         DictationState state = DictationState.Idle,
         bool ready = true,
         bool recoveredText = false,
-        bool recents = false) =>
-        MenuSections.Sections(state, ready, recoveredText, recents)
+        bool takes = false) =>
+        MenuSections.Sections(state, ready, recoveredText, takes)
             .Select(section => section.ToArray())
             .ToArray();
 
@@ -44,10 +44,10 @@ public sealed class MenuSectionsTests
             [
                 [MenuRow.StatusLine],
                 [MenuRow.InsertLastDictation],
-                [MenuRow.RecentDictations, MenuRow.CopyLast],
+                [MenuRow.Takes, MenuRow.CopyTakes],
                 [MenuRow.Settings, MenuRow.Quit],
             ],
-            Sections(recoveredText: true, recents: true));
+            Sections(recoveredText: true, takes: true));
     }
 
     /// <summary>
@@ -65,7 +65,7 @@ public sealed class MenuSectionsTests
                     [MenuRow.StopAndInsert, MenuRow.CancelDictation],
                     [MenuRow.Settings, MenuRow.Quit],
                 ],
-                Sections(state, recoveredText: true, recents: true));
+                Sections(state, recoveredText: true, takes: true));
         }
     }
 
@@ -80,7 +80,7 @@ public sealed class MenuSectionsTests
         {
             Assert.Equal(
                 [[MenuRow.StatusLine], [MenuRow.Settings, MenuRow.Quit]],
-                Sections(state, recoveredText: true, recents: true));
+                Sections(state, recoveredText: true, takes: true));
         }
     }
 
@@ -106,21 +106,21 @@ public sealed class MenuSectionsTests
                 [MenuRow.StatusLine],
                 [MenuRow.SetupHints, MenuRow.FinishSetup],
                 [MenuRow.InsertLastDictation],
-                [MenuRow.RecentDictations, MenuRow.CopyLast],
+                [MenuRow.Takes, MenuRow.CopyTakes],
                 [MenuRow.Settings, MenuRow.Quit],
             ],
-            Sections(ready: false, recoveredText: true, recents: true));
+            Sections(ready: false, recoveredText: true, takes: true));
     }
 
     /// <summary>
-    /// The copy row sits next to the dictation it copies, and only when there is one to copy:
-    /// with nothing dictated the menu offers nothing to put back on the clipboard.
+    /// The takes and their Copy submenu appear only when there is a take: with nothing dictated
+    /// the menu offers nothing to paste or copy.
     /// </summary>
     [Fact]
     public void Scenario007()
     {
-        Assert.DoesNotContain(MenuRow.CopyLast, Sections().SelectMany(section => section));
-        Assert.Contains(MenuRow.CopyLast, Sections(recents: true).SelectMany(section => section));
+        Assert.DoesNotContain(MenuRow.CopyTakes, Sections().SelectMany(section => section));
+        Assert.Contains(MenuRow.CopyTakes, Sections(takes: true).SelectMany(section => section));
     }
 
     /// <summary>Settings and Quit close every menu, in every state.</summary>
@@ -132,7 +132,7 @@ public sealed class MenuSectionsTests
             Sections(),
             Sections(DictationState.Listening),
             Sections(DictationState.Transcribing),
-            Sections(ready: false, recoveredText: true, recents: true),
+            Sections(ready: false, recoveredText: true, takes: true),
         ];
 
         foreach (MenuRow[][] variant in variants)
@@ -148,7 +148,7 @@ public sealed class MenuSectionsTests
     public void Scenario009()
     {
         var everything = new HashSet<MenuRow>(
-            Sections(ready: false, recoveredText: true, recents: true)
+            Sections(ready: false, recoveredText: true, takes: true)
                 .SelectMany(section => section)
                 .Concat(Sections(DictationState.Listening, recoveredText: true).SelectMany(section => section))
                 .Concat(Sections(DictationState.Transcribing, recoveredText: true).SelectMany(section => section)));
@@ -156,8 +156,8 @@ public sealed class MenuSectionsTests
         var allowed = new HashSet<MenuRow>
         {
             MenuRow.StatusLine, MenuRow.StopAndInsert, MenuRow.CancelDictation, MenuRow.SetupHints,
-            MenuRow.FinishSetup, MenuRow.InsertLastDictation, MenuRow.RecentDictations,
-            MenuRow.CopyLast, MenuRow.Settings, MenuRow.Quit,
+            MenuRow.FinishSetup, MenuRow.InsertLastDictation, MenuRow.Takes,
+            MenuRow.CopyTakes, MenuRow.Settings, MenuRow.Quit,
         };
 
         Assert.True(everything.IsSubsetOf(allowed));

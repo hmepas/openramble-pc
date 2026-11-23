@@ -4,13 +4,29 @@
              RequestedThemeVariant="Default">
 
   <!--
-    Fluent, unstyled beyond it. The Windows shell takes every control from the shell itself so
-    that high contrast, text scaling and the screen reader come for free; Avalonia draws its own
-    controls whatever we do, so the nearest equivalent is the theme that follows the desktop's
-    light/dark preference and nothing on top of it. "Default" is that following.
+    Fluent underneath, with the design's tokens, text roles, button kinds and icons on top (Theme/).
+    "Default" follows the desktop's light/dark preference; the Settings picker overrides it, and
+    every colour token is per variant, so both keep working. The palette moves Fluent's accent to
+    the design's blue and its window background to the opaque WindowBackground token (the big
+    windows are opaque; only the floating panel and pill are glass).
   -->
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://OpenRamble.App.Linux/Theme/Tokens.axaml" />
+        <ResourceInclude Source="avares://OpenRamble.App.Linux/Theme/Icons.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+
   <Application.Styles>
-    <FluentTheme />
+    <FluentTheme>
+      <FluentTheme.Palettes>
+        <ColorPaletteResources x:Key="Light" Accent="#0A84FF" RegionColor="#F6F6F8" />
+        <ColorPaletteResources x:Key="Dark" Accent="#0A84FF" RegionColor="#1C1C20" />
+      </FluentTheme.Palettes>
+    </FluentTheme>
+    <StyleInclude Source="avares://OpenRamble.App.Linux/Theme/Styles.axaml" />
   </Application.Styles>
 
 </Application>

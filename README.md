@@ -255,3 +255,10 @@ The macOS original is expected as a sibling checkout at `../openramble`
   in-place upgrades on Windows.
 - [Avalonia](https://github.com/AvaloniaUI/Avalonia) (MIT) — the Linux shell's
   interface toolkit.
+- [Source Serif 4](https://github.com/adobe-fonts/source-serif) by Adobe
+  (SIL Open Font License 1.1) — the Linux shell's serif, release 4.005R
+  Regular/Italic/Semibold bundled in the app; licence text in
+  `src/OpenRamble.App.Linux/Assets/Fonts/SourceSerif4-OFL.md`.
+- [Lucide](https://github.com/lucide-icons/lucide) (ISC; Feather-derived icons
+  MIT) — the Linux shell's icons, path data from tag 1.78.0; licence text in
+  `src/OpenRamble.App.Linux/Theme/LICENSE-lucide.txt`.

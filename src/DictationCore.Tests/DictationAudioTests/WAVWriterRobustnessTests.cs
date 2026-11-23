@@ -179,6 +179,21 @@ public sealed class WAVWriterRobustnessTests : IDisposable
     }
 
     [Fact]
+    public void TestNonFiniteSamplesAreSanitizedWithoutTrappingOrCorruptingWAV()
+    {
+        var writer = MakeWriter("non-finite.wav");
+        writer.Open();
+        writer.Append([float.NaN, float.PositiveInfinity, float.NegativeInfinity, 2, -2]);
+        string path = writer.Close();
+
+        byte[] data = File.ReadAllBytes(path);
+        short[] values = [.. Enumerable.Range(0, (data.Length - 44) / 2)
+            .Select(index => BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(44 + (index * 2), 2)))];
+        Assert.Equal([0, 32_767, -32_767, 32_767, -32_767], values);
+        Assert.Equal(5, WavFile.Read(path).Length);
+    }
+
+    [Fact]
     public void TestLongRecordingKeepsHeaderAndLengthConsistent()
     {
         // A minute of speech is the usual length of a working dictation, and a header with

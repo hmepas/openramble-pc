@@ -161,7 +161,11 @@ public sealed class WAVWriter
             byte[] data = new byte[samples.Length * 2];
             for (int index = 0; index < samples.Length; index++)
             {
-                float clamped = Math.Max(-1f, Math.Min(1f, samples[index]));
+                // A damaged device or graph can surface non-finite Float32 values. Keep the
+                // WAV structurally honest and bound the impulse instead of trusting the cast.
+                float sample = samples[index];
+                float finite = float.IsNaN(sample) ? 0f : sample;
+                float clamped = Math.Max(-1f, Math.Min(1f, finite));
                 short value = (short)(clamped * 32767);
                 BinaryPrimitives.WriteInt16LittleEndian(data.AsSpan(index * 2, 2), value);
             }
@@ -232,6 +236,31 @@ public sealed class WAVWriter
                 // Nothing can be done about a file that refuses to disappear, and the
                 // dictation is already cancelled.
             }
+        }
+    }
+
+    /// <summary>
+    /// Release the descriptor but leave the raw take where crash recovery can repair its
+    /// header on the next launch.
+    ///
+    /// Intentionally different from <see cref="Discard"/>: a disk failure means the file
+    /// may be incomplete, but deleting the bytes that did make it to storage would turn a
+    /// partial recovery into no recovery at all.
+    /// </summary>
+    public void AbandonForRecovery()
+    {
+        lock (gate)
+        {
+            try
+            {
+                handle?.Dispose();
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // What reached the disk stays; nothing else is owed here.
+            }
+
+            handle = null;
         }
     }
 

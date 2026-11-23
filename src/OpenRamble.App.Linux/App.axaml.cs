@@ -262,6 +262,11 @@ public sealed partial class App : Application
             {
                 panel.UpdateEnginePreparation(built.EnginePreparation);
             }
+            // Hands-free puts the red lock where the red disc was.
+            if (args.PropertyName == nameof(AppState.IsHandsFreeActive))
+            {
+                panel.SetHandsFree(built.IsHandsFreeActive);
+            }
             // The capture is long-lived and speaks PipeWire's own name for the microphone; the
             // shared seam names it by its Windows shape. Bridged here rather than in the audio
             // package, which does not know the application's ports.

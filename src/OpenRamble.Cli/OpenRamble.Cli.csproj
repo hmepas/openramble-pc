@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The `openramble` command-line tool: transcribe audio files with the installed model, the app
+    open or closed. A library rather than an executable of its own: on Linux `openramble` on PATH
+    is already the app (the package's /usr/bin link, the desktop entry's Exec, the `ctl` verb),
+    so the app's entry point hands any other arguments here - see OpenRamble.App.Linux/Program.cs.
+    A second executable with the same name would shadow the app wherever ~/.local/bin comes
+    first. No UI toolkit is referenced from here, so nothing of it loads for a transcription.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>OpenRamble.Cli</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../LocalASR/LocalASR.csproj" />
+    <!-- AppPaths: the data folder the app keeps its model and its dictation lock in. -->
+    <ProjectReference Include="../OpenRamble.AppCore/OpenRamble.AppCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpenRamble.Cli.Tests" />
+  </ItemGroup>
+
+</Project>

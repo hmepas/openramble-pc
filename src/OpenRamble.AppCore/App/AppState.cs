@@ -67,6 +67,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly LocalTranscriber? transcriber;
     private readonly string? bundledModelDirectory;
 
+    /// <summary>
+    /// Held while a take runs, so a background <c>openramble</c> job steps aside. Swift keeps the
+    /// opening's <c>Result</c>; <c>null</c> here is its failure, reported at each take.
+    /// </summary>
+    private readonly DictationPriority? dictationPriority;
+
     private AppSettings settings;
     private IAudioCapturing? capture;
     private DictationController? controller;
@@ -86,6 +92,15 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     public AppState(AppEnvironment environment)
     {
         paths = environment.Paths;
+        try
+        {
+            dictationPriority = new DictationPriority(paths.DictationPriorityLock());
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            dictationPriority = null;
+        }
+
         settingsStore = environment.Settings;
         bundledModelDirectory = environment.BundledModelDirectory;
         permissions = environment.Permissions;
@@ -302,6 +317,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
                     ("hands_free", IsHandsFreeActive));
                 DictationStateValue = state;
                 FlushNoticeAfterSession(state);
+                ClaimDictationPriority(state);
                 // The person just pressed the key and is about to speak for seconds: if the
                 // engine gave its memory back while idle, reload it now, under their voice,
                 // instead of after it. By the time this runs the key-down trigger has usually
@@ -1130,6 +1146,31 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>
+    /// A take, from key-down to idle, holds the lock a background <c>openramble</c> job waits on;
+    /// see <see cref="DictationPriority"/>. Never blocks: a lock somebody else holds is refused at
+    /// once, and the take goes on - the job just does not pause.
+    /// </summary>
+    private void ClaimDictationPriority(DictationState state)
+    {
+        bool failed = dictationPriority is null;
+        try
+        {
+            dictationPriority?.SetActive(state != DictationState.Idle);
+        }
+        catch (Exception error) when (error is IOException or ObjectDisposedException)
+        {
+            failed = true;
+        }
+
+        if (failed && state == DictationState.Preparing)
+        {
+            Notify(new DictationNotice(
+                DictationNoticeKind.Warning,
+                "Couldn't pause background CLI transcription for dictation."));
+        }
+    }
+
     // MARK: - Housekeeping
 
     public void Dispose()
@@ -1149,6 +1190,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         }
 
         journal.Record(DiagnosticEvent.AppTerminating);
+        dictationPriority?.Dispose();
         systemEvents.WillSleep -= HandleSleep;
         systemEvents.DidWake -= HandleWake;
         systemEvents.AudioDeviceChanged -= HandleAudioConfigurationChange;

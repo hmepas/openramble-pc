@@ -1,4 +1,6 @@
 using Avalonia;
+using OpenRamble.AppCore;
+using OpenRamble.Cli;
 using OpenRamble.LinuxInput;
 
 namespace OpenRamble.App.Linux;
@@ -25,6 +27,12 @@ namespace OpenRamble.App.Linux;
 /// <see cref="ControlSocketClient"/>. It lives on this binary rather than beside it so that a
 /// compositor keybind can name the one path a person already has.
 /// </para>
+/// <para>
+/// The command-line tool is the other exception, for the same reason: <c>openramble file.m4a</c>
+/// names the command a person already has on PATH. Any argument but the app's own
+/// <c>--diag</c> goes to <see cref="CommandLineTool"/>, which never touches Avalonia; with no
+/// arguments - the desktop entry, autostart - this is the app, as it always was.
+/// </para>
 /// </remarks>
 public static class Program
 {
@@ -33,6 +41,11 @@ public static class Program
         if (arguments is [ControlSocketClient.Verb, .. string[] command])
         {
             return ControlSocketClient.Run(command, Console.Out, Console.Error);
+        }
+
+        if (CommandLineTool.Handles(arguments, DiagnosticLog.CommandLineFlag))
+        {
+            return CommandLineTool.Run(arguments);
         }
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(arguments);

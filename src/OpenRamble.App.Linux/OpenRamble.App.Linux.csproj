@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="../LocalASR/LocalASR.csproj" />
     <ProjectReference Include="../OpenRamble.AppCore/OpenRamble.AppCore.csproj" />
+    <ProjectReference Include="../OpenRamble.Cli/OpenRamble.Cli.csproj" />
     <ProjectReference Include="../OpenRamble.LinuxAudio/OpenRamble.LinuxAudio.csproj" />
     <ProjectReference Include="../OpenRamble.LinuxInput/OpenRamble.LinuxInput.csproj" />
   </ItemGroup>

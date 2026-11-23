@@ -230,15 +230,25 @@ public sealed partial class AppState
             // Off the caller's thread, which may be the UI's: resolving the microphone may start
             // a process.
             string? deviceUid = InputDeviceUid;
-            IMeetingCapturing capture = await Task.Run(() => make(
-                directory,
-                deviceUid,
-                system,
-                levels => LiveLevels = levels,
-                segment => SegmentReady(metadata.Id, segment),
-                // Off the reporting thread: a failure may stop the recording, which waits for
-                // the lifecycle this start may still hold.
-                failure => _ = Task.Run(() => RecordingFailed(failure)))).ConfigureAwait(false);
+            IMeetingCapturing capture;
+            try
+            {
+                capture = await Task.Run(() => make(
+                    directory,
+                    deviceUid,
+                    system,
+                    levels => LiveLevels = levels,
+                    segment => SegmentReady(metadata.Id, segment),
+                    // Off the reporting thread: a failure may stop the recording, which waits for
+                    // the lifecycle this start may still hold.
+                    failure => _ = Task.Run(() => RecordingFailed(failure)))).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Nothing will finish this recording, so nothing else would release its hold.
+                ReleaseRecordingEngineHold();
+                throw;
+            }
             lock (gate)
             {
                 meetingCapture = capture;

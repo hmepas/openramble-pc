@@ -65,7 +65,7 @@ public sealed class ChannelClock
     /// <summary>How long, in host frames, skew must stay past the threshold before it is corrected.</summary>
     public long SustainFrames { get; }
 
-    private readonly long _baseFrame;
+    private long _baseFrame;
     private long? _expectedNext;
 
     /// <summary>
@@ -140,11 +140,14 @@ public sealed class ChannelClock
     }
 
     /// <summary>
-    /// Forget the running position — after a pause, the next block starts a
-    /// new run against a re-anchored clock.
+    /// Forget the running position — the source started a new run (a restart
+    /// after a device change), so its next block is placed by host time, not
+    /// butted against the last run. It never lands before where that run ended:
+    /// a block without a timestamp continues from there.
     /// </summary>
     public void Reset()
     {
+        _baseFrame = _expectedNext ?? _baseFrame;
         _expectedNext = null;
         _excursion = null;
     }

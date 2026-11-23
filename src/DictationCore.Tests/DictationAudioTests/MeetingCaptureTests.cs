@@ -10,6 +10,7 @@ internal sealed class ScriptedAudioSource : IMeetingAudioSource
     private readonly Lock gate = new();
     private Action<MeetingAudioBlock>? onBlock;
     private Action<MeetingSourceFailure>? onFailure;
+    private readonly List<Action<MeetingSourceFailure>> failureHandlers = [];
     private int startCount;
     private int stopCount;
     private int recoveryCount;
@@ -35,6 +36,7 @@ internal sealed class ScriptedAudioSource : IMeetingAudioSource
             startCount++;
             this.onBlock = onBlock;
             this.onFailure = onFailure;
+            failureHandlers.Add(onFailure);
         }
     }
 
@@ -59,6 +61,14 @@ internal sealed class ScriptedAudioSource : IMeetingAudioSource
         Action<MeetingSourceFailure>? handler;
         lock (gate) { handler = onFailure; }
         handler?.Invoke(failure);
+    }
+
+    /// <summary>Report a failure through the handler of an earlier run (1-based), as a queued one would arrive.</summary>
+    public void FailRun(int run, MeetingSourceFailure failure)
+    {
+        Action<MeetingSourceFailure> handler;
+        lock (gate) { handler = failureHandlers[run - 1]; }
+        handler(failure);
     }
 
     public void PrepareForRecovery()
@@ -433,6 +443,83 @@ public sealed class MeetingCaptureTests : IDisposable
         MeetingGap gap = Assert.Single(summary.Gaps);
         Assert.Equal(MeetingChannel.Microphone, gap.Channel);
         Assert.Equal(MeetingGap.GapReason.MicrophoneUnavailable, gap.Reason);
+    }
+
+    /// <summary>
+    /// Both sides recording; the microphone's device changes and its new run starts a second
+    /// later. The new run's first block belongs where the host clock puts it: none of it is dropped
+    /// as late, and the second it was away is silence on its own channel.
+    /// </summary>
+    [Fact]
+    public async Task TestARestartedMicrophoneIsPlacedByHostTimeAndLosesNothing()
+    {
+        var microphone = new ScriptedAudioSource();
+        var system = new ScriptedAudioSource();
+        var capture = new MeetingCapture(directory, microphone, system)
+        {
+            RestartDelay = _ => Task.CompletedTask,
+        };
+        capture.Start();
+        ulong anchor = MeetingAudioBlock.HostNanosecondsNow();
+        const int block = 1_600;
+        const ulong blockNanoseconds = 100_000_000;
+        ulong At(int i) => anchor + ((ulong)i * blockNanoseconds);
+        for (int i = 0; i < 10; i++)
+        {
+            microphone.Deliver(Constant(0.5f, block), At(i));
+            system.Deliver(Constant(-0.5f, block), At(i));
+        }
+        microphone.Fail(new MeetingSourceFailure.ConfigurationChanged());
+        await WaitUntil(() => microphone.StartCount == 2);
+        for (int i = 10; i < 20; i++) { system.Deliver(Constant(-0.5f, block), At(i)); }
+        for (int i = 20; i < 30; i++)
+        {
+            microphone.Deliver(Constant(0.5f, block), At(i));
+            system.Deliver(Constant(-0.5f, block), At(i));
+        }
+        MeetingCapture.Summary summary = capture.Stop();
+
+        var audio = ReadChannels(capture.AudioPath);
+        int first = Array.FindIndex(audio.Left, sample => Math.Abs(sample) > 0.1);
+        Assert.InRange(first, 0, 320);
+        Assert.Equal(20 * block, audio.Left.Count(sample => Math.Abs(sample) > 0.1));
+        Assert.All(audio.Left[(first + (11 * block))..(first + (19 * block))], sample => Assert.Equal(0, sample, 0.001));
+        Assert.All(audio.Left[(first + (20 * block))..(first + (30 * block))], sample => Assert.Equal(0.5, sample, 0.001));
+        MeetingGap gap = Assert.Single(summary.Gaps);
+        Assert.Equal(MeetingChannel.Microphone, gap.Channel);
+        Assert.True(gap.Start <= 1.0 && gap.End >= 1.5, $"gap {gap.Start}-{gap.End}");
+    }
+
+    /// <summary>
+    /// A failure queued by a run that was then stopped and started again - a quick pause and
+    /// resume - belongs to the old run and must not stop the healthy new one.
+    /// </summary>
+    [Fact]
+    public async Task TestAFailureFromAPreviousRunDoesNotStopTheNewOne()
+    {
+        var microphone = new ScriptedAudioSource();
+        var failures = new List<MeetingCapture.Failure>();
+        var capture = new MeetingCapture(
+            directory,
+            microphone,
+            systemAudio: null,
+            onFailure: failure => { lock (failures) { failures.Add(failure); } })
+        {
+            RestartDelay = _ => Task.CompletedTask,
+        };
+        capture.Start();
+        capture.Pause();
+        capture.Resume();
+        Assert.Equal(2, microphone.StartCount);
+        microphone.FailRun(1, new MeetingSourceFailure.ConfigurationChanged());
+        microphone.FailRun(1, new MeetingSourceFailure.StartFailed("stale"));
+        await Task.Delay(200);
+        Assert.Equal(1, microphone.StopCount);
+        Assert.Equal(2, microphone.StartCount);
+        Assert.True(microphone.IsRunning);
+        lock (failures) { Assert.Empty(failures); }
+        MeetingCapture.Summary summary = capture.Stop();
+        Assert.Empty(summary.Gaps);
     }
 
     [Fact]

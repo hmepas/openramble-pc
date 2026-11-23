@@ -261,7 +261,13 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
     /// <summary>Run the callbacks the reader queued, in order, until the run is released.</summary>
     private static void Deliver(Run run)
     {
-        foreach (Action next in run.Outbox.GetConsumingEnumerable()) { next(); }
+        foreach (Action next in run.Outbox.GetConsumingEnumerable())
+        {
+            // The stop gave up waiting and returned: what is still queued would land after it -
+            // after a resume, at the resume point.
+            if (run.Abandoned) { return; }
+            next();
+        }
     }
 
     /// <summary>Signal, then force; never waits longer than the budget. Safe twice.</summary>
@@ -295,7 +301,7 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
         Thread? delivery = run.Delivery;
         if (delivery is not null && delivery != Thread.CurrentThread)
         {
-            delivery.Join(StopBudget);
+            if (!delivery.Join(StopBudget)) { run.Abandoned = true; }
         }
     }
 
@@ -306,6 +312,7 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
     {
         private int failed;
         private volatile bool stopping;
+        private volatile bool abandoned;
 
         public IRecorderProcess Recorder { get; } = recorder;
 
@@ -331,6 +338,13 @@ public sealed class PipeWireMeetingSource : IMeetingAudioSource
         {
             get => stopping;
             set => stopping = value;
+        }
+
+        /// <summary>The stop returned before delivery finished; nothing more is delivered.</summary>
+        public bool Abandoned
+        {
+            get => abandoned;
+            set => abandoned = value;
         }
 
         public bool HasFailed => Volatile.Read(ref failed) != 0;

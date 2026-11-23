@@ -1180,8 +1180,12 @@ public sealed class FakeMeetingCapture : IMeetingCapturing
         set { lock (gate) { systemHealth = value; } }
     }
 
+    /// <summary>Thrown by the factory itself, before there is a capture to start.</summary>
+    public Exception? MakeError { get; set; }
+
     public MeetingCaptureFactory Factory => (directory, _, includeSystemAudio, _, onSegment, onFailure) =>
     {
+        if (MakeError is { } makeError) { throw makeError; }
         Directory = directory;
         IncludesSystemAudio = includeSystemAudio;
         OnSegment = onSegment;

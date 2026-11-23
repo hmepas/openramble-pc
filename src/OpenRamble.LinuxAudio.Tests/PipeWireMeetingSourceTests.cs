@@ -106,6 +106,41 @@ public sealed class PipeWireMeetingSourceTests
         Assert.Equal([980_000_000UL, 1_980_000_000UL, 2_980_000_000UL], stamps);
     }
 
+    /// <summary>
+    /// A stop that gave up waiting for a slow consumer has returned; the blocks still queued must
+    /// not be delivered after it - after a pause and resume they would land at the resume point.
+    /// </summary>
+    [Fact]
+    public void AStopThatGivesUpOnASlowConsumerDeliversNothingAfterIt()
+    {
+        var recorder = new FakeRecorderProcess();
+        var blocks = new BlockingCollection<MeetingAudioBlock>();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        int stamped = 0;
+        var source = Source(recorder, clock: () => (ulong)Interlocked.Increment(ref stamped) * 1_000_000_000UL);
+
+        source.Start(
+            block =>
+            {
+                entered.Set();
+                release.Wait(Wait);
+                blocks.Add(block);
+            },
+            _ => { });
+        recorder.Feed(new float[320]);
+        Assert.True(entered.Wait(Wait));
+        recorder.Feed(new float[320]);
+        recorder.Feed(new float[320]);
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref stamped) == 3, Wait), "the reader kept reading");
+
+        source.Stop();
+        release.Set();
+
+        Assert.True(blocks.TryTake(out _, Wait), "the block in hand finishes");
+        Assert.False(blocks.TryTake(out _, TimeSpan.FromMilliseconds(300)), "nothing queued is delivered after the stop");
+    }
+
     [Fact]
     public void ARecorderThatExitsOnItsOwnIsAChangedDevice()
     {

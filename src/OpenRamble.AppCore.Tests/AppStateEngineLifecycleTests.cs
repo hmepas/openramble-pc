@@ -238,6 +238,24 @@ public sealed class AppStateEngineLifecycleTests : IDisposable
         Assert.Equal(2, engine.ModelLoads);
     }
 
+    /// <summary>
+    /// A recorder that could not even be made holds nothing: the engine still rests when idle.
+    /// </summary>
+    [Fact]
+    public async Task ARecorderThatCannotBeMadeDoesNotKeepTheEngineAwake()
+    {
+        harness.InstallModelMarker();
+        FinishSetup();
+        harness.WarmUpEngine = new CountingASREngine();
+        harness.MeetingCapture.MakeError = new InvalidOperationException("no recorder");
+        AppState state = harness.MakeState();
+        await TestWait.For("the engine warmed up", () => state.IsEngineReady);
+
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => state.StartRecording());
+        state.IdleUnloadDelayOverride = TimeSpan.Zero;
+        await TestWait.For("the engine rested", () => !state.IsEngineReady);
+    }
+
     /// <summary>The key press is the earliest reload trigger: it fires before any readiness guard can swallow it.</summary>
     [Fact]
     public async Task KeyDownRewarmsAColdEngine()

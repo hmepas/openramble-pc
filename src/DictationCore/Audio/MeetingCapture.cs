@@ -422,10 +422,14 @@ public sealed class MeetingCapture : IMeetingCapturing
 
     private void StartSource(IMeetingAudioSource source, MeetingChannel channel)
     {
-        startGeneration[channel] = startGeneration.GetValueOrDefault(channel) + 1;
+        int generation = startGeneration.GetValueOrDefault(channel) + 1;
+        startGeneration[channel] = generation;
+        // A new run is a new clock: its first block is placed by host time, so the outage lands
+        // where it happened rather than being butted against the previous run's audio.
+        pipeline.ResetClock(channel);
         source.Start(
             block => pipeline.Ingest(channel, block),
-            failure => Task.Run(() => SourceFailed(channel, failure)));
+            failure => Task.Run(() => SourceFailed(channel, generation, failure)));
     }
 
     /// <summary>Restart after a recovery or a device change; a failure is reported, not thrown.</summary>
@@ -484,17 +488,19 @@ public sealed class MeetingCapture : IMeetingCapturing
         DeliverFailures();
     }
 
-    private void SourceFailed(MeetingChannel channel, MeetingSourceFailure failure)
+    private void SourceFailed(MeetingChannel channel, int generation, MeetingSourceFailure failure)
     {
-        SourceFailedLocked(channel, failure);
+        SourceFailedLocked(channel, generation, failure);
         DeliverFailures();
     }
 
-    private void SourceFailedLocked(MeetingChannel channel, MeetingSourceFailure failure)
+    private void SourceFailedLocked(MeetingChannel channel, int generation, MeetingSourceFailure failure)
     {
         lock (gate)
         {
             if (state != CaptureState.Recording) { return; }
+            // Queued by a run that has since been stopped and started again: not this run's failure.
+            if (startGeneration.GetValueOrDefault(channel) != generation) { return; }
             bool moved = failure is MeetingSourceFailure.ConfigurationChanged;
             pipeline.MarkDown(
                 channel,
@@ -529,7 +535,6 @@ public sealed class MeetingCapture : IMeetingCapturing
             TimeSpan delay = FirstRestartDelay * Math.Pow(2, recent.Count);
             if (delay > LongestRestartDelay) { delay = LongestRestartDelay; }
             recent.Enqueue(now);
-            int generation = startGeneration.GetValueOrDefault(channel);
             _ = Task.Run(async () =>
             {
                 await RestartDelay(delay).ConfigureAwait(false);
@@ -746,6 +751,19 @@ internal sealed class MeetingPipeline
             heldMicrophone.Clear();
             heldMicrophoneFrames = 0;
             audioSink?.Anchor(now, anchorFrame);
+        }
+    }
+
+    /// <summary>
+    /// A source started a new run: its first block is placed by host time, so an outage is
+    /// silence where it happened - not a block butted against the last run, late by the outage,
+    /// that the aligner drops.
+    /// </summary>
+    internal void ResetClock(MeetingChannel channel)
+    {
+        lock (queue)
+        {
+            if (clocks.TryGetValue(channel, out ChannelClock? clock)) { clock.Reset(); }
         }
     }
 

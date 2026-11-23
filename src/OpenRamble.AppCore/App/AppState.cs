@@ -55,6 +55,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
     private readonly Func<bool> layoutHasAltGraph;
     private readonly Func<DictationHotkey, bool> hotkeySourceSwallowsKey;
     private readonly Func<bool> keydFoldsRightModifiers;
+    private readonly Func<KeyCombination, string?> lastTakeShortcutRewrite;
     private readonly string? hotkeySettingsHint;
     private readonly MicrophoneRemedy microphoneRemedy;
     private readonly Func<DateTimeOffset> now;
@@ -121,6 +122,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         layoutHasAltGraph = environment.LayoutHasAltGraph ?? (static () => false);
         hotkeySourceSwallowsKey = environment.HotkeySourceSwallowsKey ?? (static _ => true);
         keydFoldsRightModifiers = environment.KeydFoldsRightModifiers ?? (static () => false);
+        lastTakeShortcutRewrite = environment.LastTakeShortcutRewrite ?? (static _ => null);
         hotkeySettingsHint = environment.HotkeySettingsHint;
         microphoneRemedy = environment.MicrophoneRemedy;
         now = environment.Now ?? (static () => DateTimeOffset.Now);

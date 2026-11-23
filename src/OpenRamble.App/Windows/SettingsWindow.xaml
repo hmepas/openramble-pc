@@ -25,7 +25,7 @@
                     <StackPanel x:Name="ShortcutRows" />
                     <TextBlock x:Name="HotkeyWarning" TextWrapping="Wrap" Margin="0,4,0,0"
                                Visibility="Collapsed" />
-                    <TextBlock x:Name="CopyShortcutProblem" TextWrapping="Wrap" Margin="0,4,0,0"
+                    <TextBlock x:Name="LastTakeShortcutProblem" TextWrapping="Wrap" Margin="0,4,0,0"
                                Visibility="Collapsed" />
                     <TextBlock Style="{StaticResource Footer}"
                                Text="Hold to talk, or double-press for hands-free dictation. Press once more to finish. The paste shortcut puts your newest dictation into the app in front; clear it to give the keys back to another app." />

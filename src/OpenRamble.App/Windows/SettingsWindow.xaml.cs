@@ -313,9 +313,9 @@ public sealed partial class SettingsWindow : Window
     private void RenderCopyProblem()
     {
         string? problem = copyRecorder.Problem;
-        CopyShortcutProblem.Text = problem ?? string.Empty;
-        CopyShortcutProblem.Foreground = StatusBrushes.Attention;
-        CopyShortcutProblem.Visibility = problem is null ? Visibility.Collapsed : Visibility.Visible;
+        LastTakeShortcutProblem.Text = problem ?? string.Empty;
+        LastTakeShortcutProblem.Foreground = StatusBrushes.Attention;
+        LastTakeShortcutProblem.Visibility = problem is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
     /// <summary>

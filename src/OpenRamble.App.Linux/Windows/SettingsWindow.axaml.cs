@@ -66,7 +66,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
     private static readonly Uri SourceUrl = new("https://github.com/mikwiseman/openramble");
 
     private readonly AppState state;
-    private readonly WavPlayback playback = new();
 
     /// <summary>
     /// The microphones as they were listed when the window opened or came back to the front.
@@ -77,16 +76,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
     /// tick. Coming back to the window is the moment a person has just plugged something in.
     /// </remarks>
     private IReadOnlyList<AudioInputDevice> devices = [];
-
-    /// <summary>The take being played, so its row can offer Stop rather than Play.</summary>
-    private Guid? playingEntry;
-
-    /// <summary>
-    /// What the history rows were last built from. Fifty rows with five buttons each are not
-    /// rebuilt for a property change that touched none of them.
-    /// </summary>
-    private IReadOnlyList<HistoryEntry>? renderedHistory;
-    private bool renderedHistoryCanRetranscribe;
 
     /// <summary>
     /// Guards the controls against reacting to what the render just set.
@@ -122,7 +111,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         LastTakeShortcutRecorder.ProblemChanged += _ => RenderLastTakeProblem();
 
         Toggle(LaunchToggle, on => state.LaunchAtLogin = on);
-        Toggle(ClipboardToggle, on => state.CopiesToClipboard = on);
         Toggle(TrailingSpaceToggle, on => state.AppendsTrailingSpace = on);
         Toggle(SoundsToggle, on => state.SoundsEnabled = on);
         Toggle(SilenceToggle, on => state.StopsOnSilence = on);
@@ -138,7 +126,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         Closed += (_, _) =>
         {
             state.PropertyChanged -= OnStateChanged;
-            playback.Dispose();
         };
 
         // Permissions are granted in system settings, and returned here a person should see a
@@ -221,8 +208,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
         LaunchToggle.IsChecked = state.LaunchAtLogin;
         Changed(RevertLaunch, state.LaunchAtLogin != SettingsDefaults.LaunchAtLogin);
-        ClipboardToggle.IsChecked = state.CopiesToClipboard;
-        Changed(RevertClipboard, state.CopiesToClipboard != SettingsDefaults.CopiesToClipboard);
         TrailingSpaceToggle.IsChecked = state.AppendsTrailingSpace;
         Changed(RevertTrailingSpace, state.AppendsTrailingSpace != SettingsDefaults.AppendsTrailingSpace);
         SoundsToggle.IsChecked = state.SoundsEnabled;
@@ -369,7 +354,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
     private void OnRevertLaunch(object? sender, RoutedEventArgs args) => state.LaunchAtLogin = SettingsDefaults.LaunchAtLogin;
 
-    private void OnRevertClipboard(object? sender, RoutedEventArgs args) => state.CopiesToClipboard = SettingsDefaults.CopiesToClipboard;
 
     private void OnRevertTrailingSpace(object? sender, RoutedEventArgs args) => state.AppendsTrailingSpace = SettingsDefaults.AppendsTrailingSpace;
 
@@ -507,168 +491,14 @@ public sealed partial class SettingsWindow : Window, IDictationSink
     // MARK: - Dictation History
 
     /// <summary>
-    /// Rows built by hand rather than through a template: each carries five buttons bound to
-    /// one entry, and a template with five commands is more plumbing than fifty rows.
+    /// The limit only: the dictations themselves are listed in the Library (upstream 0.37).
     /// </summary>
-    private void RenderHistory(bool force = false)
+    private void RenderHistory()
     {
         IReadOnlyList<HistoryEntry> history = state.History;
         HistoryLimitPicker.SelectedIndex = Array.IndexOf(HistoryLimits, state.HistoryLimit);
         ShowHistoryButton.IsEnabled = history.Count > 0;
         ClearHistoryButton.IsEnabled = history.Count > 0;
-        HistoryEmpty.IsVisible = history.Count == 0;
-        HistoryScroller.IsVisible = history.Count > 0;
-
-        bool canRetranscribe = !state.IsRetranscribing && state.IsEngineReady;
-        if (!force && ReferenceEquals(history, renderedHistory) && canRetranscribe == renderedHistoryCanRetranscribe)
-        {
-            return;
-        }
-
-        renderedHistory = history;
-        renderedHistoryCanRetranscribe = canRetranscribe;
-
-        if (playingEntry is { } playing && (!playback.IsPlaying || history.All(entry => entry.Id != playing)))
-        {
-            playingEntry = null;
-        }
-
-        HistoryList.Children.Clear();
-        foreach (HistoryEntry entry in history)
-        {
-            HistoryList.Children.Add(HistoryRow(entry));
-            HistoryList.Children.Add(new Separator());
-        }
-    }
-
-    private Control HistoryRow(HistoryEntry entry)
-    {
-        string? audio = state.HistoryAudioPath(entry);
-        bool isPlaying = playingEntry == entry.Id && playback.IsPlaying;
-
-        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto") };
-        header.Children.Add(new TextBlock
-        {
-            Text = entry.Date.ToLocalTime().ToString("g", CultureInfo.CurrentCulture),
-            Foreground = Brushes.Gray,
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-
-        Button keep = RowButton(
-            entry.IsKept ? "★" : "☆",
-            entry.IsKept ? "Kept. Stop keeping" : "Keep this dictation",
-            () => state.SetHistoryEntryKept(!entry.IsKept, entry));
-        keep.Foreground = entry.IsKept ? StatusBrushes.Attention : Brushes.Gray;
-        Grid.SetColumn(keep, 1);
-        header.Children.Add(keep);
-
-        if (audio is not null)
-        {
-            // Worth having after editing the dictionary: the words the model heard do not
-            // change, but what they become does.
-            Button again = RowButton("↻", "Recognise this recording again", () => state.RetranscribeHistoryEntry(entry));
-            again.IsEnabled = !state.IsRetranscribing && state.IsEngineReady;
-            Grid.SetColumn(again, 2);
-            header.Children.Add(again);
-        }
-
-        // A take with no words has nothing to copy: the button is hidden rather than removed, so
-        // the star, the re-run and Delete stay in their columns on every row.
-        bool hasWords = entry.Text.Length > 0;
-        Button copy = RowButton("Copy", "Copy this dictation", () => state.CopyHistoryEntry(entry));
-        if (!hasWords)
-        {
-            copy.Opacity = 0;
-            copy.IsEnabled = false;
-            copy.IsHitTestVisible = false;
-            copy.Focusable = false;
-        }
-
-        Grid.SetColumn(copy, 3);
-        header.Children.Add(copy);
-
-        Button delete = RowButton("Delete", "Delete this dictation", () =>
-        {
-            if (playingEntry == entry.Id) { StopPlayback(); }
-            state.DeleteHistoryEntry(entry);
-        });
-        Grid.SetColumn(delete, 4);
-        header.Children.Add(delete);
-
-        var row = new StackPanel { Margin = new Thickness(4, 8) };
-        row.Children.Add(header);
-        row.Children.Add(hasWords
-            ? new SelectableTextBlock
-            {
-                Text = entry.Text,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 6, 0, 6),
-            }
-            : new TextBlock
-            {
-                // Kept for its audio: play it, or recognise it again.
-                Text = "Nothing recognized",
-                Foreground = Brushes.Gray,
-                FontStyle = FontStyle.Italic,
-                Margin = new Thickness(0, 6, 0, 6),
-            });
-
-        if (audio is not null)
-        {
-            Button play = RowButton(
-                isPlaying ? "■ Stop" : "▶ Play",
-                isPlaying ? "Stop playback" : "Play this recording",
-                () => TogglePlayback(entry, audio));
-            play.HorizontalAlignment = HorizontalAlignment.Left;
-            row.Children.Add(play);
-        }
-        else
-        {
-            // Said rather than hidden: a row without a Play button and no explanation reads
-            // as a bug.
-            row.Children.Add(new TextBlock
-            {
-                Text = "Recording no longer on disk",
-                Foreground = Brushes.Gray,
-                FontSize = 12,
-            });
-        }
-
-        return row;
-    }
-
-    private static Button RowButton(string content, string accessibilityLabel, Action action)
-    {
-        var button = new Button
-        {
-            Content = content,
-            Padding = new Thickness(8, 2, 8, 2),
-            Margin = new Thickness(6, 0, 0, 0),
-        };
-        ToolTip.SetTip(button, accessibilityLabel);
-        AutomationProperties.SetName(button, accessibilityLabel);
-        button.Click += (_, _) => action();
-        return button;
-    }
-
-    /// <summary>One take playing at a time: a second Play stops the first rather than layering two.</summary>
-    private void TogglePlayback(HistoryEntry entry, string audio)
-    {
-        if (playingEntry == entry.Id && playback.IsPlaying)
-        {
-            StopPlayback();
-            return;
-        }
-
-        playingEntry = playback.Play(audio) ? entry.Id : null;
-        RenderHistory(force: true);
-    }
-
-    private void StopPlayback()
-    {
-        playback.Stop();
-        playingEntry = null;
-        RenderHistory(force: true);
     }
 
     private void OnRevealHistory(object? sender, RoutedEventArgs args) => state.RevealHistoryAudio();
@@ -683,7 +513,6 @@ public sealed partial class SettingsWindow : Window, IDictationSink
             "The transcripts and their recordings are removed from this PC.",
             "Delete All").ConfigureAwait(true);
         if (!confirmed) { return; }
-        StopPlayback();
         state.ClearHistory();
     }
 

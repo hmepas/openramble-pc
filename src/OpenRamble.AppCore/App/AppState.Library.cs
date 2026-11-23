@@ -49,7 +49,6 @@ public sealed partial class AppState
     public IReadOnlyList<MeetingRecordingMetadata> Recordings
     {
         get { lock (gate) { return recordings; } }
-        private set => Set(ref recordings, value);
     }
 
     /// <summary>What the importer is doing: files being read in, the one transcribing, the queue.</summary>
@@ -135,11 +134,33 @@ public sealed partial class AppState
         if (importer is { } waiting) { _ = Task.Run(waiting.ModelsChanged); }
     }
 
-    /// <summary>Read the list from disk again.</summary>
+    /// <summary>Taken before a listing starts; the newest listing shown so far.</summary>
+    private long recordingsListingStarted;
+    private long recordingsListingShown;
+
+    /// <summary>Test-only: runs between a listing and its showing, so a test can hold one there.</summary>
+    public Action? AfterRecordingsListed { get; set; }
+
+    /// <summary>
+    /// Read the list from disk again. Listings run on many threads at once; one that started
+    /// earlier never replaces one that started later, so a list read before a trash cannot bring
+    /// the trashed recording back.
+    /// </summary>
     public void ReloadRecordings()
     {
         if (meetingStore is null) { return; }
-        Recordings = meetingStore.List();
+        long generation = Interlocked.Increment(ref recordingsListingStarted);
+        IReadOnlyList<MeetingRecordingMetadata> listed = meetingStore.List();
+        AfterRecordingsListed?.Invoke();
+        lock (gate)
+        {
+            // Checked and assigned in one step, so a newer listing cannot slip in between.
+            if (generation < recordingsListingShown) { return; }
+            recordingsListingShown = generation;
+            recordings = listed;
+        }
+
+        Raise(nameof(Recordings));
     }
 
     public string? RecordingAudioPath(Guid id) => meetingStore?.AudioPath(id);
@@ -156,9 +177,12 @@ public sealed partial class AppState
     public Task ImportFiles(IReadOnlyList<string> files)
     {
         if (importer is null || files.Count == 0) { return Task.CompletedTask; }
+        // The importer is busy from here on, before the engine is asked: an idle unload under
+        // way either sees the activity and rewarms, or this sees it unloaded.
+        Task copying = importer.Add(files);
         // An engine resting after an hour idle comes back for the file, as it does for a key press.
         RewarmEngineIfCold(RewarmTrigger.Import);
-        return importer.Add(files);
+        return copying;
     }
 
     private void PublishImportActivity()
@@ -290,6 +314,16 @@ public sealed partial class AppState
             : RecordingTrashOutcome.Failed;
     }
 
+    /// <summary>
+    /// <see cref="TrashRecordings"/> off the calling thread: the Trash is a process per
+    /// recording, with a timeout of its own, and the window must not freeze meanwhile.
+    /// </summary>
+    public Task<RecordingTrashOutcome> TrashRecordingsAsync(IReadOnlyCollection<Guid> ids)
+    {
+        Guid[] copy = [.. ids];
+        return Task.Run(() => TrashRecordings(copy));
+    }
+
     /// <summary>Gone for good - only after the person agreed to, on a desktop without a Trash.</summary>
     public void DeleteRecordingsPermanently(IReadOnlyCollection<Guid> ids)
     {
@@ -303,10 +337,11 @@ public sealed partial class AppState
         bool removedAll = true;
         foreach (Guid id in ids)
         {
-            importer?.Cancel(id);
             try
             {
                 remove(id);
+                // Only once it is gone: a recording the Trash refused keeps its transcript coming.
+                importer?.Cancel(id);
                 lock (gate) { loadedTranscripts.Remove(id); }
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)

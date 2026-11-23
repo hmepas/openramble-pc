@@ -445,6 +445,34 @@ public sealed class RecordingImporterTests : IDisposable
         Assert.Equal([files[0].Id], Finished);
     }
 
+    /// <summary>
+    /// Trashed while its decode was in flight, and the model went away under that decode: the
+    /// file must not go back in line for a recording that is gone.
+    /// </summary>
+    [Fact]
+    public async Task AFileTrashedAsTheModelGoesAwayIsNotTakenUpAgain()
+    {
+        engine.HoldNextDecode();
+        await importer.Add([TwoPartFile()]);
+        await Wait("the first decode", () => engine.IsDecodeWaiting);
+        Guid id = Assert.Single(Imported).Id;
+
+        importer.Cancel(id);
+        store.Trash(id);
+        modelReady = false;
+        engine.FailsEveryDecode = true;
+        engine.ReleaseDecode();
+        await Wait("the decode to end", () => importer.Activity.Transcribing is null);
+
+        Assert.Empty(importer.Activity.Waiting);
+        engine.FailsEveryDecode = false;
+        modelReady = true;
+        importer.ModelsChanged();
+        await Task.Delay(80);
+        Assert.Empty(Finished);
+        Assert.Equal(1, engine.Decodes);
+    }
+
     [Fact]
     public async Task ThreeFailuresInARowStopAndSayTheTranscriptIsNotWhole()
     {
@@ -560,6 +588,34 @@ public sealed class RecordingImporterTests : IDisposable
         Assert.Equal([left.Id], Finished);
         Assert.Equal(MeetingTranscriptionState.Complete, store.Metadata(left.Id)!.TranscriptionState);
         Assert.Equal(["Piece 1.", "Piece 2."], store.Transcript(left.Id)!.Utterances.Select(utterance => utterance.Text));
+    }
+
+    /// <summary>
+    /// A quit during compaction leaves a whole transcript beside its WAV and a half archive: the
+    /// half archive goes and the sound is compacted at the next launch.
+    /// </summary>
+    [Fact]
+    public async Task AQuitDuringCompactionIsCompactedAtTheNextLaunch()
+    {
+        MeetingRecordingMetadata whole = RecordingImporter.Store(ShortFile("Whole.wav"), store, DateTimeOffset.Now);
+        whole.TranscriptionState = MeetingTranscriptionState.Complete;
+        store.Write(whole);
+        MeetingRecordingMetadata partial = RecordingImporter.Store(ShortFile("Partial.wav"), store, DateTimeOffset.Now);
+        partial.TranscriptionState = MeetingTranscriptionState.Partial;
+        store.Write(partial);
+        string halfArchive = Path.Combine(store.Directory(partial.Id), "audio.m4a.incomplete");
+        await File.WriteAllTextAsync(halfArchive, "half");
+
+        importer.Stop();
+        var compressor = new FakeCompressor(succeeds: true);
+        importer = MakeImporter(compressor);
+        importer.Resume(store.List());
+        await Wait("the archive", () => store.CompressedAudioPath(whole.Id) is not null && store.RawAudioPath(whole.Id) is null);
+
+        Assert.False(File.Exists(halfArchive));
+        Assert.NotNull(store.RawAudioPath(partial.Id));
+        Assert.Single(compressor.Sources);
+        Assert.Equal(0, engine.Decodes);
     }
 
     /// <summary>

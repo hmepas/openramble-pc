@@ -468,7 +468,14 @@ public sealed class FakeRecordingTrasher : IRecordingTrasher
 {
     public bool IsAvailable { get; set; } = true;
 
-    public void Trash(string path) => Directory.Delete(path, recursive: true);
+    /// <summary>Thrown instead of trashing: the Trash refused.</summary>
+    public IOException? Failure { get; set; }
+
+    public void Trash(string path)
+    {
+        if (Failure is { } failure) { throw failure; }
+        Directory.Delete(path, recursive: true);
+    }
 }
 
 public sealed class FakeFolders : IFolderOpening

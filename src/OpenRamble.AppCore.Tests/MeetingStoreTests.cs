@@ -140,6 +140,52 @@ public sealed class MeetingStoreTests : IDisposable
         Assert.Null(store.Rename(recording.Id, "   ")?.Title);
     }
 
+    /// <summary>A write that lost the race with a trash must not bring back an empty ghost.</summary>
+    [Fact]
+    public void AWriteAfterTheTrashDoesNotRecreateTheRecording()
+    {
+        MeetingRecordingMetadata recording = Metadata();
+        store.Write(recording);
+        store.Trash(recording.Id);
+
+        recording.TranscriptionState = MeetingTranscriptionState.Complete;
+        store.Write(recording);
+        store.Write(new MeetingTranscript([], new Dictionary<MeetingChannel, int>()), recording.Id);
+
+        Assert.False(Directory.Exists(store.Directory(recording.Id)));
+        Assert.Null(store.Rename(recording.Id, "Late"));
+        Assert.Null(store.Update(recording.Id, metadata => metadata.Title = "Late"));
+        Assert.Empty(store.List());
+    }
+
+    /// <summary>A rename and an import's ending at the same moment: neither is lost.</summary>
+    [Fact]
+    public async Task ARenameAndAStateChangeAtOnceBothSurvive()
+    {
+        for (int round = 0; round < 200; round++)
+        {
+            MeetingRecordingMetadata recording = Metadata();
+            recording.TranscriptionState = MeetingTranscriptionState.Live;
+            store.Write(recording);
+            using var start = new Barrier(2);
+            Task rename = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                store.Rename(recording.Id, $"Title {round}");
+            });
+            Task finish = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                store.Update(recording.Id, metadata => metadata.TranscriptionState = MeetingTranscriptionState.Complete);
+            });
+            await Task.WhenAll(rename, finish);
+
+            MeetingRecordingMetadata written = store.Metadata(recording.Id)!;
+            Assert.Equal($"Title {round}", written.Title);
+            Assert.Equal(MeetingTranscriptionState.Complete, written.TranscriptionState);
+        }
+    }
+
     [Fact]
     public void TrashHandsTheWholeDirectoryToTheTrasher()
     {

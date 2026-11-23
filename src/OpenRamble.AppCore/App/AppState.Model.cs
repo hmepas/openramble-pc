@@ -1155,6 +1155,10 @@ public sealed partial class AppState
             IsEngineReady = false;
             EnginePreparation = EnginePreparationState.Make(
                 EnginePreparationState.Phase.Idle, TimeSpan.Zero);
+            // A file dropped while the engine went away asked for it while it still looked ready
+            // (ImportFiles publishes its activity first, then asks): bring the engine back for it.
+            Interlocked.MemoryBarrier();
+            if (!importActivity.IsIdle) { RewarmEngineIfCold(RewarmTrigger.Import); }
         });
     }
 

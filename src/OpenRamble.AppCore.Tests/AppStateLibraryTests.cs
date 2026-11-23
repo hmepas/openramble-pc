@@ -192,6 +192,60 @@ public sealed class AppStateLibraryTests : IDisposable
         Assert.Empty(state.Recordings);
     }
 
+    /// <summary>The Trash refused: the recording stays, and so does its transcript coming in.</summary>
+    [Fact]
+    public async Task ATrashThatFailsKeepsTheImportGoing()
+    {
+        AppState state = await ReadyState();
+        harness.ImportEngine.HoldNextDecode();
+        _ = state.ImportFiles([Speech("Keep.wav")]);
+        await TestWait.For("the first decode", () => harness.ImportEngine.IsDecodeWaiting);
+        Guid id = state.Recordings[0].Id;
+
+        harness.RecordingTrasher.Failure = new IOException("refused");
+        Assert.Equal(RecordingTrashOutcome.Failed, await state.TrashRecordingsAsync([id]));
+        Assert.Equal(id, state.ImportActivity.Transcribing);
+
+        harness.ImportEngine.ReleaseDecode();
+        await Complete(state);
+        Assert.Equal([id], state.Recordings.Select(recording => recording.Id));
+    }
+
+    /// <summary>
+    /// Listings run on many threads (importer callbacks, the window); one read before a trash and
+    /// shown after it must not bring the trashed recording back.
+    /// </summary>
+    [Fact]
+    public async Task AStaleListingCannotBringBackATrashedRecording()
+    {
+        var store = new MeetingStore(harness.Paths.Recordings(), harness.RecordingTrasher);
+        MeetingRecordingMetadata recording = MeetingRecordingMetadata.Create(
+            startedAt: DateTimeOffset.Now,
+            systemAudio: new SystemAudioSummary(wasRequested: false));
+        store.Write(recording);
+        AppState state = harness.MakeState();
+        await state.RefreshModelState();
+        Assert.Single(state.Recordings);
+
+        using var listed = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        state.AfterRecordingsListed = () =>
+        {
+            state.AfterRecordingsListed = null;
+            listed.Set();
+            release.Wait();
+        };
+        Task stale = Task.Run(state.ReloadRecordings);
+        listed.Wait();
+
+        Assert.Equal(RecordingTrashOutcome.Trashed, state.TrashRecordings([recording.Id]));
+        Assert.Empty(state.Recordings);
+        release.Set();
+        await stale;
+
+        Assert.Empty(state.Recordings);
+    }
+
     /// <summary>A desktop without a Trash touches nothing until the person agrees to delete for good.</summary>
     [Fact]
     public async Task WithoutATrashDeletingWaitsForConsent()

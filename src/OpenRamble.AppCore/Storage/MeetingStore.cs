@@ -105,6 +105,15 @@ public sealed class MeetingStore
     private readonly string root;
     private readonly IRecordingTrasher trasher;
 
+    /// <summary>
+    /// The one place a recording's metadata is read-modified-written and its directory removed:
+    /// a rename, an import's state and a trash cannot interleave and lose one another.
+    /// </summary>
+    private readonly Lock gate = new();
+
+    /// <summary>Recordings this store trashed or deleted; a late write must not bring them back.</summary>
+    private readonly HashSet<Guid> removed = [];
+
     public MeetingStore(string root, IRecordingTrasher? trasher = null)
     {
         this.root = root;
@@ -206,8 +215,18 @@ public sealed class MeetingStore
 
     // Writing
 
+    /// <summary>
+    /// Write a recording's metadata. A published recording this store has since removed stays
+    /// removed: the write is dropped rather than recreating its directory.
+    /// </summary>
     public void Write(MeetingRecordingMetadata metadata, bool incomplete = false)
     {
+        lock (gate) { WriteUnderLock(metadata, incomplete); }
+    }
+
+    private void WriteUnderLock(MeetingRecordingMetadata metadata, bool incomplete)
+    {
+        if (!incomplete && WasRemoved(metadata.Id)) { return; }
         string directory = incomplete ? IncompleteDirectory(metadata.Id) : Directory(metadata.Id);
         System.IO.Directory.CreateDirectory(directory);
         WriteAtomically(Path.Combine(directory, MetadataFileName), MeetingRecordingCoding.Encode(metadata));
@@ -215,8 +234,30 @@ public sealed class MeetingStore
 
     public void Write(MeetingTranscript transcript, Guid id, bool incomplete = false)
     {
-        string directory = incomplete ? IncompleteDirectory(id) : Directory(id);
-        WriteAtomically(Path.Combine(directory, TranscriptFileName), MeetingRecordingCoding.Encode(transcript));
+        lock (gate)
+        {
+            if (!incomplete && WasRemoved(id)) { return; }
+            string directory = incomplete ? IncompleteDirectory(id) : Directory(id);
+            WriteAtomically(Path.Combine(directory, TranscriptFileName), MeetingRecordingCoding.Encode(transcript));
+        }
+    }
+
+    /// <summary>Removed by this store and not back (a restore from the Trash brings it back).</summary>
+    private bool WasRemoved(Guid id) => removed.Contains(id) && !IsPublished(id);
+
+    /// <summary>
+    /// Read, change and write a published recording's metadata as one step. Null when the
+    /// recording is not there (any more).
+    /// </summary>
+    public MeetingRecordingMetadata? Update(Guid id, Action<MeetingRecordingMetadata> change)
+    {
+        lock (gate)
+        {
+            if (!IsPublished(id) || Metadata(id) is not { } metadata) { return null; }
+            change(metadata);
+            WriteUnderLock(metadata, incomplete: false);
+            return metadata;
+        }
     }
 
     private static void WriteAtomically(string path, byte[] data)
@@ -236,13 +277,8 @@ public sealed class MeetingStore
     /// <summary>Retitle a recording; a blank title means no title.</summary>
     public MeetingRecordingMetadata? Rename(Guid id, string? title)
     {
-        MeetingRecordingMetadata? metadata = Metadata(id);
-        if (metadata is null) { return null; }
-
         string? trimmed = title?.Trim();
-        metadata.Title = string.IsNullOrEmpty(trimmed) ? null : trimmed;
-        Write(metadata);
-        return metadata;
+        return Update(id, metadata => metadata.Title = string.IsNullOrEmpty(trimmed) ? null : trimmed);
     }
 
     /// <summary>
@@ -253,10 +289,23 @@ public sealed class MeetingStore
 
     /// <summary>Hand the whole recording directory to the Trash.</summary>
     /// <exception cref="IOException">There is no Trash (<see cref="CanTrash"/>), or the move failed.</exception>
-    public void Trash(Guid id) => trasher.Trash(Directory(id));
+    public void Trash(Guid id) => Remove(id, trasher.Trash);
 
     /// <summary>Remove the recording for good - only after the person agreed to.</summary>
-    public void DeletePermanently(Guid id) => System.IO.Directory.Delete(Directory(id), recursive: true);
+    public void DeletePermanently(Guid id) => Remove(id, static directory => System.IO.Directory.Delete(directory, recursive: true));
+
+    /// <summary>
+    /// Under the lock, so no metadata write lands half way through the move and none after it
+    /// recreates the directory.
+    /// </summary>
+    private void Remove(Guid id, Action<string> remove)
+    {
+        lock (gate)
+        {
+            remove(Directory(id));
+            removed.Add(id);
+        }
+    }
 
     // Recovery
 

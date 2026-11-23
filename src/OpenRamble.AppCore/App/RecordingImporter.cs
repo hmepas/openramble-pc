@@ -319,6 +319,45 @@ public sealed class RecordingImporter
                 && edges.Store.RawAudioPath(recording.Id) is not null)
             .OrderBy(recording => recording.StartedAt);
         foreach (MeetingRecordingMetadata recording in unfinished) { Enqueue(recording.Id); }
+        ResumeCompaction(recordings);
+    }
+
+    /// <summary>
+    /// A quit during <see cref="Compact"/> leaves a whole transcript beside its WAV, and maybe a
+    /// half-written archive: drop the half archive and compact again, one after another.
+    /// </summary>
+    private void ResumeCompaction(IEnumerable<MeetingRecordingMetadata> recordings)
+    {
+        var pending = new List<Guid>();
+        foreach (MeetingRecordingMetadata recording in recordings.Where(recording => recording.IsImported))
+        {
+            try { File.Delete(Path.Combine(edges.Store.Directory(recording.Id), ArchiveStagingName)); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+
+            if (recording.TranscriptionState == MeetingTranscriptionState.Complete
+                && edges.Store.RawAudioPath(recording.Id) is not null)
+            {
+                pending.Add(recording.Id);
+            }
+        }
+
+        if (pending.Count == 0
+            || edges.Compressor is null
+            || edges.Compressor is FfmpegAudioCompressor { IsAvailable: false })
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            foreach (Guid id in pending)
+            {
+                if (IsStopping) { return; }
+                await Compact(id).ConfigureAwait(false);
+                // The audio path changed: the owner reads the recording again.
+                if (!Abandoned(id) && edges.Store.CompressedAudioPath(id) is not null) { OnFinished(id); }
+            }
+        });
     }
 
     /// <summary>The model became ready, or stopped being: look at the queue again.</summary>
@@ -540,6 +579,8 @@ public sealed class RecordingImporter
     private void Requeue(Guid id) =>
         Change(() =>
         {
+            // Trashed (or the app is quitting) while the model went away: not wanted again.
+            if (IsStopping || cancelled.Contains(id)) { return; }
             if (!queue.Contains(id)) { queue.Insert(0, id); }
         });
 
@@ -558,18 +599,18 @@ public sealed class RecordingImporter
     private async Task Finish(Guid id, MeetingTranscriptionState state)
     {
         if (Abandoned(id)) { return; }
-        if (edges.Store.Metadata(id) is { } metadata)
+        try
         {
-            metadata.TranscriptionState = state;
-            try
-            {
-                edges.Store.Write(metadata);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-            }
+            // One step under the store's lock: a rename meanwhile is kept, and a recording
+            // trashed meanwhile is not written back.
+            edges.Store.Update(id, metadata => metadata.TranscriptionState = state);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
         }
 
+        // Gone (to the Trash) under the transcript: nobody is left to tell.
+        if (!edges.Store.IsPublished(id)) { return; }
         if (state == MeetingTranscriptionState.Complete) { await Compact(id).ConfigureAwait(false); }
         if (Abandoned(id)) { return; }
         OnFinished(id);

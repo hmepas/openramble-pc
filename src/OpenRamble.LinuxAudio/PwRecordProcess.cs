@@ -90,6 +90,13 @@ internal sealed class PwRecordProcess : IRecorderProcess
 
     private const int SIGTERM = 15;
 
+    /// <summary>
+    /// The system-audio stream's <c>node.name</c>: unique per app process, so a second instance
+    /// or a leftover recorder is never mistaken for this one.
+    /// </summary>
+    internal static readonly string SystemAudioNodeName =
+        $"openramble-meeting-system-{Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}";
+
     private readonly Process process;
     private readonly Lock gate = new();
     private readonly StringBuilder complaint = new();
@@ -156,10 +163,32 @@ internal sealed class PwRecordProcess : IRecorderProcess
     /// the default source (the fallback is on unless <c>node.dont-fallback</c> says otherwise), so
     /// a headset that was unplugged costs nothing but the notice the settings screen shows for
     /// it - see <c>AudioInputDevicePolicy</c>.</description></item>
+    /// <item><description><paramref name="captureSink"/> - record what the default output plays
+    /// (its monitor) instead of a microphone, for the other side of a meeting. No media role:
+    /// a monitor is not a voice stream and must not duck anything. No <c>--target</c>: the stream
+    /// follows the default sink, so WirePlumber relinks it when headphones come and go. A
+    /// <c>node.name</c> of its own so the graph can tell it apart from the microphone stream.</description></item>
     /// </list>
     /// </remarks>
-    public static IReadOnlyList<string> Arguments(AudioStreamFormat format, string? target = null)
+    public static IReadOnlyList<string> Arguments(
+        AudioStreamFormat format, string? target = null, bool captureSink = false)
     {
+        if (captureSink)
+        {
+            return
+            [
+                "--rate", ((int)format.SampleRate).ToString(CultureInfo.InvariantCulture),
+                "--channels", format.Channels.ToString(CultureInfo.InvariantCulture),
+                "--format", "f32",
+                "--raw",
+                "--latency", "20ms",
+                "-P", "stream.capture.sink=true",
+                "-P", "node.name=" + SystemAudioNodeName,
+                "-P", "media.name=\"OpenRamble meeting audio\"",
+                "-",
+            ];
+        }
+
         var arguments = new List<string>
         {
             "--rate", ((int)format.SampleRate).ToString(CultureInfo.InvariantCulture),
@@ -182,10 +211,12 @@ internal sealed class PwRecordProcess : IRecorderProcess
 
     /// <summary>Start the recorder in the recording format, or say why there is none.</summary>
     /// <param name="target">The microphone's <c>node.name</c>, or <c>null</c> for the default.</param>
+    /// <param name="captureSink">Record the default output's monitor instead of a microphone.</param>
     /// <exception cref="AudioCaptureError.EngineUnavailable">
     /// The tool is missing, or the operating system refused to start it.
     /// </exception>
-    public static IRecorderProcess Launch(AudioStreamFormat format, string? target = null)
+    public static IRecorderProcess Launch(
+        AudioStreamFormat format, string? target = null, bool captureSink = false)
     {
         string executable = DictationCore.ExecutablePath.Find(Executable)
             ?? throw new AudioCaptureError.EngineUnavailable(
@@ -200,7 +231,7 @@ internal sealed class PwRecordProcess : IRecorderProcess
             CreateNoWindow = true,
         };
 
-        foreach (string argument in Arguments(format, target))
+        foreach (string argument in Arguments(format, target, captureSink))
         {
             start.ArgumentList.Add(argument);
         }

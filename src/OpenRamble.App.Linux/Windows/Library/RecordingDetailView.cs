@@ -96,6 +96,7 @@ public sealed class RecordingDetailView : UserControl
     private TranscriptFollowState follow = new();
     private bool following;
     private bool audioMissing;
+    private string? audioPath;
     private bool renaming;
     private bool attached;
     private bool updatingSlider;
@@ -255,13 +256,27 @@ public sealed class RecordingDetailView : UserControl
             recording = current;
         }
 
+        RefreshAudio();
         Render();
     });
 
     private void OnTranscriptChanged(Guid id) => Dispatcher.UIThread.Post(() =>
     {
-        if (recording?.Id == id) { Render(); }
+        if (recording?.Id != id) { return; }
+        RefreshAudio();
+        Render();
     });
+
+    /// <summary>
+    /// A finished import swaps its WAV for the compact archive: load the file that is there now.
+    /// What is playing carries on from its open file and is swapped once it stops.
+    /// </summary>
+    private void RefreshAudio()
+    {
+        if (recording is not { } current || state.RecordingAudioPath(current.Id) == audioPath) { return; }
+        if (player.LoadedId == current.Id && player.IsPlaying) { return; }
+        LoadAudio(current.Id);
+    }
 
     private void OnEnded(object? sender, Guid id) => Dispatcher.UIThread.Post(() =>
     {
@@ -273,6 +288,7 @@ public sealed class RecordingDetailView : UserControl
     private void LoadAudio(Guid id)
     {
         string? path = state.RecordingAudioPath(id);
+        audioPath = path;
         audioMissing = path is null;
         if (path is null) { return; }
         // Opening an m4a probes it with ffprobe: off the UI thread.

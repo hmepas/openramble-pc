@@ -93,7 +93,12 @@ public sealed class DictationDetailView : UserControl
     /// <summary>Show this dictation; one that was playing stops.</summary>
     public void Show(HistoryEntry shown)
     {
-        if (entry is { } previous && previous.Id != shown.Id) { StopIfPlaying(previous.Id); }
+        if (entry is { } previous && previous.Id != shown.Id)
+        {
+            Interlocked.Increment(ref playRequest);
+            StopIfPlaying(previous.Id);
+        }
+
         entry = shown;
         Render();
     }
@@ -101,6 +106,7 @@ public sealed class DictationDetailView : UserControl
     /// <summary>Leaving the dictation: its playback stops and the view stops listening.</summary>
     public void Detach()
     {
+        Interlocked.Increment(ref playRequest);
         if (entry is { } current) { StopIfPlaying(current.Id); }
         Unsubscribe();
     }
@@ -136,6 +142,9 @@ public sealed class DictationDetailView : UserControl
         if (entry?.Id == id) { Render(); }
     });
 
+    /// <summary>Bumped by every play request, a switch to another dictation and a detach.</summary>
+    private long playRequest;
+
     private bool IsPlaying => entry is { } current && player.LoadedId == current.Id && player.IsPlaying;
 
     private void TogglePlayback()
@@ -148,13 +157,17 @@ public sealed class DictationDetailView : UserControl
             return;
         }
 
-        // Opening the file may probe it with ffprobe: off the UI thread.
+        // Opening the file may probe it with ffprobe: off the UI thread. Another dictation shown,
+        // or the view gone, meanwhile: nothing plays, since nothing would be left to stop it.
+        long request = Interlocked.Increment(ref playRequest);
         _ = Task.Run(() =>
         {
             player.Load(current.Id, audio);
-            if (player.LoadedId != current.Id) { return; }
+            if (player.LoadedId != current.Id || Interlocked.Read(ref playRequest) != request) { return; }
             player.Seek(TimeSpan.Zero);
             player.Play();
+            // Left between the check and the start: stop what nobody can stop now.
+            if (Interlocked.Read(ref playRequest) != request) { StopIfPlaying(current.Id); }
         }).ContinueWith(_ => Dispatcher.UIThread.Post(Render), TaskScheduler.Default);
     }
 

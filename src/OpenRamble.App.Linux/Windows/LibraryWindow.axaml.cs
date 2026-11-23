@@ -66,6 +66,9 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     /// <summary>Guards the list's SelectionChanged against what a rebuild does to it.</summary>
     private bool updating;
 
+    /// <summary>Recordings are on their way to the Trash (off the UI thread); Delete waits.</summary>
+    private bool trashing;
+
     public LibraryWindow(AppState state)
     {
         this.state = state;
@@ -218,7 +221,8 @@ public sealed partial class LibraryWindow : Window, IDictationSink
     private void OnTranscriptChanged(Guid id) =>
         Dispatcher.UIThread.Post(() =>
         {
-            if (SearchBox.Text?.Trim().Length > 0) { RenderList(force: true); }
+            // Progress must not rebuild (and scroll) the list: only a change in what matches does.
+            if (SearchBox.Text?.Trim().Length > 0) { RenderList(force: true, onlyIfMatchesChanged: true); }
             RenderToolbar();
         });
 
@@ -226,7 +230,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
 
     private LibraryScope Scope => ScopePicker.SelectedIndex is >= 0 and < 3 ? Scopes[ScopePicker.SelectedIndex] : LibraryScope.All;
 
-    private void RenderList(bool force = false)
+    private void RenderList(bool force = false, bool onlyIfMatchesChanged = false)
     {
         IReadOnlyList<HistoryEntry> history = state.History;
         IReadOnlyList<MeetingRecordingMetadata> recordings = state.Recordings;
@@ -243,6 +247,13 @@ public sealed partial class LibraryWindow : Window, IDictationSink
 
         rendered = inputs;
         IReadOnlyList<LibraryDay> days = state.LibraryDays(Scope, query);
+        if (onlyIfMatchesChanged
+            && days.SelectMany(day => day.Items).Select(item => item.Id).SequenceEqual(listed.Select(item => item.Id)))
+        {
+            RenderStatusLines();
+            return;
+        }
+
         DateOnly today = DateOnly.FromDateTime(DateTime.Now);
 
         updating = true;
@@ -271,7 +282,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             var available = listed.Select(item => item.Id).ToHashSet();
             selection.IntersectWith(available);
             if (selection.Count == 0 && listed.Count > 0) { selection = [listed[0].Id]; }
-            ApplySelectionToList();
+            ApplySelectionToList(scroll: !onlyIfMatchesChanged);
         }
         finally
         {
@@ -449,7 +460,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         RenderToolbar();
     }
 
-    private void ApplySelectionToList()
+    private void ApplySelectionToList(bool scroll = true)
     {
         ItemList.SelectedItems?.Clear();
         if (ItemList.ItemsSource is not IEnumerable<ListBoxItem> rows) { return; }
@@ -463,7 +474,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             }
         }
 
-        if (last is not null) { ItemList.ScrollIntoView(last); }
+        if (scroll && last is not null) { ItemList.ScrollIntoView(last); }
     }
 
     private void OnListSelectionChanged(object? sender, SelectionChangedEventArgs args)
@@ -509,6 +520,7 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         AutomationProperties.SetName(CopyButton, copyTip);
 
         TrashButton.IsVisible = selection.Count > 0;
+        TrashButton.IsEnabled = !trashing;
         string trashTip = DeleteTitle();
         ToolTip.SetTip(TrashButton, trashTip);
         AutomationProperties.SetName(TrashButton, trashTip);
@@ -581,8 +593,20 @@ public sealed partial class LibraryWindow : Window, IDictationSink
         Guid[] dictations = [.. items.OfType<LibraryItem.Dictation>().Select(item => item.Id)];
         Guid[] recordings = [.. items.OfType<LibraryItem.Recording>().Select(item => item.Id)];
         if (dictations.Length > 0) { state.DeleteDictations(dictations); }
-        if (recordings.Length == 0) { return; }
-        if (state.TrashRecordings(recordings) != RecordingTrashOutcome.NeedsPermanentDeletion) { return; }
+        if (recordings.Length == 0 || trashing) { return; }
+        RecordingTrashOutcome outcome;
+        SetTrashing(true);
+        try
+        {
+            // gio runs once per recording, with a timeout of its own: off the UI thread.
+            outcome = await state.TrashRecordingsAsync(recordings).ConfigureAwait(true);
+        }
+        finally
+        {
+            SetTrashing(false);
+        }
+
+        if (outcome != RecordingTrashOutcome.NeedsPermanentDeletion) { return; }
 
         bool confirmed = await Confirm.Ask(
             this,
@@ -590,6 +614,13 @@ public sealed partial class LibraryWindow : Window, IDictationSink
             "This desktop has no Trash to move it to, so it is deleted from this PC for good, with its audio and transcript.",
             "Delete").ConfigureAwait(true);
         if (confirmed) { state.DeleteRecordingsPermanently(recordings); }
+    }
+
+    private void SetTrashing(bool busy)
+    {
+        trashing = busy;
+        Cursor = busy ? new Cursor(StandardCursorType.Wait) : Cursor.Default;
+        RenderToolbar();
     }
 
     /// <summary>Renaming happens in the detail pane's title: the recording is selected, then its title opens.</summary>

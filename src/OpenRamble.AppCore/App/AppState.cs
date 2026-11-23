@@ -143,6 +143,8 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         copyShortcut = settings.CopyShortcut is null
             ? defaultLastTakeShortcut
             : KeyCombination.Parse(settings.CopyShortcut);
+        SetUpRecordingShortcut(environment, settings);
+        audioExporter = environment.AudioExporter ?? new MeetingAudioExporter();
         appendsTrailingSpace = settings.AppendsTrailingSpace;
         appearance = AppAppearances.Parse(settings.Appearance);
         inputDeviceUid = string.IsNullOrEmpty(settings.InputDeviceUid) ? null : settings.InputDeviceUid;
@@ -474,6 +476,7 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         // the process. Nothing about a revoked microphone makes the keyboard hook invalid.
         hotkeyMonitor.Start();
         ApplyLastTakeShortcut();
+        ApplyRecordingShortcut();
         RefreshPermissions();
 
         _ = Task.Run(async () =>
@@ -944,11 +947,13 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         journal.Record(DiagnosticEvent.SystemWoke);
         hotkeyMonitor.Stop();
         lastTakeShortcutMonitor?.Stop();
+        recordingShortcutMonitor?.Stop();
         // The release never arrived, so nothing will ever say the key came up. Restarting
         // tracking erases the gesture; this erases the same memory on our side.
         IsHotkeyHeld = false;
         hotkeyMonitor.Start();
         ApplyLastTakeShortcut();
+        ApplyRecordingShortcut();
         RefreshPermissions();
         RevalidateEngineAfterWake();
     }
@@ -1247,6 +1252,12 @@ public sealed partial class AppState : INotifyPropertyChanged, IDisposable
         {
             lastTakeShortcutMonitor.Stop();
             lastTakeShortcutMonitor.OnPress = null;
+        }
+
+        if (recordingShortcutMonitor is not null)
+        {
+            recordingShortcutMonitor.Stop();
+            recordingShortcutMonitor.OnPress = null;
         }
 
         // The monitor outlives us - it owns an OS hook. Leaving our callbacks on it would keep

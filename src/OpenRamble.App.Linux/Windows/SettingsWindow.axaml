@@ -75,6 +75,15 @@
           </Grid>
           <TextBlock x:Name="LastTakeShortcutProblem" Classes="hint" HorizontalAlignment="Right"
                      IsVisible="False" />
+
+          <Grid Classes="row" ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Classes="row" Text="Start or stop recording" />
+            <local:ShortcutRecorderButton Grid.Column="1" x:Name="RecordingShortcutRecorder"
+                                          automation:AutomationProperties.HelpText="Press this shortcut in any app to start a recording, and again to stop it" />
+            <Button Grid.Column="2" Classes="revert" x:Name="RevertRecordingShortcut" Click="OnRevertRecordingShortcut" />
+          </Grid>
+          <TextBlock x:Name="RecordingShortcutProblem" Classes="hint" HorizontalAlignment="Right"
+                     IsVisible="False" />
           <TextBlock Classes="hint" Margin="0,6,0,0"
                      Text="Hold to talk, or double-press for hands-free dictation. Press once more to finish. The paste shortcut puts your newest dictation into the app in front; clear it to give the keys back to another app." />
 

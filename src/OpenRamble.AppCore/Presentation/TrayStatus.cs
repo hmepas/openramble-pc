@@ -34,10 +34,15 @@ public enum TrayBadge
 /// <remarks>Ported from <c>MenuBarStatus</c>.</remarks>
 public static class TrayStatus
 {
-    public static TrayActivity Activity(DictationState state) => state switch
+    /// <param name="isRecordingMeeting">
+    /// A live recording is capturing (not paused): the red dot, whatever dictation is doing short
+    /// of listening, as upstream. The shortcut never raises a window, so the dot is its answer.
+    /// </param>
+    public static TrayActivity Activity(DictationState state, bool isRecordingMeeting = false) => state switch
     {
         // No dot until audio is actually being captured: the red dot must never lie about the
         // microphone, and the overlay already answers the key press instantly.
+        _ when isRecordingMeeting => TrayActivity.Recording,
         DictationState.Preparing => TrayActivity.Hidden,
         DictationState.Listening => TrayActivity.Recording,
         DictationState.Transcribing or DictationState.Inserting => TrayActivity.Working,
@@ -50,8 +55,13 @@ public static class TrayStatus
     /// and the menu's first line; the two dots also differ strongly in luminance for
     /// color-blind users.
     /// </summary>
-    public static TrayBadge Badge(TrayActivity activity, bool needsAttention = false) => activity switch
+    /// <param name="recordingIsDegraded">
+    /// A recording with a side not arriving: orange outranks the steady red, which would say all
+    /// is well (upstream <c>MenuBarStatus.badge</c>).
+    /// </param>
+    public static TrayBadge Badge(TrayActivity activity, bool needsAttention = false, bool recordingIsDegraded = false) => activity switch
     {
+        _ when recordingIsDegraded => TrayBadge.Attention,
         TrayActivity.Recording => TrayBadge.Recording,
         TrayActivity.Working => TrayBadge.Working,
         TrayActivity.Hidden => needsAttention ? TrayBadge.Attention : TrayBadge.Hidden,

@@ -109,7 +109,7 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         PlacementPicker.ItemsSource = DictationOverlayPlacements.AllCases.Select(placement => placement.Title).ToArray();
         ThemePicker.ItemsSource = AppAppearances.AllCases.Select(appearance => appearance.Title).ToArray();
         HistoryLimitPicker.ItemsSource = HistoryLimits.Select(count => $"Last {count}").ToArray();
-        CopyShortcutRecorder.Keymap = LinuxShortcutKeymap.Instance;
+        LastTakeShortcutRecorder.Keymap = LinuxShortcutKeymap.Instance;
         VersionText.Text = Version();
 
         HotkeyPicker.SelectionChanged += (_, _) => Pick(HotkeyPicker, DictationHotkeyInfo.AllCases, hotkey => state.Hotkey = hotkey);
@@ -118,13 +118,8 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         HistoryLimitPicker.SelectionChanged += (_, _) => Pick(HistoryLimitPicker, HistoryLimits, limit => state.HistoryLimit = limit);
         DevicePicker.SelectionChanged += OnDeviceChanged;
 
-        CopyShortcutRecorder.ShortcutChanged += shortcut => state.LastTakeShortcut = shortcut;
-        CopyShortcutRecorder.ProblemChanged += problem =>
-        {
-            CopyShortcutProblem.Text = problem ?? string.Empty;
-            CopyShortcutProblem.Foreground = StatusBrushes.Attention;
-            CopyShortcutProblem.IsVisible = problem is not null;
-        };
+        LastTakeShortcutRecorder.ShortcutChanged += shortcut => state.LastTakeShortcut = shortcut;
+        LastTakeShortcutRecorder.ProblemChanged += _ => RenderLastTakeProblem();
 
         Toggle(LaunchToggle, on => state.LaunchAtLogin = on);
         Toggle(ClipboardToggle, on => state.CopiesToClipboard = on);
@@ -203,6 +198,15 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
     // MARK: - General
 
+    /// <summary>A refused press wins; otherwise what a key remapper does to the chosen chord.</summary>
+    private void RenderLastTakeProblem()
+    {
+        string? problem = LastTakeShortcutRecorder.Problem ?? state.LastTakeShortcutWarning;
+        LastTakeShortcutProblem.Text = problem ?? string.Empty;
+        LastTakeShortcutProblem.Foreground = StatusBrushes.Attention;
+        LastTakeShortcutProblem.IsVisible = problem is not null;
+    }
+
     private void RenderGeneral()
     {
         HotkeyPicker.SelectedIndex = DictationHotkeyInfo.AllCases.ToList().IndexOf(state.Hotkey);
@@ -211,8 +215,9 @@ public sealed partial class SettingsWindow : Window, IDictationSink
         HotkeyWarning.Foreground = StatusBrushes.Attention;
         HotkeyWarning.IsVisible = state.HotkeyWarning is not null;
 
-        CopyShortcutRecorder.Shortcut = state.LastTakeShortcut;
-        Changed(RevertCopyShortcut, state.LastTakeShortcut != state.DefaultLastTakeShortcut);
+        LastTakeShortcutRecorder.Shortcut = state.LastTakeShortcut;
+        Changed(RevertLastTakeShortcut, state.LastTakeShortcut != state.DefaultLastTakeShortcut);
+        RenderLastTakeProblem();
 
         LaunchToggle.IsChecked = state.LaunchAtLogin;
         Changed(RevertLaunch, state.LaunchAtLogin != SettingsDefaults.LaunchAtLogin);
@@ -360,7 +365,7 @@ public sealed partial class SettingsWindow : Window, IDictationSink
 
     private void OnRevertHotkey(object? sender, RoutedEventArgs args) => state.Hotkey = SettingsDefaults.Hotkey;
 
-    private void OnRevertCopyShortcut(object? sender, RoutedEventArgs args) => state.LastTakeShortcut = state.DefaultLastTakeShortcut;
+    private void OnRevertLastTakeShortcut(object? sender, RoutedEventArgs args) => state.LastTakeShortcut = state.DefaultLastTakeShortcut;
 
     private void OnRevertLaunch(object? sender, RoutedEventArgs args) => state.LaunchAtLogin = SettingsDefaults.LaunchAtLogin;
 

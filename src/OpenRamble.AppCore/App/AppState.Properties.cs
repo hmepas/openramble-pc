@@ -409,6 +409,10 @@ public sealed partial class AppState
                 keydFoldsRightModifiers()),
             hotkeySettingsHint);
 
+    /// <summary>Warning about the paste-last-take chord, if a key remapper rewrites it.</summary>
+    public string? LastTakeShortcutWarning =>
+        LastTakeShortcut is { } shortcut ? lastTakeShortcutRewrite(shortcut) : null;
+
     /// <summary>
     /// Can the dictionary be changed right now?
     ///

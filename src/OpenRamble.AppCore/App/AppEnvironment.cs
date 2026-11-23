@@ -159,6 +159,12 @@ public sealed class AppEnvironment
     public Func<bool>? KeydFoldsRightModifiers { get; init; }
 
     /// <summary>
+    /// Why a paste-last-take chord would never arrive because a key remapper rewrites it, or
+    /// <c>null</c> when nothing does. <c>null</c> itself answers nothing: only Linux has keyd.
+    /// </summary>
+    public Func<KeyCombination, string?>? LastTakeShortcutRewrite { get; init; }
+
+    /// <summary>
     /// The same kind of fact for the microphone: what to tell a person whose microphone will not
     /// open. Required rather than nullable - unlike the hotkey hint, these sentences are the whole
     /// message and not an optional tail, so there is nothing sensible to fall back to.

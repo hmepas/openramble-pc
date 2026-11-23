@@ -125,8 +125,9 @@ public sealed partial class App : Application
             Permissions = microphone,
             HotkeyMonitor = monitor,
             LastTakeShortcutMonitor = chord,
-            // Ctrl+Super+V, upstream's Control-Command-V: 47 is evdev's KEY_V.
-            DefaultLastTakeShortcut = new KeyCombination(47, HotkeyModifiers.Control | HotkeyModifiers.Windows),
+            // Ctrl+Alt+V rather than upstream's Control-Command-V: Super+letter is where keyd
+            // setups put copy/paste remaps, and a remapped chord never arrives. 47 is KEY_V.
+            DefaultLastTakeShortcut = new KeyCombination(47, HotkeyModifiers.Control | HotkeyModifiers.Alt),
             ShortcutKeymap = LinuxShortcutKeymap.Instance,
             InputDevices = new PipeWireInputDevices(),
             // Our own windows are XWayland, where wtype's keymap does not apply; they take the
@@ -204,6 +205,9 @@ public sealed partial class App : Application
             // a keybind consumes its key.
             HotkeySourceSwallowsKey = _ => !monitor.IsRunning,
             KeydFoldsRightModifiers = Keyd.FoldsRightModifiers,
+            LastTakeShortcutRewrite = shortcut => Keyd.FoldsRightModifiers()
+                ? KeydConfig.Warning(KeydConfig.Read(), shortcut, LinuxShortcutKeymap.Instance)
+                : null,
             MicrophoneRemedy = MicrophoneRemedy.Linux,
         });
 

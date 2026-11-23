@@ -309,7 +309,7 @@ public sealed partial class AppState
         {
             if (showOutcome)
             {
-                panel.ShowOutcome(new TakeOutcome.Kept(InHistory: true, CopyShortcut?.DisplayString(shortcutKeymap)));
+                panel.ShowOutcome(new TakeOutcome.Kept(InHistory: true, LastTakeShortcut?.DisplayString(shortcutKeymap)));
             }
             else
             {
